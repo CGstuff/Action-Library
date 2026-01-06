@@ -6,6 +6,14 @@
 
 A high-performance animation library manager for Blender with modern Qt6 architecture.
 
+## Background
+
+This tool was built after completing a 55-minute 3D animated feature film, produced largely as a solo technical director.
+
+During production, I repeatedly hit limitations in Blender when managing animation data at scale—particularly around reuse, organization, and pipeline-style workflows. By the end, these issues formed a clear pattern.
+
+Action Library is the result: a Blender-native, pipeline-oriented animation manager designed for scalability and long-form production. Open-sourced so others working on serious Blender projects can build on the same foundation.
+
 <!--
 ## Screenshots
 Add screenshots here:
@@ -85,6 +93,8 @@ For detailed architecture information, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Documentation
 
+- [Getting Started](GETTING_STARTED.md) - First-time setup and onboarding guide
+- [Studio Guide](STUDIO_GUIDE.md) - Multi-user deployment and pipeline integration
 - [Architecture Overview](ARCHITECTURE.md) - System design and patterns
 - [Developer Guide](DEVELOPER_GUIDE.md) - Development setup and guidelines
 - [Widget Reference](WIDGET_REFERENCE.md) - UI component documentation

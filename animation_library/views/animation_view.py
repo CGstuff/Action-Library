@@ -181,6 +181,8 @@ class AnimationView(QListView):
             self.setResizeMode(QListView.ResizeMode.Adjust)
             self.setSpacing(0)  # Tight grid: cards touching for sleek minimalistic look
             self.setGridSize(self._delegate.sizeHint(None, QModelIndex()))
+            # IconMode uses Snap movement by default
+            self.setMovement(QListView.Movement.Snap)
 
         else:
             # List mode: ListMode, no wrapping
@@ -190,6 +192,13 @@ class AnimationView(QListView):
             self.setSpacing(0)  # No spacing - rows touch (like grid mode)
             # Reset grid size to use delegate's sizeHint for list mode
             self.setGridSize(QSize(-1, -1))  # -1 = use sizeHint
+            # ListMode defaults to Static, but we need Snap for drag to work
+            self.setMovement(QListView.Movement.Snap)
+
+        # Re-enable drag after mode change (setViewMode can reset settings)
+        if Config.ENABLE_DRAG_DROP:
+            self.setDragEnabled(True)
+            self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
 
         # Force layout recalculation after mode change
         self.scheduleDelayedItemsLayout()

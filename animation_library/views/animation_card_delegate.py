@@ -128,23 +128,49 @@ class AnimationCardDelegate(QStyledItemDelegate):
         if event.type() != QEvent.Type.MouseButtonRelease:
             return super().editorEvent(event, model, option, index)
 
-        # Only for grid mode
-        if self._view_mode != "grid":
-            return super().editorEvent(event, model, option, index)
-
         rect = option.rect
         click_pos = event.position().toPoint()
 
-        # Check favorite star click (always active, in top-right)
-        star_size = 24
-        star_padding = 5
-        star_rect = QRect(
-            rect.x() + self._card_size - star_size - star_padding,
-            rect.y() + star_padding,
-            star_size,
-            star_size
-        )
+        # Calculate positions based on view mode
+        if self._view_mode == "grid":
+            # Grid mode: star in top-right of thumbnail
+            star_size = 24
+            star_padding = 5
+            star_rect = QRect(
+                rect.x() + self._card_size - star_size - star_padding,
+                rect.y() + star_padding,
+                star_size,
+                star_size
+            )
+            # Grid mode: checkbox in top-left
+            checkbox_size = 20
+            checkbox_rect = QRect(
+                rect.x() + 5,
+                rect.y() + 5,
+                checkbox_size,
+                checkbox_size
+            )
+        else:
+            # List mode: star at right edge, vertically centered
+            star_size = 20
+            star_padding = 8
+            star_rect = QRect(
+                rect.right() - star_size - star_padding,
+                rect.y() + (rect.height() - star_size) // 2,
+                star_size,
+                star_size
+            )
+            # List mode: checkbox at left edge, vertically centered
+            checkbox_size = 20
+            padding = 4
+            checkbox_rect = QRect(
+                rect.x() + padding,
+                rect.y() + (rect.height() - checkbox_size) // 2,
+                checkbox_size,
+                checkbox_size
+            )
 
+        # Check favorite star click (always active)
         if star_rect.contains(click_pos):
             # Toggle favorite
             uuid = index.data(AnimationRole.UUIDRole)
@@ -165,16 +191,8 @@ class AnimationCardDelegate(QStyledItemDelegate):
                         self.parent().viewport().update()
                 return True
 
-        # Check checkbox click (only in edit mode, in top-left)
+        # Check checkbox click (only in edit mode)
         if self._edit_mode:
-            checkbox_size = 20
-            checkbox_rect = QRect(
-                rect.x() + 5,
-                rect.y() + 5,
-                checkbox_size,
-                checkbox_size
-            )
-
             if checkbox_rect.contains(click_pos):
                 # Toggle selection
                 is_selected = option.state & QStyle.StateFlag.State_Selected
@@ -278,9 +296,23 @@ class AnimationCardDelegate(QStyledItemDelegate):
         padding = 4
         thumbnail_size = Config.LIST_ROW_HEIGHT - (padding * 2)
 
-        # Thumbnail rect
+        # Calculate checkbox offset (shift content right when edit mode is on)
+        checkbox_size = 20
+        checkbox_offset = (checkbox_size + padding * 2) if self._edit_mode else 0
+
+        # Draw edit mode checkbox (to the left of thumbnail)
+        if self._edit_mode:
+            checkbox_rect = QRect(
+                rect.x() + padding,
+                rect.y() + (rect.height() - checkbox_size) // 2,
+                checkbox_size,
+                checkbox_size
+            )
+            self._draw_checkbox(painter, checkbox_rect, is_selected)
+
+        # Thumbnail rect (shifted right if checkbox is shown)
         thumbnail_rect = QRect(
-            rect.x() + padding,
+            rect.x() + padding + checkbox_offset,
             rect.y() + padding,
             thumbnail_size,
             thumbnail_size
@@ -295,12 +327,24 @@ class AnimationCardDelegate(QStyledItemDelegate):
             painter.setPen(pen)
             painter.drawRect(thumbnail_rect.adjusted(-1, -1, 1, 1))
 
-        # Draw text next to thumbnail
-        text_x = rect.x() + thumbnail_size + (padding * 3)
+        # Draw favorite star (at right edge)
+        is_favorite = index.data(AnimationRole.IsFavoriteRole)
+        star_size = 20
+        star_padding = 8
+        star_rect = QRect(
+            rect.right() - star_size - star_padding,
+            rect.y() + (rect.height() - star_size) // 2,
+            star_size,
+            star_size
+        )
+        self._draw_favorite_star(painter, star_rect, is_favorite, is_hovered)
+
+        # Draw text next to thumbnail (account for checkbox offset and star space)
+        text_x = rect.x() + thumbnail_size + (padding * 3) + checkbox_offset
         text_rect = QRect(
             text_x,
             rect.y() + padding,
-            rect.width() - text_x - padding,
+            rect.width() - text_x - star_size - star_padding - padding,
             thumbnail_size
         )
         self._draw_list_text(painter, text_rect, index, palette, is_selected)

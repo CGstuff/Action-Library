@@ -164,6 +164,14 @@ class AboutDialog(QDialog):
         license_lbl.setStyleSheet("font-size: 13px;")
         info_layout.addWidget(license_lbl)
 
+        website = QLabel(
+            'Website: <a href="https://cgstuff.xyz">cgstuff.xyz</a>'
+        )
+        website.setOpenExternalLinks(True)
+        website.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        website.setStyleSheet("font-size: 13px;")
+        info_layout.addWidget(website)
+
         yt = QLabel(
             'YouTube: <a href="https://www.youtube.com/@cgstuff87">'
             '@cgstuff87</a>'

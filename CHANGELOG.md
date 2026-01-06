@@ -5,23 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.1] - 2026-01-06
-
-### Added
-- **Blender 5.0 Compatibility**
-  - Full support for Blender 5.0 API changes
-  - Backward compatible with Blender 4.5+
-  - Uses channelbag API for fcurve access in 5.0
-  - PNG frame sequence fallback for video capture in 5.0
-
-### Improved
-- Theme editor now prompts for name and author when saving new themes
-- Dropdown colors (background, hover, selected) exposed in theme editor
-- Simplified metadata panel - removed redundant frame range display
-
----
-
-## [1.0.0] - 2026-01-05
+## [1.0.0] - 2026-01-06
 
 ### Added
 
