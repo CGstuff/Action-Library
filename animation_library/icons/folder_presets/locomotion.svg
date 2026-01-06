@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Placeholder: Running person -->
+  <circle cx="16" cy="5" r="2" fill="white"/>
+  <path d="M14 8L12 10L10 12L8 16L10 18M16 8L14 12L16 14L18 16M12 10L14 12" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M10 18L12 20M18 16L20 18" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+</svg>

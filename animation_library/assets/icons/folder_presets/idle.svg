@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Placeholder: Standing person -->
+  <circle cx="12" cy="6" r="2.5" fill="white"/>
+  <rect x="10" y="10" width="4" height="8" rx="1" fill="white"/>
+  <rect x="8" y="10" width="8" height="3" rx="1" fill="white"/>
+</svg>

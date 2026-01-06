@@ -1,0 +1,96 @@
+# Action Library
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![PyQt6](https://img.shields.io/badge/PyQt-6.5+-green.svg)](https://pypi.org/project/PyQt6/)
+
+A high-performance animation library manager for Blender with modern Qt6 architecture.
+
+<!--
+## Screenshots
+Add screenshots here:
+![Main Window](screenshots/main.png)
+![Theme Editor](screenshots/theme-editor.png)
+-->
+
+## Features
+
+- **High Performance** - Handles 4000+ animations with <2s startup and 60 FPS scrolling
+- **Modern UI** - Grid and list views, customizable themes, smooth animations
+- **Smart Organization** - Folders, tags, favorites, and powerful search/filtering
+- **Blender Integration** - One-click animation loading with built-in addon installer (Blender 4.5 - 5.0+)
+- **Library Backup** - Export/import with .animlib archives, preserves all metadata
+- **Setup Wizard** - Guided first-run configuration for new users
+- **Portable** - Single-folder distribution, no installation required
+
+## Installation
+
+### Option 1: Download Release (Recommended)
+
+Download the latest portable release from the [Releases](../../releases) page.
+
+### Option 2: Run from Source
+
+**Prerequisites:**
+- Python 3.9 or higher
+- Git
+
+**Steps:**
+
+```bash
+# Clone the repository
+git clone https://github.com/YOUR_USERNAME/action-library.git
+cd action-library
+
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# Windows:
+venv\Scripts\activate
+# macOS/Linux:
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the application
+python run.py
+```
+
+## Building Portable Version
+
+To create a standalone portable build:
+
+```bash
+# Install PyInstaller (if not already installed)
+pip install pyinstaller
+
+# Run the build script
+build.bat
+```
+
+The portable build will be created in `dist/ActionLibrary/`.
+
+## Architecture
+
+Built with:
+- **PyQt6** - Modern Qt6 bindings for Python
+- **Model/View Pattern** - Efficient handling of large datasets
+- **Async Loading** - Background thumbnail loading via thread pool
+- **Event Bus** - Decoupled component communication
+- **SQLite** - Fast local database with WAL mode
+
+For detailed architecture information, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Documentation
+
+- [Architecture Overview](ARCHITECTURE.md) - System design and patterns
+- [Developer Guide](DEVELOPER_GUIDE.md) - Development setup and guidelines
+- [Widget Reference](WIDGET_REFERENCE.md) - UI component documentation
+- [Contributing](CONTRIBUTING.md) - How to contribute
+- [Changelog](CHANGELOG.md) - Version history
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

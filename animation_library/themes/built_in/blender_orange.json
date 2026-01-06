@@ -1,0 +1,91 @@
+{
+  "name": "Blender Orange",
+  "description": "Dark theme with vibrant orange accents inspired by Blender",
+  "author": "CGstuff",
+    "colors": {
+    "background": {
+      "primary": "#00101E",
+      "secondary": "#AA6510",
+      "tertiary": "#00101E",
+      "hover": "#454545",
+      "selected": "#423E40",
+      "grid_top": "#AA6510",
+      "grid_bottom": "#00101E"
+    },
+    "foreground": {
+      "primary": "#e6e6e6",
+      "secondary": "#c7c7c7",
+      "tertiary": "#c7c7c7",
+      "disabled": "#676767"
+    },
+    "accent": {
+      "primary": "#0F8AC3",
+      "hover": "#8BE52A",
+      "pressed": "#7BAD1E",
+      "light": "#8BE52A"
+    },
+    "gold": {
+      "primary": "#F4A403",
+      "hover": "#d1b273",
+      "pressed": "#af9051",
+      "light": "#d1b273"
+    },
+    "danger": {
+      "primary": "#e63636",
+      "hover": "#f74747",
+      "pressed": "#e63636",
+      "light": "#e63636"
+    },
+    "success": {
+      "primary": "#4fb547",
+      "hover": "#4fb547",
+      "pressed": "#4fb547"
+    },
+    "border": {
+      "primary": "#000000",
+      "secondary": "#F4A403",
+      "light": "#000000",
+      "darker": "#F4A403"
+    },
+    "button": {
+      "background": "#383838",
+      "hover": "#454545",
+      "pressed": "#2b2b2b",
+      "disabled": "#272727"
+    },
+    "card": {
+      "background": "#2f2f2f",
+      "border": "#3d3d3d",
+      "border_hover": "#F4A403",
+      "border_selected": "#423E40",
+      "background_hover": "#454545"
+    },
+    "header": {
+      "gradient_start": "#F4A403",
+      "gradient_end": "#F4A403",
+      "icon_color": "#13212D",
+      "folder_icon_color": "#EB960D"
+    },
+    "ui": {
+      "folder_text_size": 13
+    },
+    "dialog": {
+      "background": "#2f2f2f",
+      "text": "#e6e6e6",
+      "button_background": "#383838",
+      "button_text": "#e6e6e6",
+      "input_background": "#00101E",
+      "input_text": "#e6e6e6",
+      "border": "#525252"
+    },
+    "selection": {
+      "text": "#FFFFFF",
+      "border": "#D4AF37"
+    },
+    "list_item": {
+      "background": "#3A3A3A",
+      "hover": "#FEA100",
+      "selected": "#FEA100"
+    }
+  }
+}

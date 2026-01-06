@@ -1,0 +1,91 @@
+{
+  "name": "Studio Dark",
+  "description": "Professional dark theme with blue and gold accents - the default studio theme",
+  "author": "CGstuff",
+  "colors": {
+    "background": {
+      "primary": "#222222",
+      "secondary": "#383838",
+      "tertiary": "#222222",
+      "hover": "#454545",
+      "selected": "#1E91F5",
+      "grid_top": "#383838",
+      "grid_bottom": "#222222"
+    },
+    "foreground": {
+      "primary": "#FFFFFF",
+      "secondary": "#cccccc",
+      "tertiary": "#cccccc",
+      "disabled": "#666666"
+    },
+    "accent": {
+      "primary": "#838383",
+      "hover": "#3FA1F6",
+      "pressed": "#1770C7",
+      "light": "#3FA1F6"
+    },
+    "gold": {
+      "primary": "#FFFFFF",
+      "hover": "#E5C046",
+      "pressed": "#C39B28",
+      "light": "#E5C046"
+    },
+    "danger": {
+      "primary": "#e74c3c",
+      "hover": "#f25c4c",
+      "pressed": "#e74c3c",
+      "light": "#e74c3c"
+    },
+    "success": {
+      "primary": "#28a745",
+      "hover": "#28a745",
+      "pressed": "#28a745"
+    },
+    "border": {
+      "primary": "#404040",
+      "secondary": "#040408",
+      "light": "#404040",
+      "darker": "#040408"
+    },
+    "button": {
+      "background": "#3a3a3a",
+      "hover": "#454545",
+      "pressed": "#303030",
+      "disabled": "#2a2a2a"
+    },
+    "card": {
+      "background": "#323232",
+      "border": "#404040",
+      "border_hover": "#FFFFFF",
+      "border_selected": "#1E91F5",
+      "background_hover": "#454545"
+    },
+    "header": {
+      "gradient_start": "#040408",
+      "gradient_end": "#0B0B0B",
+      "icon_color": "#FFFFFF",
+      "folder_icon_color": "#FFFFFF"
+    },
+    "ui": {
+      "folder_text_size": 20
+    },
+    "dialog": {
+      "background": "#f0f0f0",
+      "text": "#000000",
+      "button_background": "#3a3a3a",
+      "button_text": "#FFFFFF",
+      "input_background": "#222222",
+      "input_text": "#FFFFFF",
+      "border": "#a0a0a0"
+    },
+    "selection": {
+      "text": "#FFFFFF",
+      "border": "#FFFFFF"
+    },
+    "list_item": {
+      "background": "#323232",
+      "hover": "#767676",
+      "selected": "#767676"
+    }
+  }
+}

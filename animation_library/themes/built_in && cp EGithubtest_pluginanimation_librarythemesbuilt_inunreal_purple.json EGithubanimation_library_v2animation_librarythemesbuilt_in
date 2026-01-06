@@ -1,0 +1,82 @@
+{
+  "name": "Maya Classic",
+  "description": "Professional teal and gray theme inspired by Autodesk Maya",
+  "author": "CG_stuff",
+  "colors": {
+    "background": {
+      "primary": "#232323",
+      "secondary": "#2c8bca",
+      "tertiary": "#001115",
+      "hover": "#393939",
+      "selected": "#313131",
+      "grid_top": "#2e2e2e",
+      "grid_bottom": "#23365e"
+    },
+    "foreground": {
+      "primary": "#e6e6e6",
+      "secondary": "#c7c7c7",
+      "tertiary": "#a8a8a8",
+      "disabled": "#676767"
+    },
+    "accent": {
+      "primary": "#1aa0e8",
+      "hover": "#2796a7",
+      "pressed": "#00ccd7",
+      "light": "#11a1cd"
+    },
+    "gold": {
+      "primary": "#c0a162",
+      "hover": "#d1b273",
+      "pressed": "#af9051",
+      "light": "#e2c384"
+    },
+    "danger": {
+      "primary": "#e63636",
+      "hover": "#f74747",
+      "pressed": "#d52525",
+      "light": "#ff5858"
+    },
+    "success": {
+      "primary": "#4fb547",
+      "hover": "#60c658",
+      "pressed": "#3ea436"
+    },
+    "border": {
+      "primary": "#3d3d3d",
+      "secondary": "#525252",
+      "light": "#636363",
+      "darker": "#303030"
+    },
+    "button": {
+      "background": "#383838",
+      "hover": "#454545",
+      "pressed": "#2b2b2b",
+      "disabled": "#272727"
+    },
+    "card": {
+      "border": "#3d3d3d",
+      "border_hover": "#1aaae8",
+      "border_selected": "#3aefff",
+      "background": "#2f2f2f",
+      "background_hover": "#3a3a3a"
+    },
+    "header": {
+      "gradient_start": "#323a45",
+      "gradient_end": "#323a45",
+      "icon_color": "#11d3ff",
+      "folder_icon_color": "#00fff7"
+    },
+    "dialog": {
+      "background": "#2f2f2f",
+      "text": "#e6e6e6",
+      "button_background": "#383838",
+      "button_text": "#e6e6e6",
+      "input_background": "#252525",
+      "input_text": "#e6e6e6",
+      "border": "#525252"
+    },
+    "ui": {
+      "folder_text_size": 20
+    }
+  }
+}

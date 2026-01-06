@@ -1,0 +1,91 @@
+{
+  "name": "Unreal Purple",
+  "description": "Epic dark theme with purple and blue accents inspired by Unreal Engine",
+  "author": "CGstuff",
+ "colors": {
+    "background": {
+      "primary": "#212121",
+      "secondary": "#2c2c2c",
+      "tertiary": "#212121",
+      "hover": "#474747",
+      "selected": "#7a5fdc",
+      "grid_top": "#2c2c2c",
+      "grid_bottom": "#212121"
+    },
+    "foreground": {
+      "primary": "#ebebeb",
+      "secondary": "#cbcbcb",
+      "tertiary": "#cbcbcb",
+      "disabled": "#6b6b6b"
+    },
+    "accent": {
+      "primary": "#7a5fdc",
+      "hover": "#8b70ed",
+      "pressed": "#694ecb",
+      "light": "#8b70ed"
+    },
+    "gold": {
+      "primary": "#7A5FDC",
+      "hover": "#e5b86a",
+      "pressed": "#c39648",
+      "light": "#e5b86a"
+    },
+    "danger": {
+      "primary": "#dc4545",
+      "hover": "#ed5656",
+      "pressed": "#dc4545",
+      "light": "#dc4545"
+    },
+    "success": {
+      "primary": "#45dc7a",
+      "hover": "#45dc7a",
+      "pressed": "#45dc7a"
+    },
+    "border": {
+      "primary": "#3f3f3f",
+      "secondary": "#8B70ED",
+      "light": "#3f3f3f",
+      "darker": "#8B70ED"
+    },
+    "button": {
+      "background": "#3a3a3a",
+      "hover": "#474747",
+      "pressed": "#2d2d2d",
+      "disabled": "#292929"
+    },
+    "card": {
+      "background": "#313131",
+      "border": "#3f3f3f",
+      "border_hover": "#7A5FDC",
+      "border_selected": "#7a5fdc",
+      "background_hover": "#474747"
+    },
+    "header": {
+      "gradient_start": "#8b70ed",
+      "gradient_end": "#7a5fdc",
+      "icon_color": "#ffffff",
+      "folder_icon_color": "#7a5fdc"
+    },
+    "ui": {
+      "folder_text_size": 13
+    },
+    "dialog": {
+      "background": "#2c2c2c",
+      "text": "#ebebeb",
+      "button_background": "#3a3a3a",
+      "button_text": "#ebebeb",
+      "input_background": "#212121",
+      "input_text": "#ebebeb",
+      "border": "#545454"
+    },
+    "selection": {
+      "text": "#FFFFFF",
+      "border": "#0F213E"
+    },
+    "list_item": {
+      "background": "#3A3A3A",
+      "hover": "#7A5FDC",
+      "selected": "#7A5FDC"
+    }
+  }
+}

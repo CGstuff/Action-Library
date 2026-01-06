@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <style>
+      /* Test icon with multiple gray levels to demonstrate saturation variations */
+
+      /* Very light gray (90% brightness) - should get 100% saturation */
+      .brightness-90 {
+        fill: #e6e6e6;
+      }
+
+      /* Light gray (75% brightness) - should get 100% saturation */
+      .brightness-75 {
+        fill: #bfbfbf;
+      }
+
+      /* Medium gray (55% brightness) - should get 70% saturation */
+      .brightness-55 {
+        fill: #8c8c8c;
+      }
+
+      /* Dark gray (35% brightness) - should get 50% saturation */
+      .brightness-35 {
+        fill: #595959;
+      }
+
+      /* Very dark gray (15% brightness) - should get 30% saturation */
+      .brightness-15 {
+        fill: #262626;
+      }
+    </style>
+  </defs>
+
+  <!-- Test pattern: 5 circles showing different gray levels -->
+  <g id="test_circles">
+    <!-- Very light (top) -->
+    <circle class="brightness-90" cx="50" cy="10" r="8"/>
+
+    <!-- Light -->
+    <circle class="brightness-75" cx="50" cy="30" r="8"/>
+
+    <!-- Medium (center) -->
+    <circle class="brightness-55" cx="50" cy="50" r="8"/>
+
+    <!-- Dark -->
+    <circle class="brightness-35" cx="50" cy="70" r="8"/>
+
+    <!-- Very dark (bottom) -->
+    <circle class="brightness-15" cx="50" cy="90" r="8"/>
+  </g>
+
+  <!-- Gear icon with gray variations for realistic testing -->
+  <g id="gear_with_variations" transform="translate(20, 20)">
+    <!-- Outer gear teeth (lightest) -->
+    <path class="brightness-90" d="M30,0 L32,8 L38,8 L40,0 L45,2 L45,10 L50,12 L55,10 L55,2 L60,0 L62,8 L68,8 L70,0 L72,5 L65,15 L65,20 L70,25 L72,30 L65,40 L68,45 L70,50 L72,60 L70,62 L62,60 L60,55 L55,57 L50,60 L45,57 L40,55 L38,60 L32,62 L30,60 L28,55 L22,55 L20,60 L18,57 L20,50 L15,45 L10,50 L8,55 L5,53 L5,48 L0,45 L0,40 L5,38 L5,32 L0,30 L0,25 L5,22 L5,18 L0,15 L0,10 L5,8 L8,5 L10,10 L15,15 L20,10 L22,5 L28,5 Z"/>
+
+    <!-- Middle ring (medium-light) -->
+    <circle class="brightness-75" cx="35" cy="35" r="18"/>
+
+    <!-- Inner details (medium) -->
+    <circle class="brightness-55" cx="35" cy="35" r="12"/>
+
+    <!-- Center hole (dark) -->
+    <circle class="brightness-35" cx="35" cy="35" r="6"/>
+  </g>
+</svg>

@@ -1,0 +1,91 @@
+{
+  "name": "Maya Classic",
+  "description": "Professional teal and gray theme inspired by Autodesk Maya",
+  "author": "CG_stuff",
+  "colors": {
+    "background": {
+      "primary": "#232323",
+      "secondary": "#2c8bca",
+      "tertiary": "#232323",
+      "hover": "#454545",
+      "selected": "#3aefff",
+      "grid_top": "#2c8bca",
+      "grid_bottom": "#232323"
+    },
+    "foreground": {
+      "primary": "#e6e6e6",
+      "secondary": "#c7c7c7",
+      "tertiary": "#c7c7c7",
+      "disabled": "#676767"
+    },
+    "accent": {
+      "primary": "#1aa0e8",
+      "hover": "#2796a7",
+      "pressed": "#00ccd7",
+      "light": "#2796a7"
+    },
+    "gold": {
+      "primary": "#1AA0E8",
+      "hover": "#d1b273",
+      "pressed": "#af9051",
+      "light": "#d1b273"
+    },
+    "danger": {
+      "primary": "#e63636",
+      "hover": "#f74747",
+      "pressed": "#e63636",
+      "light": "#e63636"
+    },
+    "success": {
+      "primary": "#4fb547",
+      "hover": "#4fb547",
+      "pressed": "#4fb547"
+    },
+    "border": {
+      "primary": "#3d3d3d",
+      "secondary": "#323A45",
+      "light": "#3d3d3d",
+      "darker": "#323A45"
+    },
+    "button": {
+      "background": "#383838",
+      "hover": "#454545",
+      "pressed": "#2b2b2b",
+      "disabled": "#272727"
+    },
+    "card": {
+      "background": "#2f2f2f",
+      "border": "#3d3d3d",
+      "border_hover": "#1AA0E8",
+      "border_selected": "#3aefff",
+      "background_hover": "#454545"
+    },
+    "header": {
+      "gradient_start": "#323a45",
+      "gradient_end": "#323a45",
+      "icon_color": "#11d3ff",
+      "folder_icon_color": "#00fff7"
+    },
+    "ui": {
+      "folder_text_size": 20
+    },
+    "dialog": {
+      "background": "#2f2f2f",
+      "text": "#e6e6e6",
+      "button_background": "#383838",
+      "button_text": "#e6e6e6",
+      "input_background": "#232323",
+      "input_text": "#e6e6e6",
+      "border": "#525252"
+    },
+    "selection": {
+      "text": "#FFFFFF",
+      "border": "#1AA0E8"
+    },
+    "list_item": {
+      "background": "#3A3A3A",
+      "hover": "#3A8FB7",
+      "selected": "#3A8FB7"
+    }
+  }
+}

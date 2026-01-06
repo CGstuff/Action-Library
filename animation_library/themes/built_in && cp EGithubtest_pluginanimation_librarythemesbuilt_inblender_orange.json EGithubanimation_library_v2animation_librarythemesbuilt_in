@@ -1,0 +1,82 @@
+{
+  "name": "Studio Dark",
+  "description": "Professional dark theme with blue and gold accents - the default studio theme",
+  "author": "CGstuff",
+  "colors": {
+    "background": {
+      "primary": "#252525",
+      "secondary": "#2e2e2e",
+      "tertiary": "#1a1a1a",
+      "hover": "#3a3a3a",
+      "selected": "#333333",
+      "grid_top": "#303030",
+      "grid_bottom": "#1a1a1a"
+    },
+    "foreground": {
+      "primary": "#e8e8e8",
+      "secondary": "#cccccc",
+      "tertiary": "#aaaaaa",
+      "disabled": "#666666"
+    },
+    "accent": {
+      "primary": "#569eff",
+      "hover": "#6baeff",
+      "pressed": "#4a85d6",
+      "light": "#7bb9ff"
+    },
+    "gold": {
+      "primary": "#D4AF37",
+      "hover": "#E5C046",
+      "pressed": "#C39B28",
+      "light": "#F5D056"
+    },
+    "danger": {
+      "primary": "#e74c3c",
+      "hover": "#f25c4c",
+      "pressed": "#d73c2c",
+      "light": "#f76c5c"
+    },
+    "success": {
+      "primary": "#28a745",
+      "hover": "#34c759",
+      "pressed": "#218838"
+    },
+    "border": {
+      "primary": "#404040",
+      "secondary": "#555555",
+      "light": "#666666",
+      "darker": "#353535"
+    },
+    "button": {
+      "background": "#3a3a3a",
+      "hover": "#454545",
+      "pressed": "#303030",
+      "disabled": "#2a2a2a"
+    },
+    "card": {
+      "border": "#404040",
+      "border_hover": "#D4AF37",
+      "border_selected": "#569eff",
+      "background": "#323232",
+      "background_hover": "#383838"
+    },
+    "header": {
+      "gradient_start": "#E5C046",
+      "gradient_end": "#D4AF37",
+      "icon_color": "#1a1a1a",
+      "folder_icon_color": "#D4AF37"
+    },
+    "ui": {
+      "folder_text_size": 13
+    },
+    "dialog": {
+      "background": "#f0f0f0",
+      "text": "#000000",
+      "button_background": "#e0e0e0",
+      "button_text": "#000000",
+      "input_background": "#ffffff",
+      "input_text": "#000000",
+      "border": "#a0a0a0"
+    }
+  }
+}
