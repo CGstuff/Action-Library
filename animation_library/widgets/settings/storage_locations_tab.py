@@ -9,7 +9,7 @@ Provides UI for:
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
-    QLabel, QPushButton, QFileDialog, QMessageBox
+    QLabel, QPushButton, QFileDialog, QMessageBox, QCheckBox
 )
 from pathlib import Path
 import subprocess
@@ -97,7 +97,45 @@ class StorageLocationsTab(QWidget):
 
         layout.addWidget(info_group)
 
+        # Deletion Settings Group
+        deletion_group = QGroupBox("Deletion Settings")
+        deletion_layout = QVBoxLayout(deletion_group)
+
+        # Hard delete checkbox
+        self.hard_delete_checkbox = QCheckBox("Allow permanent deletion")
+        self.hard_delete_checkbox.setChecked(Config.load_allow_hard_delete())
+        self.hard_delete_checkbox.toggled.connect(self._on_hard_delete_changed)
+        deletion_layout.addWidget(self.hard_delete_checkbox)
+
+        # Warning text
+        hard_delete_warning = QLabel(
+            "When enabled, you can permanently delete items from the Trash folder. "
+            "This is typically reserved for leads in a studio environment.\n\n"
+            "Two-stage deletion workflow:\n"
+            "1. Archive: Animations are soft-deleted and can be restored\n"
+            "2. Trash: Archived items can be moved here for permanent deletion"
+        )
+        hard_delete_warning.setWordWrap(True)
+
+        # Apply theme styling
+        current_theme = self.theme_manager.get_current_theme()
+        if current_theme:
+            palette = current_theme.palette
+            hard_delete_warning.setStyleSheet(
+                f"font-style: italic; color: {palette.text_secondary}; margin-top: 5px;"
+            )
+        else:
+            hard_delete_warning.setStyleSheet("font-style: italic; color: gray; margin-top: 5px;")
+
+        deletion_layout.addWidget(hard_delete_warning)
+
+        layout.addWidget(deletion_group)
+
         layout.addStretch()
+
+    def _on_hard_delete_changed(self, checked: bool):
+        """Handle hard delete checkbox toggle"""
+        Config.save_allow_hard_delete(checked)
 
     def _change_library_location(self):
         """Change animation library location"""

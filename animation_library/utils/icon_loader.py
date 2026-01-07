@@ -44,6 +44,8 @@ class IconLoader:
         "root_icon": "root.svg",
         "favorite_icon": "favorite.svg",
         "recent_icon": "recent.svg",
+        "archive_icon": "Archives.svg",  # Archive folder icon
+        "trash_icon": "delete.svg",  # Reuse delete icon for trash
 
         # Folder presets
         "folder_default": "folder_presets/default.svg",
@@ -196,6 +198,32 @@ class IconLoader:
             print(f"Error colorizing SVG {svg_path}: {e}")
             # Fallback to loading original icon
             return QIcon(svg_path)
+
+    @classmethod
+    def get_themed_icon(cls, name: str, color: str = None) -> QIcon:
+        """
+        Get an icon with theme-aware colorization.
+
+        Convenience method that combines get() and colorize_icon() with
+        automatic theme color detection.
+
+        Args:
+            name: Icon name from ICONS registry
+            color: Optional hex color. If None, uses current theme's icon color.
+
+        Returns:
+            QIcon with theme-appropriate colorization
+        """
+        # Import here to avoid circular imports
+        from ..themes.theme_manager import get_theme_manager
+
+        icon_path = cls.get(name)
+
+        if color is None:
+            theme = get_theme_manager().get_current_theme()
+            color = theme.palette.icon_color if theme else "#FFFFFF"
+
+        return cls.colorize_icon(icon_path, color)
 
 
 __all__ = ['IconLoader']

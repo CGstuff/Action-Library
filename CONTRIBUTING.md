@@ -12,7 +12,7 @@ Thank you for your interest in contributing to Action Library! This document pro
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/action-library.git
+   git clone https://github.com/CGstuff/action-library.git
    cd action-library
    ```
 

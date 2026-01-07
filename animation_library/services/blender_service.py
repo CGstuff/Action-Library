@@ -55,13 +55,24 @@ class BlenderService:
         except Exception:
             pass  # Silently ignore cleanup errors
 
-    def queue_apply_animation(self, animation_id: str, animation_name: str) -> bool:
+    def queue_apply_animation(
+        self,
+        animation_id: str,
+        animation_name: str,
+        options: dict = None
+    ) -> bool:
         """
         Set animation for application in Blender (replaces any previous)
 
         Args:
             animation_id: Animation UUID
             animation_name: Animation name (for display)
+            options: Apply options dict with keys:
+                - apply_mode: "NEW" or "INSERT"
+                - mirror: bool
+                - reverse: bool
+                - selected_bones_only: bool
+                - use_slots: bool
 
         Returns:
             True if set successfully
@@ -71,11 +82,22 @@ class BlenderService:
             timestamp = datetime.now().isoformat()
             apply_file = self._queue_dir / self.APPLY_FILE
 
+            # Default options if not provided
+            if options is None:
+                options = {
+                    "apply_mode": "NEW",
+                    "mirror": False,
+                    "reverse": False,
+                    "selected_bones_only": False,
+                    "use_slots": False
+                }
+
             request_data = {
                 "status": "pending",
                 "animation_id": animation_id,
                 "animation_name": animation_name,
-                "timestamp": timestamp
+                "timestamp": timestamp,
+                "options": options
             }
 
             with open(apply_file, 'w') as f:

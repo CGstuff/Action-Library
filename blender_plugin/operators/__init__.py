@@ -3,6 +3,8 @@ from bpy.utils import register_class, unregister_class
 from .AL_apply_animation import (
     ANIMLIB_OT_apply_animation,
     ANIMLIB_OT_check_apply_queue,
+    start_queue_poll_timer,
+    stop_queue_poll_timer,
 )
 from .AL_capture_animation import ANIMLIB_OT_capture_animation
 from .AL_launch_desktop_app import ANIMLIB_OT_launch_desktop_app
@@ -62,10 +64,16 @@ def register_operators():
         _safe_register(cls)
     __OPS_REGISTERED = True
 
+    # Note: Auto-polling disabled - use Manual Apply button in Blender panel
+    # The timer approach has context issues that make it unreliable
+    # start_queue_poll_timer()
+
+
 def unregister_operators():
     global __OPS_REGISTERED
     if not __OPS_REGISTERED:
         return
+
     for cls in reversed(classes):
         _safe_unregister(cls)
     __OPS_REGISTERED = False

@@ -23,10 +23,17 @@ class ANIMLIB_OT_apply_animation(Operator):
     bl_idname = "animlib.apply_animation"
     bl_label = "Apply Action"
     bl_description = "Apply selected Action to the active armature"
-    
+
     animation_id: StringProperty()
     apply_selected_bones_only: bpy.props.BoolProperty(default=False)
     selected_bones_list: StringProperty(default="")
+
+    # Options from desktop app (overrides scene properties when set)
+    apply_mode: StringProperty(default="")  # "NEW" or "INSERT", empty = use scene property
+    use_slots: bpy.props.BoolProperty(default=False)
+    mirror_animation: bpy.props.BoolProperty(default=False)
+    reverse_animation: bpy.props.BoolProperty(default=False)
+    options_from_queue: bpy.props.BoolProperty(default=False)  # True when options come from queue
     
     def are_rigs_compatible(self, rig_type1, rig_type2):
         """Check if two rig types are compatible for animation sharing"""
@@ -115,11 +122,22 @@ class ANIMLIB_OT_apply_animation(Operator):
             if self.apply_selected_bones_only and self.selected_bones_list:
                 selected_bones = [bone.strip() for bone in self.selected_bones_list.split(',') if bone.strip()]
 
-            # Get apply mode and slot settings from scene properties
-            apply_mode = bpy.context.scene.animlib_apply_mode
-            use_slots = bpy.context.scene.animlib_use_slots
-            mirror_animation = bpy.context.scene.animlib_mirror_animation
-            reverse_animation = bpy.context.scene.animlib_reverse_animation
+            # Get apply options - prefer operator properties (from queue) over scene properties
+            if self.options_from_queue:
+                # Options from desktop app queue
+                apply_mode = self.apply_mode if self.apply_mode else "NEW"
+                use_slots = self.use_slots
+                mirror_animation = self.mirror_animation
+                reverse_animation = self.reverse_animation
+                logger.debug("Using options from desktop app queue")
+            else:
+                # Legacy: use scene properties (for manual Blender UI usage)
+                apply_mode = bpy.context.scene.animlib_apply_mode
+                use_slots = bpy.context.scene.animlib_use_slots
+                mirror_animation = bpy.context.scene.animlib_mirror_animation
+                reverse_animation = bpy.context.scene.animlib_reverse_animation
+                logger.debug("Using options from scene properties")
+
             logger.debug(f"Applying Action with mode: {apply_mode}, use_slots: {use_slots}, mirror: {mirror_animation}, reverse: {reverse_animation}")
 
             # Apply animation by loading from blend file
@@ -769,12 +787,21 @@ class ANIMLIB_OT_check_apply_queue(Operator):
             # Apply the animation
             animation_id = request_data.get('animation_id')
             animation_name = request_data.get('animation_name', 'Unknown')
-            
-            # Check if we should apply to selected bones only
-            scene = context.scene
-            apply_selected_bones_only = scene.animlib_apply_selected_bones_only
+
+            # Get options from queue (sent by desktop app)
+            options = request_data.get('options', {})
+            apply_mode = options.get('apply_mode', 'NEW')
+            mirror = options.get('mirror', False)
+            reverse = options.get('reverse', False)
+            use_slots = options.get('use_slots', False)
+            selected_bones_only_option = options.get('selected_bones_only', False)
+
+            logger.debug(f"Queue options: mode={apply_mode}, mirror={mirror}, reverse={reverse}, slots={use_slots}, bones_only={selected_bones_only_option}")
+
+            # Handle selected bones only option
+            apply_selected_bones_only = selected_bones_only_option
             selected_bones = []
-            
+
             if apply_selected_bones_only:
                 # Get currently selected bones if in pose mode
                 armature = context.active_object
@@ -786,23 +813,135 @@ class ANIMLIB_OT_check_apply_queue(Operator):
                 else:
                     self.report({'WARNING'}, "Not in pose mode or no armature selected! Applying to all bones.")
                     apply_selected_bones_only = False
-                    
+
                 if selected_bones:
                     self.report({'INFO'}, f"Applying to {len(selected_bones)} selected bones: {', '.join(selected_bones[:3])}{'...' if len(selected_bones) > 3 else ''}")
-            
-            # Use existing apply logic with bone selection
+
+            # Apply animation with options from desktop app queue
             bpy.ops.animlib.apply_animation(
                 animation_id=animation_id,
                 apply_selected_bones_only=apply_selected_bones_only,
-                selected_bones_list=','.join(selected_bones) if selected_bones else ''
+                selected_bones_list=','.join(selected_bones) if selected_bones else '',
+                apply_mode=apply_mode,
+                use_slots=use_slots,
+                mirror_animation=mirror,
+                reverse_animation=reverse,
+                options_from_queue=True  # Signal that options come from queue
             )
             
             # Mark request as completed using queue client
             animation_queue_client.mark_request_completed(request_file)
 
             self.report({'INFO'}, f"Applied queued Action: {animation_name}")
-            
+
         except Exception as e:
             self.report({'ERROR'}, f"Error checking apply queue: {str(e)}")
 
         return {'FINISHED'}
+
+
+# ==================== AUTO-POLLING TIMER ====================
+
+# Global flag to track if timer is running
+_queue_poll_timer_running = False
+_POLL_INTERVAL = 0.5  # Poll every 0.5 seconds
+
+
+def _auto_poll_queue():
+    """
+    Timer callback that automatically checks for and applies queued animations.
+    Uses temp_override to provide proper context for operator calls (Blender 4.0+).
+    """
+    global _queue_poll_timer_running
+
+    if not _queue_poll_timer_running:
+        return None  # Stop timer
+
+    try:
+        # Quick check for pending files (cheap operation)
+        pending_files = animation_queue_client.get_pending_apply_requests()
+
+        if not pending_files:
+            return _POLL_INTERVAL  # Nothing to do
+
+        logger.debug(f"Found {len(pending_files)} pending queue file(s)")
+
+        # Get window manager and check for windows
+        wm = bpy.context.window_manager
+        if not wm.windows:
+            logger.debug("No windows available")
+            return _POLL_INTERVAL
+
+        window = wm.windows[0]
+
+        # Find a VIEW_3D area for context
+        area = None
+        for a in window.screen.areas:
+            if a.type == 'VIEW_3D':
+                area = a
+                break
+
+        if not area:
+            logger.debug("No VIEW_3D area found")
+            return _POLL_INTERVAL
+
+        # Find a region in the area
+        region = None
+        for r in area.regions:
+            if r.type == 'WINDOW':
+                region = r
+                break
+
+        # Get the active object from view layer (this persists even in timer context)
+        view_layer = window.view_layer
+        active_object = view_layer.objects.active
+
+        if not active_object or active_object.type != 'ARMATURE':
+            logger.debug(f"No armature selected (active: {active_object})")
+            return _POLL_INTERVAL
+
+        logger.info(f"Auto-applying animation to: {active_object.name}")
+
+        # Use temp_override to call operator with proper context including active object
+        with bpy.context.temp_override(window=window, area=area, region=region, object=active_object):
+            # Now we have proper context - call check_apply_queue operator
+            bpy.ops.animlib.check_apply_queue()
+
+    except Exception as e:
+        logger.error(f"Error in auto-poll timer: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return _POLL_INTERVAL  # Continue polling
+
+
+def start_queue_poll_timer():
+    """Start the auto-polling timer"""
+    global _queue_poll_timer_running
+
+    if _queue_poll_timer_running:
+        print("[AnimLib] Timer already running")
+        return  # Already running
+
+    _queue_poll_timer_running = True
+
+    # Register the timer if not already registered
+    # Use 2.0 second delay to ensure Blender is fully initialized
+    if not bpy.app.timers.is_registered(_auto_poll_queue):
+        bpy.app.timers.register(_auto_poll_queue, first_interval=2.0)
+        print("[AnimLib] Queue poll timer STARTED - auto-apply enabled")
+        logger.info("Queue poll timer started (with temp_override)")
+    else:
+        print("[AnimLib] Timer was already registered")
+
+
+def stop_queue_poll_timer():
+    """Stop the auto-polling timer"""
+    global _queue_poll_timer_running
+
+    _queue_poll_timer_running = False
+
+    # Unregister the timer if registered
+    if bpy.app.timers.is_registered(_auto_poll_queue):
+        bpy.app.timers.unregister(_auto_poll_queue)
+        logger.info("Queue poll timer stopped")

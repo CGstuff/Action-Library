@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Archive & Trash System**
+  - Archive animations instead of permanent deletion
+  - Trash folder with restore capability
+  - Empty trash manually or automatically
+
+- **Apply to Blender Panel**
+  - Dedicated apply panel in desktop app with options
+  - Apply modes: New Action or Insert at Playhead
+  - Mirror animation (swap left/right bones)
+  - Reverse animation playback
+  - Apply to selected bones only
+  - Use Action Slots (Blender 4.5+)
+
+- **Video Preview**
+  - Hover preview popup for animation cards
+  - Inline video playback in details panel
+
+- **Blender 5.0 Support**
+  - Full compatibility with Blender 5.0+
+  - FFmpeg fallback for video preview generation
+
 - **Animation Library Management**
   - Import and organize animation files (.blend)
   - Automatic metadata extraction (frame count, FPS, duration)
@@ -54,9 +75,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Setup wizard for new users
   - Library path selection and configuration
 
-- **Help & Information**
+- **Help & Documentation**
   - About dialog with version information
   - Comprehensive logging system for debugging
+  - Studio Deployment Guide for multi-artist teams
+
+- **UI Customization**
+  - Adjustable folder tree text/icon size in Theme settings
 
 - **Portable Distribution**
   - Single-folder portable build

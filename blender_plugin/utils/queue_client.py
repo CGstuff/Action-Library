@@ -99,11 +99,28 @@ class AnimationLibraryQueueClient:
 
         Returns:
             dict: Request data or None if error
+
+        Note:
+            Handles backwards compatibility for older queue format without options.
+            If 'options' key is missing, default options are provided.
         """
         try:
             with open(request_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+
+            # Backwards compatibility: add default options if not present
+            if 'options' not in data:
+                data['options'] = {
+                    "apply_mode": "NEW",
+                    "mirror": False,
+                    "reverse": False,
+                    "selected_bones_only": False,
+                    "use_slots": False
+                }
+                logger.debug("Added default options for backwards compatibility")
+
             logger.debug(f"Read request: {data.get('animation_name')} ({data.get('animation_id')})")
+            logger.debug(f"Options: {data.get('options')}")
             return data
         except Exception as e:
             logger.error(f"Error reading request {request_file}: {e}")

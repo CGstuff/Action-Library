@@ -41,7 +41,6 @@ class HeaderToolbar(QWidget):
     card_size_changed = pyqtSignal(int)
     edit_mode_changed = pyqtSignal(bool)
     delete_clicked = pyqtSignal()
-    apply_clicked = pyqtSignal()  # Apply to Blender button
     refresh_library_clicked = pyqtSignal()
     settings_clicked = pyqtSignal()  # New: settings button
     new_folder_clicked = pyqtSignal()  # New: create folder button
@@ -153,25 +152,15 @@ class HeaderToolbar(QWidget):
         self._edit_mode_btn.setChecked(False)
         self._edit_mode_btn.setToolTip("Toggle Edit Mode")
 
-        # Delete button (icon-only)
+        # Archive button (icon-only) - soft delete to archive
         self._delete_btn = QPushButton()
-        delete_icon_path = IconLoader.get("delete")
-        delete_icon = colorize_white_svg(delete_icon_path, icon_color)
-        self._delete_btn.setIcon(delete_icon)
+        archive_icon_path = IconLoader.get("archive_icon")
+        archive_icon = colorize_white_svg(archive_icon_path, icon_color)
+        self._delete_btn.setIcon(archive_icon)
         self._delete_btn.setIconSize(QSize(24, 24))
         self._delete_btn.setFixedSize(40, 40)
         self._delete_btn.setEnabled(False)
-        self._delete_btn.setToolTip("Delete Selected (Del)")
-
-        # Apply to Blender button (icon-only)
-        self._apply_btn = QPushButton()
-        apply_icon_path = IconLoader.get("apply_to_blender")
-        apply_icon = colorize_white_svg(apply_icon_path, icon_color)
-        self._apply_btn.setIcon(apply_icon)
-        self._apply_btn.setIconSize(QSize(24, 24))
-        self._apply_btn.setFixedSize(40, 40)
-        self._apply_btn.setEnabled(False)
-        self._apply_btn.setToolTip("Apply to Blender")
+        self._delete_btn.setToolTip("Archive Selected (Del)")
 
         # About button (icon-only)
         self._about_btn = QPushButton()
@@ -253,19 +242,14 @@ class HeaderToolbar(QWidget):
         layout.addWidget(self._edit_mode_btn)
         layout.addSpacing(4)
         layout.addWidget(self._refresh_btn)
-        layout.addSpacing(4)
-        layout.addWidget(self._delete_btn)
-
-        # Stretch spacer to center apply button
-        layout.addStretch()
-
-        # ===== CENTERED: Apply to Blender button =====
-        layout.addWidget(self._apply_btn)
 
         # Stretch spacer to push right buttons to far right
         layout.addStretch()
 
-        # ===== SECTION 4: RIGHT - System Buttons =====
+        # ===== SECTION 4: RIGHT - Archive & System Buttons =====
+        # Archive button separated from refresh to prevent accidental clicks
+        layout.addWidget(self._delete_btn)
+        layout.addSpacing(16)  # Extra spacing before system buttons
         layout.addWidget(self._about_btn)
         layout.addSpacing(4)
         layout.addWidget(self._console_btn)
@@ -296,9 +280,6 @@ class HeaderToolbar(QWidget):
         # Delete button
         self._delete_btn.clicked.connect(self._on_delete_clicked)
 
-        # Apply to Blender button
-        self._apply_btn.clicked.connect(self._on_apply_clicked)
-
         # Settings button
         self._settings_btn.clicked.connect(self.settings_clicked.emit)
 
@@ -315,7 +296,6 @@ class HeaderToolbar(QWidget):
 
         # Event bus - button states
         self._event_bus.delete_button_enabled.connect(self._delete_btn.setEnabled)
-        self._event_bus.apply_button_enabled.connect(self._apply_btn.setEnabled)
 
         # Theme changes - reload icons with new color
         theme_manager = get_theme_manager()
@@ -345,11 +325,8 @@ class HeaderToolbar(QWidget):
         edit_icon = colorize_white_svg(IconLoader.get("edit"), icon_color)
         self._edit_mode_btn.setIcon(edit_icon)
 
-        delete_icon = colorize_white_svg(IconLoader.get("delete"), icon_color)
-        self._delete_btn.setIcon(delete_icon)
-
-        apply_icon = colorize_white_svg(IconLoader.get("apply_to_blender"), icon_color)
-        self._apply_btn.setIcon(apply_icon)
+        archive_icon = colorize_white_svg(IconLoader.get("archive_icon"), icon_color)
+        self._delete_btn.setIcon(archive_icon)
 
         about_icon = colorize_white_svg(IconLoader.get("al_icon"), icon_color)
         self._about_btn.setIcon(about_icon)
@@ -417,10 +394,6 @@ class HeaderToolbar(QWidget):
     def _on_delete_clicked(self):
         """Handle delete button click"""
         self.delete_clicked.emit()
-
-    def _on_apply_clicked(self):
-        """Handle apply to blender button click"""
-        self.apply_clicked.emit()
 
     def _on_about_clicked(self):
         """Handle about button click"""

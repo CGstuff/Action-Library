@@ -53,6 +53,18 @@ class EventBus(QObject):
     animation_deleted = pyqtSignal(str)  # animation_id
     animations_bulk_updated = pyqtSignal(list)  # List[animation_id]
 
+    # Archive events (first stage - soft delete)
+    animation_archived = pyqtSignal(str)  # animation_id moved to archive
+    animation_restored_from_archive = pyqtSignal(str)  # animation_id restored from archive to library
+    archive_count_changed = pyqtSignal(int)  # new archive count
+
+    # Trash events (second stage - hard delete staging)
+    animation_moved_to_trash = pyqtSignal(str)  # animation_id moved from archive to trash
+    animation_restored_to_archive = pyqtSignal(str)  # animation_id restored from trash to archive
+    trash_item_deleted = pyqtSignal(str)  # animation_id permanently deleted
+    trash_emptied = pyqtSignal()  # all trash items deleted
+    trash_count_changed = pyqtSignal(int)  # new trash count
+
     # Tag events
     tags_updated = pyqtSignal(str, list)  # animation_id, tags
 

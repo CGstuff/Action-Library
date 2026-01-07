@@ -81,6 +81,7 @@ class BulkEditToolbar(QWidget):
     move_to_folder_clicked = pyqtSignal()
     gradient_preset_selected = pyqtSignal(str, tuple, tuple)  # name, top_color, bottom_color
     custom_gradient_clicked = pyqtSignal()
+    restore_clicked = pyqtSignal()  # Restore from Archive/Trash
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -103,6 +104,11 @@ class BulkEditToolbar(QWidget):
         # Selection count label
         self._selection_label = QLabel("No animations selected")
         self._selection_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Restore button (shown only in Archive/Trash views)
+        self._restore_btn = QPushButton("Restore")
+        self._restore_btn.setToolTip("Restore selected items")
+        self._restore_btn.hide()  # Hidden by default
 
         # Remove tags button
         self._remove_tags_btn = QPushButton("Remove Tags")
@@ -155,6 +161,7 @@ class BulkEditToolbar(QWidget):
         buttons_row = QHBoxLayout()
         buttons_row.setSpacing(12)
         buttons_row.addStretch()
+        buttons_row.addWidget(self._restore_btn)
         buttons_row.addWidget(self._remove_tags_btn)
         buttons_row.addWidget(self._move_folder_btn)
         buttons_row.addWidget(self._gradient_combo)
@@ -165,6 +172,7 @@ class BulkEditToolbar(QWidget):
         """Connect internal signals"""
 
         # Buttons
+        self._restore_btn.clicked.connect(self._on_restore_clicked)
         self._remove_tags_btn.clicked.connect(self._on_remove_tags_clicked)
         self._move_folder_btn.clicked.connect(self._on_move_folder_clicked)
 
@@ -249,6 +257,10 @@ class BulkEditToolbar(QWidget):
             }
         """)
 
+    def _on_restore_clicked(self):
+        """Handle restore button click"""
+        self.restore_clicked.emit()
+
     def _on_remove_tags_clicked(self):
         """Handle remove tags button click"""
         self.remove_tags_clicked.emit()
@@ -299,9 +311,37 @@ class BulkEditToolbar(QWidget):
 
         # Enable/disable controls
         enabled = count > 0
+        self._restore_btn.setEnabled(enabled)
         self._remove_tags_btn.setEnabled(enabled)
         self._move_folder_btn.setEnabled(enabled)
         self._gradient_combo.setEnabled(enabled)
+
+    def set_special_view_mode(self, in_archive: bool = False, in_trash: bool = False):
+        """
+        Configure toolbar for special views (Archive/Trash).
+
+        Args:
+            in_archive: True if viewing Archive folder
+            in_trash: True if viewing Trash folder
+        """
+        in_special_view = in_archive or in_trash
+
+        # Show restore button only in special views
+        if in_special_view:
+            self._restore_btn.show()
+            if in_archive:
+                self._restore_btn.setText("Restore to Library")
+                self._restore_btn.setToolTip("Restore selected items to library")
+            else:
+                self._restore_btn.setText("Restore to Archive")
+                self._restore_btn.setToolTip("Restore selected items to archive")
+        else:
+            self._restore_btn.hide()
+
+        # Hide normal editing buttons in special views
+        self._remove_tags_btn.setVisible(not in_special_view)
+        self._move_folder_btn.setVisible(not in_special_view)
+        self._gradient_combo.setVisible(not in_special_view)
 
 
 __all__ = ['BulkEditToolbar']

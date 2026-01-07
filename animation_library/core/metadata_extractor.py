@@ -174,7 +174,7 @@ class MetadataExtractor:
         Returns:
             Partial metadata dict or None
         """
-        # TODO: Implement Blender file parsing in Phase 6
+        # Note: Full .blend parsing not implemented - metadata comes from JSON sidecar files
         # For now, return basic file information
 
         if not blend_path.exists():

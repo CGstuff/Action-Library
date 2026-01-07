@@ -47,7 +47,7 @@ Download the latest portable release from the [Releases](../../releases) page.
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/action-library.git
+git clone https://github.com/CGstuff/action-library.git
 cd action-library
 
 # Create virtual environment

@@ -227,13 +227,33 @@ class ANIMLIB_PT_main_panel(Panel):
 
         # Show content only if expanded
         if scene.animlib_show_desktop_integration:
-            integration_box.prop(scene, "animlib_apply_mode", text="Mode")
-            integration_box.prop(scene, "animlib_use_slots", icon='DOCUMENTS')
-            integration_box.prop(scene, "animlib_apply_selected_bones_only", icon='RESTRICT_SELECT_OFF')
-            integration_box.prop(scene, "animlib_mirror_animation", icon='MOD_MIRROR')
-            integration_box.prop(scene, "animlib_reverse_animation", icon='PLAY_REVERSE')
+            # Auto-apply status indicator
+            status_row = integration_box.row()
+            status_row.label(text="Auto-Apply: Active", icon='CHECKMARK')
 
-            # Root Motion Continuity section
+            # Note about options controlled by desktop app
+            options_row = integration_box.row()
+            options_row.label(text="Options set in Desktop App", icon='SETTINGS')
+
+            # Manual apply button (backup if auto-apply misses something)
+            apply_row = integration_box.row()
+            apply_row.scale_y = 1.2
+            apply_row.operator("animlib.check_apply_queue", text="Manual Apply", icon='IMPORT')
+
+            # Show selected bones info if "Selected Bones Only" is enabled in desktop app
+            if armature and armature.type == 'ARMATURE' and context.mode == 'POSE':
+                selected_bones = context.selected_pose_bones
+                if selected_bones:
+                    bone_info = integration_box.column(align=True)
+                    bone_info.label(text=f"Selected bones: {len(selected_bones)}", icon='BONE_DATA')
+                    if len(selected_bones) <= 2:
+                        bone_names = ", ".join([b.name for b in selected_bones])
+                        bone_info.label(text=f"  {bone_names}")
+                    else:
+                        first_bone = selected_bones[0].name
+                        bone_info.label(text=f"  {first_bone} (+{len(selected_bones)-1} more)")
+
+            # Root Motion Continuity section (INSERT mode specific - stays in Blender)
             integration_box.separator()
             root_motion_box = integration_box.box()
             root_motion_box.prop(scene, "animlib_enable_root_motion_continuity", icon='ORIENTATION_GLOBAL')
@@ -267,39 +287,16 @@ class ANIMLIB_PT_main_panel(Panel):
                 axis_row.prop(scene, "animlib_root_motion_z", toggle=True)
 
                 # Show hint about INSERT mode
-                if scene.animlib_apply_mode != 'INSERT':
-                    hint_row = root_motion_box.row()
-                    hint_row.label(text="Only active in INSERT mode", icon='INFO')
-
-            # Show selected bones info if enabled
-            if scene.animlib_apply_selected_bones_only:
-                if armature and armature.type == 'ARMATURE' and context.mode == 'POSE':
-                    selected_bones = context.selected_pose_bones
-                    if selected_bones:
-                        bone_info = integration_box.column(align=True)
-                        bone_info.label(text=f"Target: {len(selected_bones)} bones", icon='BONE_DATA')
-                        if len(selected_bones) <= 2:
-                            bone_names = ", ".join([b.name for b in selected_bones])
-                            bone_info.label(text=f"  {bone_names}")
-                        else:
-                            first_bone = selected_bones[0].name
-                            bone_info.label(text=f"  {first_bone} (+{len(selected_bones)-1} more)")
-                    else:
-                        integration_box.label(text="No bones selected", icon='ERROR')
-                else:
-                    integration_box.label(text="Switch to Pose Mode", icon='INFO')
-
-            # Main apply button
-            apply_row = integration_box.row()
-            apply_row.scale_y = 1.5
-            apply_row.operator("animlib.check_apply_queue", text="Apply from Desktop", icon='IMPORT')
+                hint_row = root_motion_box.row()
+                hint_row.label(text="Active in INSERT mode", icon='INFO')
 
             # Quick usage tips
+            integration_box.separator()
             tips_column = integration_box.column(align=True)
             tips_column.label(text="Usage:", icon='INFO')
-            tips_column.label(text="  • Select Action in desktop app")
-            tips_column.label(text="  • Click Apply button")
-            tips_column.label(text="  • Use button above to receive")
+            tips_column.label(text="  1. Select armature in Blender")
+            tips_column.label(text="  2. Double-click animation in app")
+            tips_column.label(text="  3. Animation auto-applies!")
 
         # Current rig info section
         armature = context.active_object

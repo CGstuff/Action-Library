@@ -5,7 +5,6 @@ Pattern: QMainWindow with splitter layout
 Inspired by: Current animation_library structure
 """
 
-import shutil
 import sys
 from pathlib import Path
 from PyQt6.QtWidgets import (
@@ -19,6 +18,8 @@ from ..config import Config
 from ..events.event_bus import get_event_bus
 from ..services.database_service import get_database_service
 from ..services.blender_service import get_blender_service
+from ..services.archive_service import get_archive_service
+from ..services.trash_service import get_trash_service
 from ..themes.theme_manager import get_theme_manager
 from ..models.animation_list_model import AnimationListModel
 from ..models.animation_filter_proxy_model import AnimationFilterProxyModel
@@ -26,8 +27,10 @@ from ..views.animation_view import AnimationView
 from .header_toolbar import HeaderToolbar
 from .folder_tree import FolderTree
 from .metadata_panel import MetadataPanel
+from .apply_panel import ApplyPanel
 from .bulk_edit_toolbar import BulkEditToolbar
 from .settings.settings_dialog import SettingsDialog
+from .controllers import ArchiveTrashController, BulkEditController, FilterController
 
 
 class MainWindow(QMainWindow):
@@ -72,6 +75,8 @@ class MainWindow(QMainWindow):
         self._event_bus = get_event_bus()
         self._db_service = get_database_service()
         self._blender_service = get_blender_service()
+        self._archive_service = get_archive_service()
+        self._trash_service = get_trash_service()
 
         # Models
         self._animation_model = AnimationListModel()
@@ -82,6 +87,7 @@ class MainWindow(QMainWindow):
         self._setup_window()
         self._create_widgets()
         self._create_layout()
+        self._init_controllers()
         self._connect_signals()
         self._load_settings()
         self._load_animations()
@@ -112,6 +118,9 @@ class MainWindow(QMainWindow):
         # Metadata panel (right panel)
         self._metadata_panel = MetadataPanel()
 
+        # Apply panel (below metadata)
+        self._apply_panel = ApplyPanel()
+
         # Status bar
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
@@ -138,10 +147,18 @@ class MainWindow(QMainWindow):
         # Create horizontal splitter for 3-panel layout
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
 
+        # Right panel container (metadata + apply panel stacked vertically)
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        right_layout.addWidget(self._metadata_panel, 1)  # Stretchy
+        right_layout.addWidget(self._apply_panel, 0)     # Fixed
+
         # Add panels to splitter
         self._splitter.addWidget(self._folder_tree)
         self._splitter.addWidget(self._animation_view)
-        self._splitter.addWidget(self._metadata_panel)
+        self._splitter.addWidget(right_panel)
 
         # Set initial splitter sizes (from config)
         self._splitter.setSizes(Config.DEFAULT_SPLITTER_SIZES)
@@ -154,11 +171,52 @@ class MainWindow(QMainWindow):
         # Add splitter to layout
         main_layout.addWidget(self._splitter, 1)
 
+    def _init_controllers(self):
+        """Initialize controllers for delegated functionality"""
+
+        # Filter controller - manages proxy model interactions
+        self._filter_ctrl = FilterController(self._proxy_model, self._status_bar)
+
+        # Archive/Trash controller - manages special views
+        self._archive_trash_ctrl = ArchiveTrashController(
+            parent=self,
+            animation_model=self._animation_model,
+            animation_view=self._animation_view,
+            metadata_panel=self._metadata_panel,
+            proxy_model=self._proxy_model,
+            db_service=self._db_service,
+            archive_service=self._archive_service,
+            trash_service=self._trash_service,
+            event_bus=self._event_bus,
+            status_bar=self._status_bar,
+            reload_animations_callback=self._reload_animations_from_db
+        )
+
+        # Bulk edit controller - manages bulk operations
+        self._bulk_edit_ctrl = BulkEditController(
+            parent=self,
+            animation_view=self._animation_view,
+            animation_model=self._animation_model,
+            db_service=self._db_service,
+            event_bus=self._event_bus,
+            status_bar=self._status_bar,
+            reload_animations_callback=self._reload_animations_from_db
+        )
+
+    def _reload_animations_from_db(self):
+        """Reload all animations from database - used by controllers"""
+        animations = self._db_service.get_all_animations()
+        self._animation_model.set_animations(animations)
+
     def _connect_signals(self):
         """Connect signals and slots"""
 
         # Folder tree selection -> filter animations
         self._folder_tree.folder_selected.connect(self._on_folder_selected)
+
+        # Folder tree archive/trash actions
+        self._folder_tree.empty_archive_requested.connect(self._on_empty_archive)
+        self._folder_tree.empty_trash_requested.connect(self._on_empty_trash)
 
         # Animation view selection -> update metadata panel
         self._animation_view.selectionModel().selectionChanged.connect(
@@ -170,7 +228,7 @@ class MainWindow(QMainWindow):
             self._animation_view._on_selection_changed
         )
 
-        # Animation view double-click -> apply animation (TODO: Phase 6)
+        # Animation view double-click -> apply animation
         self._animation_view.animation_double_clicked.connect(self._on_animation_double_clicked)
 
         # Header toolbar search -> filter animations
@@ -185,11 +243,11 @@ class MainWindow(QMainWindow):
         # Header toolbar edit mode -> show/hide bulk toolbar
         self._header_toolbar.edit_mode_changed.connect(self._on_edit_mode_changed)
 
-        # Header toolbar delete -> delete selected animations
-        self._header_toolbar.delete_clicked.connect(self._on_delete_clicked)
+        # Header toolbar archive -> archive selected animations (soft delete)
+        self._header_toolbar.delete_clicked.connect(self._on_archive_clicked)
 
-        # Header toolbar apply -> apply selected animation to Blender
-        self._header_toolbar.apply_clicked.connect(self._on_apply_clicked)
+        # Apply panel -> apply animation with options
+        self._apply_panel.apply_clicked.connect(self._on_apply_with_options)
 
         # Header toolbar refresh -> sync library with database
         self._header_toolbar.refresh_library_clicked.connect(self._on_refresh_library)
@@ -214,6 +272,7 @@ class MainWindow(QMainWindow):
         self._bulk_edit_toolbar.move_to_folder_clicked.connect(self._on_move_to_folder)
         self._bulk_edit_toolbar.gradient_preset_selected.connect(self._on_gradient_preset_selected)
         self._bulk_edit_toolbar.custom_gradient_clicked.connect(self._on_custom_gradient_clicked)
+        self._bulk_edit_toolbar.restore_clicked.connect(self._on_restore_clicked)
 
         # Event bus signals
         self._event_bus.loading_started.connect(self._on_loading_started)
@@ -300,28 +359,34 @@ class MainWindow(QMainWindow):
         """Handle folder selection with optional recursive filtering"""
 
         # Clear special filters first
-        self._proxy_model.set_favorites_only(False)
-        self._proxy_model.set_recent_only(False)
+        self._filter_ctrl.clear_special_filters()
+
+        if folder_name == "Archive":
+            self._archive_trash_ctrl.show_archive_view()
+            self._bulk_edit_toolbar.set_special_view_mode(in_archive=True)
+            return
+        elif folder_name == "Trash":
+            self._archive_trash_ctrl.show_trash_view()
+            self._bulk_edit_toolbar.set_special_view_mode(in_trash=True)
+            return
+
+        # Exit special views if we were in archive/trash
+        self._archive_trash_ctrl.exit_special_views()
+        self._bulk_edit_toolbar.set_special_view_mode()  # Reset to normal mode
 
         if folder_name == "All Animations":
-            # Show all animations
-            self._proxy_model.set_folder_filter(None, None, None)
+            self._filter_ctrl.clear_folder_filter()
         elif folder_name == "Favorites":
-            # Show only favorited animations
-            self._proxy_model.set_folder_filter(None, None, None)
-            self._proxy_model.set_favorites_only(True)
+            self._filter_ctrl.clear_folder_filter()
+            self._filter_ctrl.set_favorites_only(True)
         elif folder_name == "Recent":
-            # Show only recently viewed animations
-            self._proxy_model.set_folder_filter(None, None, None)
-            self._proxy_model.set_recent_only(True)
+            self._filter_ctrl.clear_folder_filter()
+            self._filter_ctrl.set_recent_only(True)
         else:
             # Filter by folder name (tags-based)
-            # Pass folder_name for tag-based filtering
-            self._proxy_model.set_folder_filter(folder_id, set(), folder_name)
+            self._filter_ctrl.set_folder_filter(folder_id, folder_name, set())
 
-        # Update status
-        count = self._proxy_model.rowCount()
-        self._status_bar.showMessage(f"{count} animations in {folder_name}")
+        self._filter_ctrl.update_status(folder_name)
 
     def _on_animation_selection_changed(self, selected, deselected):
         """Handle animation selection change"""
@@ -338,16 +403,23 @@ class MainWindow(QMainWindow):
                 # Update metadata panel
                 self._metadata_panel.set_animation(animation)
 
+                # Update apply panel
+                self._apply_panel.set_animation(animation)
+
                 # Update status
                 name = animation.get('name', 'Unknown')
                 self._status_bar.showMessage(f"Selected: {name}")
         else:
             # Clear metadata panel
             self._metadata_panel.clear()
+
+            # Clear apply panel
+            self._apply_panel.clear()
+
             self._status_bar.showMessage("Ready")
 
     def _on_animation_double_clicked(self, uuid: str):
-        """Handle animation double-click - Queue animation for Blender"""
+        """Handle animation double-click - Immediately apply to Blender with options"""
 
         animation = self._animation_model.get_animation_by_uuid(uuid)
         if not animation:
@@ -355,30 +427,25 @@ class MainWindow(QMainWindow):
 
         name = animation.get('name', 'Unknown')
 
-        # Set animation for application in Blender
-        success = self._blender_service.queue_apply_animation(uuid, name)
+        # Get options from apply panel
+        options = self._apply_panel.get_options()
+
+        # Queue animation for Blender with options
+        success = self._blender_service.queue_apply_animation(uuid, name, options)
 
         if success:
-            self._status_bar.showMessage(f"Ready to apply '{name}' in Blender")
+            self._status_bar.showMessage(f"Applied '{name}' to Blender")
         else:
-            self._status_bar.showMessage(f"Failed to set '{name}'")
-            self._event_bus.report_error("blender", f"Failed to set animation '{name}'")
+            self._status_bar.showMessage(f"Failed to apply '{name}'")
+            self._event_bus.report_error("blender", f"Failed to apply animation '{name}'")
 
     def _on_search_text_changed(self, text: str):
         """Handle search text change"""
-
-        self._proxy_model.set_search_text(text)
-
-        # Update status
-        count = self._proxy_model.rowCount()
-        if text:
-            self._status_bar.showMessage(f"{count} animations match '{text}'")
-        else:
-            self._status_bar.showMessage(f"{count} animations")
+        self._filter_ctrl.set_search_text(text)
 
     def _on_sort_changed(self, sort_by: str, sort_order: str):
         """Handle sort option change from toolbar"""
-        self._proxy_model.set_sort_config(sort_by, sort_order)
+        self._filter_ctrl.set_sort_config(sort_by, sort_order)
 
     def _on_edit_mode_changed(self, enabled: bool):
         """Handle edit mode toggle"""
@@ -388,64 +455,36 @@ class MainWindow(QMainWindow):
         else:
             self._bulk_edit_toolbar.hide()
 
-    def _on_delete_clicked(self):
-        """Handle delete button click"""
-        selected_uuids = self._animation_view.get_selected_uuids()
-        if not selected_uuids:
-            return
+    def _on_archive_clicked(self):
+        """Handle archive button click - context-aware action based on current view"""
+        self._archive_trash_ctrl.handle_delete_action()
 
-        # Confirmation dialog
-        count = len(selected_uuids)
-        msg = f"Delete {count} animation{'s' if count > 1 else ''}?\n\nThis will permanently remove the files."
-        reply = QMessageBox.question(
-            self,
-            "Confirm Delete",
-            msg,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
+    def _on_restore_clicked(self):
+        """Handle restore button click in bulk edit toolbar"""
+        if self._archive_trash_ctrl.in_archive_view:
+            self._archive_trash_ctrl.restore_from_archive()
+        elif self._archive_trash_ctrl.in_trash_view:
+            self._archive_trash_ctrl.restore_to_archive()
 
-        # Delete from database and filesystem
-        library_path = Config.load_library_path()
-        deleted = 0
-        for uuid in selected_uuids:
-            self._db_service.delete_animation(uuid)
-            self._animation_model.remove_animation(uuid)
+    def _on_apply_with_options(self, options: dict):
+        """Handle apply from apply panel button - Apply current animation with options"""
 
-            # Delete files from library folder
-            if library_path:
-                anim_folder = library_path / "library" / uuid
-                if anim_folder.exists():
-                    shutil.rmtree(anim_folder)
-            deleted += 1
-
-        self._status_bar.showMessage(f"Deleted {deleted} animation{'s' if deleted > 1 else ''}")
-
-    def _on_apply_clicked(self):
-        """Handle apply to Blender button click - Queue selected animation for Blender"""
-
-        # Get selected animation UUID from EventBus
-        uuid = self._event_bus.get_selected_animation()
-        if not uuid:
+        animation = self._apply_panel.get_current_animation()
+        if not animation:
             self._status_bar.showMessage("No animation selected")
             return
 
-        animation = self._animation_model.get_animation_by_uuid(uuid)
-        if not animation:
-            self._status_bar.showMessage("Animation not found")
-            return
-
+        uuid = animation.get('uuid')
         name = animation.get('name', 'Unknown')
 
-        # Set animation for application in Blender
-        success = self._blender_service.queue_apply_animation(uuid, name)
+        # Queue animation for Blender with options
+        success = self._blender_service.queue_apply_animation(uuid, name, options)
 
         if success:
-            self._status_bar.showMessage(f"Ready to apply '{name}' in Blender")
+            self._status_bar.showMessage(f"Applied '{name}' to Blender")
         else:
-            self._status_bar.showMessage(f"Failed to set '{name}'")
-            self._event_bus.report_error("blender", f"Failed to set animation '{name}'")
+            self._status_bar.showMessage(f"Failed to apply '{name}'")
+            self._event_bus.report_error("blender", f"Failed to apply animation '{name}'")
 
     def _on_refresh_library(self):
         """Handle refresh library button click - sync database with library folder"""
@@ -492,188 +531,19 @@ class MainWindow(QMainWindow):
 
     def _on_remove_tags(self):
         """Handle remove tags from selected animations"""
-        from PyQt6.QtWidgets import QMessageBox, QInputDialog
-
-        selected_uuids = self._animation_view.get_selected_uuids()
-        if not selected_uuids:
-            QMessageBox.warning(self, "No Selection", "Please select animations first")
-            return
-
-        # Collect all unique tags from selected animations
-        all_tags = set()
-        for uuid in selected_uuids:
-            animation = self._animation_model.get_animation_by_uuid(uuid)
-            if animation:
-                all_tags.update(animation.get('tags', []))
-
-        if not all_tags:
-            QMessageBox.information(self, "No Tags", "Selected animations have no tags")
-            return
-
-        # Show tag selection dialog
-        tag_list = sorted(list(all_tags))
-        tag, ok = QInputDialog.getItem(
-            self,
-            "Remove Tag",
-            "Select tag to remove:",
-            tag_list,
-            0,
-            False
-        )
-
-        if not ok or not tag:
-            return
-
-        # Confirm removal
-        reply = QMessageBox.question(
-            self,
-            "Confirm Removal",
-            f"Remove tag '{tag}' from {len(selected_uuids)} animation(s)?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        # Remove tag from each selected animation
-        success_count = 0
-        for uuid in selected_uuids:
-            animation = self._animation_model.get_animation_by_uuid(uuid)
-            if not animation:
-                continue
-
-            current_tags = animation.get('tags', [])
-            if tag in current_tags:
-                current_tags.remove(tag)
-
-                if self._db_service.update_animation(uuid, {'tags': current_tags}):
-                    success_count += 1
-
-        # Reload animations
-        if success_count > 0:
-            animations = self._db_service.get_all_animations()
-            self._animation_model.set_animations(animations)
-
-            self._status_bar.showMessage(
-                f"Removed tag '{tag}' from {success_count} animation(s)"
-            )
-        else:
-            QMessageBox.warning(self, "Error", "Failed to remove tags")
+        self._bulk_edit_ctrl.remove_tags()
 
     def _on_gradient_preset_selected(self, name: str, top_color: tuple, bottom_color: tuple):
         """Handle gradient preset selection from dropdown"""
-        self._apply_gradient_to_selected(top_color, bottom_color, name)
+        self._bulk_edit_ctrl.apply_gradient_preset(name, top_color, bottom_color)
 
     def _on_custom_gradient_clicked(self):
         """Handle custom gradient selection - opens color picker dialog"""
-        from .dialogs.gradient_picker_dialog import GradientPickerDialog
-
-        selected_uuids = self._animation_view.get_selected_uuids()
-        if not selected_uuids:
-            return
-
-        dialog = GradientPickerDialog(self)
-        if not dialog.exec():
-            return
-
-        top_color, bottom_color = dialog.get_gradient()
-        self._apply_gradient_to_selected(top_color, bottom_color, "Custom")
-
-    def _apply_gradient_to_selected(self, top_color: tuple, bottom_color: tuple, preset_name: str):
-        """Apply gradient colors to all selected animations"""
-        import json
-        from PyQt6.QtWidgets import QMessageBox
-
-        selected_uuids = self._animation_view.get_selected_uuids()
-        if not selected_uuids:
-            QMessageBox.warning(self, "No Selection", "Please select animations first")
-            return
-
-        success_count = 0
-        for uuid in selected_uuids:
-            updates = {
-                'use_custom_thumbnail_gradient': 1,
-                'thumbnail_gradient_top': json.dumps(list(top_color)),
-                'thumbnail_gradient_bottom': json.dumps(list(bottom_color))
-            }
-
-            if self._db_service.update_animation(uuid, updates):
-                success_count += 1
-
-        if success_count > 0:
-            # Reload animations
-            animations = self._db_service.get_all_animations()
-            self._animation_model.set_animations(animations)
-
-            # Clear thumbnail cache and refresh view
-            from ..services.thumbnail_loader import get_thumbnail_loader
-            thumbnail_loader = get_thumbnail_loader()
-            thumbnail_loader.clear_cache()
-            self._animation_view.viewport().update()
-
-            self._status_bar.showMessage(
-                f"Applied '{preset_name}' gradient to {success_count} animation(s)"
-            )
-        else:
-            QMessageBox.warning(self, "Error", "Failed to apply gradient")
+        self._bulk_edit_ctrl.apply_custom_gradient()
 
     def _on_move_to_folder(self):
         """Handle move selected animations to folder"""
-        from PyQt6.QtWidgets import QMessageBox, QInputDialog
-
-        selected_uuids = self._animation_view.get_selected_uuids()
-        if not selected_uuids:
-            QMessageBox.warning(self, "No Selection", "Please select animations first")
-            return
-
-        # Get all folders
-        folders = self._db_service.get_all_folders()
-        user_folders = [f for f in folders if f.get('parent_id')]  # Exclude root
-
-        if not user_folders:
-            QMessageBox.information(self, "No Folders", "Please create a folder first")
-            return
-
-        # Build folder list for selection
-        folder_names = [f['name'] for f in user_folders]
-        folder_name, ok = QInputDialog.getItem(
-            self,
-            "Move to Folder",
-            "Select destination folder:",
-            folder_names,
-            0,
-            False
-        )
-
-        if not ok or not folder_name:
-            return
-
-        # Find folder ID
-        folder_id = None
-        for f in user_folders:
-            if f['name'] == folder_name:
-                folder_id = f['id']
-                break
-
-        if not folder_id:
-            return
-
-        # Move animations
-        success_count = 0
-        for uuid in selected_uuids:
-            if self._db_service.move_animation_to_folder(uuid, folder_id):
-                success_count += 1
-
-        # Reload animations
-        if success_count > 0:
-            animations = self._db_service.get_all_animations()
-            self._animation_model.set_animations(animations)
-
-            self._status_bar.showMessage(
-                f"Moved {success_count} animation(s) to '{folder_name}'"
-            )
-        else:
-            QMessageBox.warning(self, "Error", "Failed to move animations")
+        self._bulk_edit_ctrl.move_to_folder()
 
     def _on_loading_started(self, operation: str):
         """Handle loading started"""
@@ -691,8 +561,7 @@ class MainWindow(QMainWindow):
     def _on_folder_changed(self, folder_id: int):
         """Handle animations moved to different folder"""
         # Reload ALL animations from database to get updated tags
-        animations = self._db_service.get_all_animations()
-        self._animation_model.set_animations(animations)
+        self._reload_animations_from_db()
 
         # If the changed folder is currently selected, keep it selected
         selected_items = self._folder_tree.selectedItems()
@@ -703,11 +572,21 @@ class MainWindow(QMainWindow):
                 folder_name = data.get('folder_name')
                 # Reapply current filter
                 if folder_name == "All Animations":
-                    self._proxy_model.set_folder_filter(None, None, None)
+                    self._filter_ctrl.clear_folder_filter()
                 else:
                     folder_item_id = data.get('folder_id')
                     if folder_item_id:
-                        self._proxy_model.set_folder_filter(folder_item_id, None, folder_name)
+                        self._filter_ctrl.set_folder_filter(folder_item_id, folder_name, None)
+
+    # ==================== ARCHIVE/TRASH OPERATIONS (delegated to controller) ====================
+
+    def _on_empty_archive(self):
+        """Handle empty archive action - delegate to controller"""
+        self._archive_trash_ctrl.empty_archive()
+
+    def _on_empty_trash(self):
+        """Handle empty trash action - delegate to controller"""
+        self._archive_trash_ctrl.empty_trash()
 
     # ==================== EVENTS ====================
 

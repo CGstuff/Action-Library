@@ -6,17 +6,15 @@ Inspired by: Current animation_library metadata display
 """
 
 from typing import Optional, Dict, Any
-import cv2
-from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea,
-    QFrame, QGridLayout, QPushButton, QSlider, QHBoxLayout, QStyle
+    QFrame, QGridLayout, QPushButton, QHBoxLayout
 )
-from PyQt6.QtCore import Qt, QTimer, QSize
-from PyQt6.QtGui import QFont, QPixmap, QImage
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
 
 from ..themes.theme_manager import get_theme_manager
-from ..utils.icon_loader import IconLoader
+from .video_preview_widget import VideoPreviewWidget
 
 
 class MetadataPanel(QWidget):
@@ -57,28 +55,8 @@ class MetadataPanel(QWidget):
         # Current animation
         self._animation: Optional[Dict[str, Any]] = None
 
-        # Load media control icons
-        theme = get_theme_manager().get_current_theme()
-        icon_color = theme.palette.header_icon_color if theme else "#1a1a1a"
-        from ..utils.icon_utils import colorize_white_svg
-
-        self._play_icon = colorize_white_svg(IconLoader.get("play"), icon_color)
-        self._pause_icon = colorize_white_svg(IconLoader.get("pause"), icon_color)
-        self._loop_icon = colorize_white_svg(IconLoader.get("loop"), icon_color)
-
-        # Video playback state
-        self._cv_cap: Optional[cv2.VideoCapture] = None
-        self._cv_timer = QTimer(self)
-        self._cv_timer.timeout.connect(self._update_video_frame)
-        self._cv_fps = 24
-        self._cv_frame_count = 0
-        self._cv_total_frames = 0
-        self._is_playing = False
-        self._is_seeking = False
-
-        # Theme manager for gradients
+        # Theme manager
         self._theme_manager = get_theme_manager()
-        self._theme_manager.theme_changed.connect(self._on_theme_changed)
 
         # Event bus for edit mode changes
         from ..events.event_bus import get_event_bus
@@ -147,71 +125,9 @@ class MetadataPanel(QWidget):
         return section
 
     def _create_preview_section(self) -> QWidget:
-        """Create video preview section with controls"""
-
-        section = QWidget()
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-
-        # Video display label (350px height to match old repo)
-        self._video_label = QLabel()
-        self._video_label.setFixedHeight(350)
-        self._video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._video_label.setStyleSheet("background-color: #000000;")
-        self._video_label.setText("No preview loaded")
-        layout.addWidget(self._video_label)
-
-        # Control buttons row
-        controls_layout = QHBoxLayout()
-        controls_layout.setSpacing(2)
-
-        # Play/Pause toggle button (single button with icon swap)
-        self._play_pause_button = QPushButton()
-        self._play_pause_button.setIcon(self._play_icon)
-        self._play_pause_button.setIconSize(QSize(24, 24))
-        self._play_pause_button.setFixedSize(36, 36)
-        self._play_pause_button.setProperty("media", "true")
-        self._play_pause_button.setEnabled(False)
-        self._play_pause_button.setToolTip("Play/Pause preview")
-        self._play_pause_button.clicked.connect(self._toggle_playback)
-        controls_layout.addWidget(self._play_pause_button)
-
-        # Loop toggle button
-        self._loop_button = QPushButton()
-        self._loop_button.setIcon(self._loop_icon)
-        self._loop_button.setIconSize(QSize(24, 24))
-        self._loop_button.setFixedSize(36, 36)
-        self._loop_button.setProperty("media", "true")
-        self._loop_button.setCheckable(True)
-        self._loop_button.setChecked(True)  # Default: loop enabled
-        self._loop_button.setEnabled(False)
-        self._loop_button.setToolTip("Toggle loop playback")
-        # Subtle highlight when loop is enabled (sharp corners, subtle background)
-        self._loop_button.setStyleSheet("""
-            QPushButton:checked {
-                background-color: rgba(255, 255, 255, 0.35);
-            }
-        """)
-        controls_layout.addWidget(self._loop_button)
-
-        # Progress slider
-        self._progress_slider = QSlider(Qt.Orientation.Horizontal)
-        self._progress_slider.setProperty("progress", "true")  # Property for CSS selector
-        self._progress_slider.setFixedHeight(32)  # Match old repo height
-        self._progress_slider.setMinimum(0)
-        self._progress_slider.setMaximum(1000)
-        self._progress_slider.setValue(0)
-        self._progress_slider.setEnabled(False)
-        self._progress_slider.setToolTip("Seek preview timeline")
-        self._progress_slider.sliderPressed.connect(self._on_slider_pressed)
-        self._progress_slider.sliderReleased.connect(self._on_slider_released)
-        self._progress_slider.mousePressEvent = self._progress_slider_mouse_press
-        controls_layout.addWidget(self._progress_slider)
-
-        layout.addLayout(controls_layout)
-
-        return section
+        """Create video preview section using VideoPreviewWidget"""
+        self._video_preview = VideoPreviewWidget()
+        return self._video_preview
 
     def _create_layout(self):
         """Create panel layout"""
@@ -250,10 +166,9 @@ class MetadataPanel(QWidget):
         # Load video preview
         preview_path = animation.get('preview_path', '')
         if preview_path:
-            self._load_video(preview_path)
+            self._video_preview.load_video(preview_path)
         else:
-            self._video_label.setText("No preview available")
-            self._disable_controls()
+            self._video_preview.clear()
 
         # Update description
         description = animation.get('description', '')
@@ -281,16 +196,8 @@ class MetadataPanel(QWidget):
         self._description_label.clear()
         self._description_label.hide()
 
-        # Stop and release video
-        if self._cv_cap:
-            self._cv_timer.stop()
-            self._cv_cap.release()
-            self._cv_cap = None
-
-        self._is_playing = False
-        self._video_label.clear()
-        self._video_label.setText("No preview loaded")
-        self._disable_controls()
+        # Clear video preview
+        self._video_preview.clear()
 
         # Clear sections
         self._clear_section(self._technical_section)
@@ -331,6 +238,12 @@ class MetadataPanel(QWidget):
         duration = self._animation.get('duration_seconds')
         if duration:
             self._add_info_row(grid, row, "Duration:", f"{duration:.2f}s")
+            row += 1
+
+        # UUID
+        uuid = self._animation.get('uuid')
+        if uuid:
+            self._add_info_row(grid, row, "UUID:", uuid)
             row += 1
 
     def _update_rig_section(self):
@@ -574,195 +487,6 @@ class MetadataPanel(QWidget):
         grid = section.property("grid")
         if grid:
             self._clear_grid(grid)
-
-    # ==================== VIDEO PLAYBACK METHODS ====================
-
-    def _load_video(self, video_path: str) -> bool:
-        """Load video file for preview"""
-
-        # Release previous video
-        if self._cv_cap:
-            self._cv_cap.release()
-            self._cv_cap = None
-
-        # Stop playback
-        self._cv_timer.stop()
-        self._is_playing = False
-
-        # Check if file exists
-        if not Path(video_path).exists():
-            self._video_label.setText("Preview not found")
-            self._disable_controls()
-            return False
-
-        # Open video
-        self._cv_cap = cv2.VideoCapture(video_path)
-        if not self._cv_cap.isOpened():
-            self._video_label.setText("Failed to load preview")
-            self._disable_controls()
-            return False
-
-        # Get video properties
-        self._cv_fps = self._cv_cap.get(cv2.CAP_PROP_FPS) or 24
-        self._cv_total_frames = int(self._cv_cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self._cv_frame_count = 0
-
-        # Show first frame
-        if self._show_current_frame():
-            # Enable controls
-            self._enable_controls()
-            return True
-        else:
-            self._video_label.setText("Failed to read video")
-            self._disable_controls()
-            return False
-
-    def _show_current_frame(self) -> bool:
-        """Display current video frame"""
-
-        if not self._cv_cap or not self._cv_cap.isOpened():
-            return False
-
-        ret, frame = self._cv_cap.read()
-        if not ret:
-            return False
-
-        # Get frame dimensions
-        h, w = frame.shape[:2]
-
-        # Convert OpenCV BGR to RGB
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-        # Convert to QImage
-        bytes_per_line = 3 * w
-        qt_frame = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-
-        # Convert to QPixmap
-        pixmap = QPixmap.fromImage(qt_frame.copy())
-
-        # Scale to fit label while preserving aspect ratio
-        scaled = pixmap.scaled(
-            self._video_label.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
-        )
-
-        self._video_label.setPixmap(scaled)
-        return True
-
-    def _update_video_frame(self):
-        """Timer callback to update frame during playback"""
-
-        if not self._show_current_frame():
-            # End of video
-            if self._loop_button.isChecked():
-                # Loop back to start
-                self._cv_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                self._cv_frame_count = 0
-                self._show_current_frame()
-            else:
-                # Stop playback
-                self._cv_timer.stop()
-                self._is_playing = False
-                self._play_pause_button.setIcon(self._play_icon)
-        else:
-            # Update progress
-            self._cv_frame_count += 1
-            if not self._is_seeking and self._cv_total_frames > 0:
-                progress = int((self._cv_frame_count / self._cv_total_frames) * 1000)
-                self._progress_slider.setValue(progress)
-
-    def _toggle_playback(self):
-        """Toggle play/pause state"""
-
-        if self._is_playing:
-            # Pause
-            self._cv_timer.stop()
-            self._is_playing = False
-            self._play_pause_button.setIcon(self._play_icon)  # Switch to play icon
-        else:
-            # Play
-            if self._cv_cap is None:
-                return
-
-            # Check if at end of video
-            if self._cv_frame_count >= self._cv_total_frames - 1:
-                # Restart from beginning
-                self._cv_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                self._cv_frame_count = 0
-
-            # Start playback timer
-            frame_interval = int(1000 / self._cv_fps)
-            self._cv_timer.start(frame_interval)
-            self._is_playing = True
-            self._play_pause_button.setIcon(self._pause_icon)  # Switch to pause icon
-
-    def _on_slider_pressed(self):
-        """Handle slider drag start"""
-        self._is_seeking = True
-
-    def _on_slider_released(self):
-        """Handle slider drag end - seek to position"""
-        self._is_seeking = False
-        self._seek_to_position(self._progress_slider.value())
-
-    def _progress_slider_mouse_press(self, event):
-        """Handle mouse press on progress slider for click-to-seek"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            # Calculate position from click
-            value = QStyle.sliderValueFromPosition(
-                self._progress_slider.minimum(),
-                self._progress_slider.maximum(),
-                event.pos().x(),
-                self._progress_slider.width()
-            )
-            self._progress_slider.setValue(value)
-            self._seek_to_position(value)
-        # Call original handler
-        QSlider.mousePressEvent(self._progress_slider, event)
-
-    def _seek_to_position(self, slider_value):
-        """Seek video to position based on slider value"""
-        if self._cv_cap and self._cv_total_frames > 0:
-            target_frame = int((slider_value / 1000) * self._cv_total_frames)
-            self._cv_cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-            self._cv_frame_count = target_frame
-            self._show_current_frame()
-
-    def _enable_controls(self):
-        """Enable video controls"""
-        self._play_pause_button.setEnabled(True)
-        self._loop_button.setEnabled(True)
-        self._progress_slider.setEnabled(True)
-
-    def _disable_controls(self):
-        """Disable video controls"""
-        self._play_pause_button.setEnabled(False)
-        self._loop_button.setEnabled(False)
-        self._progress_slider.setEnabled(False)
-        self._progress_slider.setValue(0)
-
-    def _on_theme_changed(self, theme_name: str):
-        """Reload icons when theme changes"""
-        theme = get_theme_manager().get_current_theme()
-        if not theme:
-            return
-
-        icon_color = theme.palette.header_icon_color
-        from ..utils.icon_utils import colorize_white_svg
-
-        # Reload icons with new color
-        self._play_icon = colorize_white_svg(IconLoader.get("play"), icon_color)
-        self._pause_icon = colorize_white_svg(IconLoader.get("pause"), icon_color)
-        self._loop_icon = colorize_white_svg(IconLoader.get("loop"), icon_color)
-
-        # Update current button icon
-        if self._is_playing:
-            self._play_pause_button.setIcon(self._pause_icon)
-        else:
-            self._play_pause_button.setIcon(self._play_icon)
-
-        self._loop_button.setIcon(self._loop_icon)
 
 
 __all__ = ['MetadataPanel']

@@ -118,8 +118,7 @@ class ANIMLIB_OT_update_preview(Operator):
         try:
             if self._state == 'GET_SELECTED_UUID':
                 # Get selected animation UUID from desktop app
-                # TODO: Queue-based implementation needed
-                # response = animation_queue_client.get_selected_animation_uuid()
+                # Note: Requires queue-based implementation for full functionality
                 response = {'status': 'error', 'message': 'Feature not yet implemented with queue system'}
 
                 if response.get('status') != 'success':
@@ -165,8 +164,7 @@ class ANIMLIB_OT_update_preview(Operator):
             elif self._state == 'NOTIFY_DESKTOP':
                 # Notify desktop app to refresh preview
                 uuid = self._context_data['uuid']
-                # TODO: Queue-based implementation needed
-                # response = animation_queue_client.notify_preview_updated(uuid)
+                # Note: Queue notification not yet implemented
                 response = {'status': 'success'}
 
                 if response.get('status') == 'success':

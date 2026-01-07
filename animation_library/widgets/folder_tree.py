@@ -13,9 +13,13 @@ from ..config import Config
 from ..services.database_service import get_database_service
 from ..services.folder_icon_service import get_folder_icon_service
 from ..services.folder_move_service import FolderMoveService
+from ..services.archive_service import get_archive_service
+from ..services.trash_service import get_trash_service
 from ..events.event_bus import get_event_bus
 from ..utils.icon_loader import IconLoader
 from ..themes.theme_manager import get_theme_manager
+from .folder_tree_drag_handler import FolderTreeDragHandler
+from .folder_tree_context_menu import FolderTreeContextMenu
 
 
 class FolderTree(QTreeWidget):
@@ -26,7 +30,7 @@ class FolderTree(QTreeWidget):
     - Virtual folders (All Animations, Recent, Favorites)
     - User folders from database
     - Context menus (create, rename, delete)
-    - Drag & drop support (TODO: Phase 5+)
+    - Drag & drop support for animations
     - Selection handling
 
     Layout:
@@ -37,11 +41,16 @@ class FolderTree(QTreeWidget):
         User Folder 1
         User Folder 2
           └─ Subfolder
+        ───────────────
+        Archive (5)
+        Trash (2)
     """
 
     # Signals
     folder_selected = pyqtSignal(int, str, bool)  # folder_id, folder_name, recursive
     recursive_search_changed = pyqtSignal(bool)  # recursive state
+    empty_trash_requested = pyqtSignal()  # user requested to empty trash
+    empty_archive_requested = pyqtSignal()  # user requested to empty archive (move all to trash)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -51,12 +60,15 @@ class FolderTree(QTreeWidget):
         self._event_bus = get_event_bus()
         self._icon_service = get_folder_icon_service(self._db_service)
         self._move_service = FolderMoveService(self._db_service)
+        self._archive_service = get_archive_service()
+        self._trash_service = get_trash_service()
 
         # Load folder icons
         self._folder_icons = self._load_folder_icons()
 
-        # Track dragged folder for folder-to-folder dragging
-        self._dragged_folder_item = None
+        # Track archive and trash folder items for count updates
+        self._archive_item = None
+        self._trash_item = None
 
         # Recursive search setting (search subfolders)
         self._recursive_search = True  # Default to recursive
@@ -64,6 +76,28 @@ class FolderTree(QTreeWidget):
         # Setup tree
         self._setup_tree()
         self._load_folders()
+
+        # Initialize handlers
+        self._drag_handler = FolderTreeDragHandler(
+            tree_widget=self,
+            db_service=self._db_service,
+            move_service=self._move_service,
+            event_bus=self._event_bus,
+            reload_callback=self._load_folders
+        )
+
+        self._context_menu = FolderTreeContextMenu(
+            parent=self,
+            callbacks={
+                'change_icon': self._change_folder_icon,
+                'rename': self._rename_folder,
+                'delete': self._delete_folder,
+                'create': self.create_folder_with_dialog,
+                'empty_archive': self._on_empty_archive,
+                'empty_trash': self._on_empty_trash,
+            }
+        )
+
         self._connect_signals()
 
     def _setup_tree(self):
@@ -158,9 +192,15 @@ class FolderTree(QTreeWidget):
         theme_manager.theme_changed.connect(self._on_theme_changed)
         theme_manager.folder_text_size_changed.connect(self._update_folder_style)
 
+        # Archive and Trash count updates
+        self._event_bus.archive_count_changed.connect(self._on_archive_count_changed)
+        self._event_bus.trash_count_changed.connect(self._on_trash_count_changed)
+
     def _load_folders(self):
         """Load folders from database and create tree"""
         self.clear()
+        self._archive_item = None
+        self._trash_item = None
 
         # Create virtual folders
         self._create_virtual_folders()
@@ -172,6 +212,17 @@ class FolderTree(QTreeWidget):
 
         # Load user folders from database
         self._load_user_folders()
+
+        # Add separator before Archive and Trash
+        separator2 = QTreeWidgetItem(self)
+        separator2.setText(0, "─" * 20)
+        separator2.setFlags(Qt.ItemFlag.NoItemFlags)  # Not selectable
+
+        # Create Archive folder (first stage - soft delete)
+        self._create_archive_folder()
+
+        # Create Trash folder (second stage - hard delete staging)
+        self._create_trash_folder()
 
         # Select "All Animations" by default
         if self.topLevelItemCount() > 0:
@@ -212,6 +263,90 @@ class FolderTree(QTreeWidget):
             font = item.font(0)
             font.setBold(True)
             item.setFont(0, font)
+
+    def _create_archive_folder(self):
+        """Create Archive virtual folder with item count"""
+        theme = get_theme_manager().get_current_theme()
+        icon_color = theme.palette.folder_icon_color if theme else "#D4AF37"
+
+        # Get archive count
+        archive_count = self._archive_service.get_archive_count()
+
+        # Create item
+        item = QTreeWidgetItem(self)
+        if archive_count > 0:
+            item.setText(0, f"Archive ({archive_count})")
+        else:
+            item.setText(0, "Archive")
+
+        # Set icon (using folder_closed for archive)
+        icon_path = IconLoader.get("folder_closed")
+        icon = IconLoader.colorize_icon(icon_path, icon_color)
+        item.setIcon(0, icon)
+
+        # Store metadata
+        item.setData(0, Qt.ItemDataRole.UserRole, {
+            'type': 'virtual',
+            'folder_id': None,
+            'folder_name': 'Archive'
+        })
+
+        # Store reference for count updates
+        self._archive_item = item
+
+    def _create_trash_folder(self):
+        """Create Trash virtual folder with item count"""
+        theme = get_theme_manager().get_current_theme()
+        icon_color = theme.palette.folder_icon_color if theme else "#D4AF37"
+
+        # Get trash count
+        trash_count = self._trash_service.get_trash_count()
+
+        # Create item
+        item = QTreeWidgetItem(self)
+        if trash_count > 0:
+            item.setText(0, f"Trash ({trash_count})")
+        else:
+            item.setText(0, "Trash")
+
+        # Set icon
+        icon_path = IconLoader.get("trash_icon")
+        icon = IconLoader.colorize_icon(icon_path, icon_color)
+        item.setIcon(0, icon)
+
+        # Store metadata
+        item.setData(0, Qt.ItemDataRole.UserRole, {
+            'type': 'virtual',
+            'folder_id': None,
+            'folder_name': 'Trash'
+        })
+
+        # Store reference for count updates
+        self._trash_item = item
+
+    def _on_archive_count_changed(self, count: int):
+        """Update Archive folder display when count changes"""
+        if self._archive_item:
+            if count > 0:
+                self._archive_item.setText(0, f"Archive ({count})")
+            else:
+                self._archive_item.setText(0, "Archive")
+
+    def _on_trash_count_changed(self, count: int):
+        """Update Trash folder display when count changes"""
+        if self._trash_item:
+            if count > 0:
+                self._trash_item.setText(0, f"Trash ({count})")
+            else:
+                self._trash_item.setText(0, "Trash")
+
+    def _on_empty_archive(self):
+        """Handle empty archive context menu action (move all to trash)"""
+        self.empty_archive_requested.emit()
+
+    def _on_empty_trash(self):
+        """Handle empty trash context menu action"""
+        self.empty_trash_requested.emit()
 
     def _load_folder_icons(self):
         """Load folder preset icons"""
@@ -343,6 +478,8 @@ class FolderTree(QTreeWidget):
             "All Animations": "root_icon",
             "Favorites": "favorite_icon",
             "Recent": "recent_icon",
+            "Archive": "archive_icon",  # Archive uses archive icon
+            "Trash": "trash_icon",
         }
 
         # Update all folder icons in the tree
@@ -424,38 +561,10 @@ class FolderTree(QTreeWidget):
                 break
 
     def _on_context_menu(self, position: QPoint):
-        """Handle context menu request"""
-
+        """Handle context menu request - delegate to handler"""
         item = self.itemAt(position)
-
-        menu = QMenu(self)
-
-        if item:
-            data = item.data(0, Qt.ItemDataRole.UserRole)
-
-            if data and data.get('type') == 'user':
-                # User folder context menu
-                icon_action = menu.addAction("Change Icon...")
-                menu.addSeparator()
-                rename_action = menu.addAction("Rename Folder")
-                delete_action = menu.addAction("Delete Folder")
-
-                action = menu.exec(self.viewport().mapToGlobal(position))
-
-                if action == icon_action:
-                    self._change_folder_icon(item)
-                elif action == rename_action:
-                    self._rename_folder(item)
-                elif action == delete_action:
-                    self._delete_folder(item)
-        else:
-            # Empty space - create new folder
-            create_action = menu.addAction("Create Folder")
-
-            action = menu.exec(self.viewport().mapToGlobal(position))
-
-            if action == create_action:
-                self.create_folder_with_dialog()
+        global_pos = self.viewport().mapToGlobal(position)
+        self._context_menu.show_context_menu(item, global_pos)
 
     def create_folder_with_dialog(self):
         """Show dialog and create new folder (called from header button)"""
@@ -517,8 +626,7 @@ class FolderTree(QTreeWidget):
             )
 
     def _rename_folder(self, item: QTreeWidgetItem):
-        """Rename folder"""
-        # TODO: Show input dialog
+        """Rename folder (not yet implemented)"""
         pass
 
     def _delete_folder(self, item: QTreeWidgetItem):
@@ -531,8 +639,6 @@ class FolderTree(QTreeWidget):
         folder_id = data.get('folder_id')
         if not folder_id:
             return
-
-        # TODO: Show confirmation dialog
 
         if self._db_service.delete_folder(folder_id):
             # Reload tree
@@ -561,232 +667,21 @@ class FolderTree(QTreeWidget):
         self._load_folders()
 
     def startDrag(self, supportedActions):
-        """Store dragged folder item before drag starts"""
-        selected = self.selectedItems()
-        if selected:
-            self._dragged_folder_item = selected[0]
+        """Store dragged folder item before drag starts - delegate to handler"""
+        self._drag_handler.start_drag(self.selectedItems())
         super().startDrag(supportedActions)
 
     def dragEnterEvent(self, event):
-        """Accept animation card OR folder drops"""
-        mime_data = event.mimeData()
-
-        # Accept both animation UUID drops AND internal folder drags
-        if (mime_data.hasFormat('application/x-animation-uuid') or
-            mime_data.hasFormat('application/x-qabstractitemmodeldatalist')):
-            event.acceptProposedAction()
-        else:
-            event.ignore()
+        """Accept animation card OR folder drops - delegate to handler"""
+        self._drag_handler.handle_drag_enter(event)
 
     def dragMoveEvent(self, event):
-        """Highlight target folder during drag"""
-        mime_data = event.mimeData()
-        item = self.itemAt(event.position().toPoint())
-
-        if not item:
-            event.ignore()
-            return
-
-        # Accept both animation cards and folder drags
-        if (mime_data.hasFormat('application/x-animation-uuid') or
-            mime_data.hasFormat('application/x-qabstractitemmodeldatalist')):
-            # Highlight drop target
-            self.setCurrentItem(item)
-            event.acceptProposedAction()
-        else:
-            event.ignore()
+        """Highlight target folder during drag - delegate to handler"""
+        self._drag_handler.handle_drag_move(event)
 
     def dropEvent(self, event):
-        """Handle animation card OR folder drop"""
-        mime_data = event.mimeData()
-
-        # Check if this is a folder drag (internal tree drag)
-        if mime_data.hasFormat('application/x-qabstractitemmodeldatalist'):
-            # Folder-to-folder drag
-            target_item = self.itemAt(event.position().toPoint())
-
-            if self._dragged_folder_item:
-                # Handle different drop targets
-                if target_item is None:
-                    # Dropped on empty space → move to root level
-                    if self._move_folder_to_root(self._dragged_folder_item):
-                        event.setDropAction(Qt.DropAction.MoveAction)
-                        event.accept()
-                        self._dragged_folder_item = None
-                        return
-                elif not hasattr(target_item, 'folder_id'):
-                    # Dropped on virtual folder (All Animations, etc.) → move to root level
-                    if self._move_folder_to_root(self._dragged_folder_item):
-                        event.setDropAction(Qt.DropAction.MoveAction)
-                        event.accept()
-                        self._dragged_folder_item = None
-                        return
-                else:
-                    # Dropped on user folder → create hierarchy
-                    if self._move_folder_to_folder(self._dragged_folder_item, target_item):
-                        event.setDropAction(Qt.DropAction.MoveAction)
-                        event.accept()
-                        self._dragged_folder_item = None
-                        return
-
-            event.ignore()
-            return
-
-        # Handle animation UUID drops (existing code)
-        if not mime_data.hasFormat('application/x-animation-uuid'):
-            event.ignore()
-            return
-
-        # Get target folder item
-        target_item = self.itemAt(event.position().toPoint())
-        if not target_item:
-            event.ignore()
-            return
-
-        # Extract animation UUID(s) from MIME data
-        try:
-            uuid_data = bytes(mime_data.data('application/x-animation-uuid')).decode('utf-8')
-            animation_uuids = [u.strip() for u in uuid_data.strip().split('\n') if u.strip()]
-
-            if not animation_uuids:
-                event.ignore()
-                return
-        except (UnicodeDecodeError, AttributeError) as e:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Drag Error", f"Failed to decode animation data: {e}")
-            event.ignore()
-            return
-
-        # Get target folder ID
-        # Virtual folders (All, Recent, Favorites) have no folder_id attribute
-        if not hasattr(target_item, 'folder_id'):
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "Cannot Move",
-                "Cannot move animations to virtual folders"
-            )
-            event.ignore()
-            return
-
-        target_folder_id = target_item.folder_id
-
-        # Move animations to target folder
-        success_count = 0
-        failed_count = 0
-        for uuid in animation_uuids:
-            if self._db_service.move_animation_to_folder(uuid, target_folder_id):
-                success_count += 1
-            else:
-                failed_count += 1
-
-        if success_count > 0:
-            # Refresh displays
-            event.acceptProposedAction()
-
-            # Emit signal to refresh animation list
-            from ..events.event_bus import get_event_bus
-            event_bus = get_event_bus()
-            event_bus.folder_changed.emit(target_folder_id)
-
-            # Show success message
-            folder_name = target_item.text(0).split(' (')[0]  # Remove count
-            from PyQt6.QtWidgets import QMessageBox
-
-            if failed_count > 0:
-                QMessageBox.warning(
-                    self,
-                    "Partially Moved",
-                    f"Moved {success_count} animation(s) to '{folder_name}'.\n\n{failed_count} failed."
-                )
-            else:
-                QMessageBox.information(
-                    self,
-                    "Moved",
-                    f"Moved {success_count} animation(s) to '{folder_name}'"
-                )
-        else:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "Move Failed",
-                f"Failed to move any animations. They may not exist or be inaccessible."
-            )
-            event.ignore()
-
-    def _move_folder_to_root(self, source_item: QTreeWidgetItem) -> bool:
-        """
-        Move folder to root level (make it a top-level folder)
-
-        Args:
-            source_item: Folder to move to root
-
-        Returns:
-            True if successful
-        """
-        from PyQt6.QtWidgets import QMessageBox
-
-        # Validate source
-        if not hasattr(source_item, 'folder_id'):
-            return False
-
-        source_id = source_item.folder_id
-
-        # Extract name BEFORE reloading tree (item will be deleted)
-        source_name = source_item.text(0).split(' (')[0]
-
-        # Use move service to execute move
-        success, message = self._move_service.move_folder_to_root(source_id, source_name)
-
-        if success:
-            # Defer reload to after drag operation completes to prevent Qt rendering bug
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self._reload_after_move(message))
-            return True
-        else:
-            # Show appropriate message based on error
-            if "already at the root level" in message.lower():
-                QMessageBox.information(self, "Already at Root", message)
-            else:
-                QMessageBox.warning(self, "Move Failed", message)
-            return False
-
-    def _move_folder_to_folder(self, source_item: QTreeWidgetItem, target_item: QTreeWidgetItem) -> bool:
-        """Move folder into another folder (create hierarchy)"""
-        from PyQt6.QtWidgets import QMessageBox
-
-        # Validate source and target
-        if not hasattr(source_item, 'folder_id') or not hasattr(target_item, 'folder_id'):
-            return False
-
-        source_id = source_item.folder_id
-        target_id = target_item.folder_id
-
-        # Extract names BEFORE reloading tree (items will be deleted)
-        source_name = source_item.text(0).split(' (')[0]
-        target_name = target_item.text(0).split(' (')[0]
-
-        # Use move service to execute move
-        success, message = self._move_service.move_folder_to_folder(source_id, target_id, source_name, target_name)
-
-        if success:
-            # Defer reload to after drag operation completes to prevent Qt rendering bug
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self._reload_after_move(message))
-            return True
-        else:
-            QMessageBox.warning(self, "Invalid Move", message)
-            return False
-
-    def _reload_after_move(self, message: str):
-        """Reload tree after folder move with proper UI refresh"""
-        from PyQt6.QtWidgets import QMessageBox
-
-        self._load_folders()
-        # Force viewport repaint to prevent Qt rendering bug
-        self.viewport().update()
-
-        QMessageBox.information(self, "Folder Moved", message)
+        """Handle animation card OR folder drop - delegate to handler"""
+        self._drag_handler.handle_drop(event)
 
     # ==================== RECURSIVE SEARCH ====================
 

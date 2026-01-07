@@ -352,15 +352,17 @@ class AnimationView(QListView):
         Get list of selected animation UUIDs
 
         Returns:
-            List of UUIDs
+            List of UUIDs (deduplicated)
         """
         selected_indexes = self.selectionModel().selectedIndexes()
         uuids = []
+        seen = set()
 
         for index in selected_indexes:
             uuid = index.data(AnimationRole.UUIDRole)
-            if uuid:
+            if uuid and uuid not in seen:
                 uuids.append(uuid)
+                seen.add(uuid)
 
         return uuids
 

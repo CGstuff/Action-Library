@@ -106,6 +106,50 @@ The animation will be saved to your library and appear in the desktop app!
 
 ---
 
+## Step 7: Apply Animations to Blender
+
+Once you have animations in your library, you can apply them to rigs in Blender:
+
+1. **Select an animation** in the desktop app by clicking on it
+2. Configure apply options in the **Apply Panel** (right side):
+   - **Apply Mode**: New Action (replaces current) or Insert at Playhead
+   - **Mirror**: Swap left/right bones (e.g., walk cycle facing opposite direction)
+   - **Reverse**: Play animation backwards
+   - **Selected Bones Only**: Apply only to bones selected in Blender
+   - **Use Slots**: Use Blender 4.5+ action slots system
+3. Click **APPLY ACTION TO BLENDER**
+4. In Blender, click **Manual Apply** in the Animation Library panel (sidebar)
+
+> **Tip:** Double-clicking an animation also queues it for apply with current options.
+
+---
+
+## Managing Animations
+
+### Archive & Trash
+
+Action Library uses a two-stage deletion system to prevent accidental data loss:
+
+- **Archive**: Enter Edit Mode (click the edit button in the toolbar), select animations, and click the archive button
+  - Archived animations move to the Archive folder
+  - They can be restored or moved to Trash
+
+- **Restore from Archive**:
+  1. Click the Archive folder in the folder tree
+  2. Enter Edit Mode
+  3. Select animations you want to restore
+  4. Click "Restore to Library" button
+
+- **Restore from Trash**:
+  1. Click the Trash folder in the folder tree
+  2. Enter Edit Mode
+  3. Select animations you want to restore
+  4. Click "Restore to Archive" button
+
+- **Empty Trash**: Right-click the Trash folder and select "Empty Trash" to permanently delete all trashed items
+
+---
+
 ## Tips & Troubleshooting
 
 ### Library Path Must Match
@@ -128,4 +172,5 @@ The library automatically detects common rig types:
 
 ### Need Help?
 - Check the [README](README.md) for feature overview
+- See the [Studio Guide](STUDIO_GUIDE.md) for multi-artist/team deployment
 - Report issues on [GitHub Issues](../../issues)

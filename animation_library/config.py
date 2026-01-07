@@ -91,6 +91,11 @@ class Config:
     # Database schema
     DB_SCHEMA_VERSION: Final[int] = 1
 
+    # Archive and Trash settings (two-stage deletion)
+    ARCHIVE_FOLDER_NAME: Final[str] = ".archive"  # First stage: soft delete, no expiry
+    TRASH_FOLDER_NAME: Final[str] = ".trash"      # Second stage: staging for hard delete
+    ALLOW_HARD_DELETE: bool = False               # Setting toggle for permanent deletion
+
     @classmethod
     def get_user_data_dir(cls) -> Path:
         """Get user data directory (in app directory for portability)"""
@@ -278,6 +283,60 @@ class Config:
             True if no library path is configured
         """
         return cls.load_library_path() is None
+
+    @classmethod
+    def load_allow_hard_delete(cls) -> bool:
+        """
+        Load the ALLOW_HARD_DELETE setting from settings file
+
+        Returns:
+            bool: True if hard delete is allowed, False otherwise
+        """
+        settings_file = cls.get_settings_file()
+        if settings_file.exists():
+            try:
+                import json
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    return settings.get('allow_hard_delete', cls.ALLOW_HARD_DELETE)
+            except Exception:
+                pass
+        return cls.ALLOW_HARD_DELETE
+
+    @classmethod
+    def save_allow_hard_delete(cls, allowed: bool) -> bool:
+        """
+        Save the ALLOW_HARD_DELETE setting to settings file
+
+        Args:
+            allowed: Whether hard delete should be allowed
+
+        Returns:
+            bool: True if saved successfully
+        """
+        try:
+            import json
+            settings_file = cls.get_settings_file()
+            settings_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Load existing settings
+            settings = {}
+            if settings_file.exists():
+                try:
+                    with open(settings_file, 'r', encoding='utf-8') as f:
+                        settings = json.load(f)
+                except Exception:
+                    pass
+
+            # Update setting
+            settings['allow_hard_delete'] = allowed
+
+            # Save back
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2)
+            return True
+        except Exception:
+            return False
 
 
 # Export for convenient imports
