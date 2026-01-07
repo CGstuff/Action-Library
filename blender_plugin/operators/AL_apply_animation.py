@@ -283,6 +283,64 @@ class ANIMLIB_OT_apply_animation(Operator):
 
             return None
 
+    def reverse_action(self, source_action, frame_start, frame_end):
+        """
+        Create a reversed version of an action.
+
+        Args:
+            source_action: Source action to reverse
+            frame_start: First frame of animation
+            frame_end: Last frame of animation
+
+        Returns:
+            Reversed action or None if reversing fails
+        """
+        from ..utils.utils import BLENDER_5_0_OR_LATER, init_action_for_blender_5
+
+        try:
+            logger.info(f"Reversing action '{source_action.name}' (frames {frame_start}-{frame_end})")
+
+            # Create new action for reversed animation
+            reversed_action = bpy.data.actions.new(name=f"{source_action.name}_reversed")
+
+            # For Blender 5.0+, initialize the action with proper layer/strip/slot structure
+            slot = None
+            if BLENDER_5_0_OR_LATER:
+                slot = init_action_for_blender_5(reversed_action, slot_name="Reversed")
+                if not slot:
+                    logger.error("Failed to initialize action for Blender 5.0")
+
+            # Copy fcurves with reversed keyframe positions
+            copied_count = 0
+            for fcurve in get_action_fcurves(source_action):
+                new_fcurve = new_action_fcurve(
+                    reversed_action,
+                    fcurve.data_path,
+                    index=fcurve.array_index,
+                    slot=slot
+                )
+
+                if new_fcurve is None:
+                    logger.warning(f"Failed to create fcurve for {fcurve.data_path}")
+                    continue
+
+                # Copy keyframes with reversed frame positions
+                for keyframe in fcurve.keyframe_points:
+                    reversed_frame = frame_end - (keyframe.co[0] - frame_start)
+                    new_fcurve.keyframe_points.insert(reversed_frame, keyframe.co[1])
+
+                new_fcurve.update()
+                copied_count += 1
+
+            logger.info(f"Created reversed action with {copied_count} fcurves")
+            return reversed_action
+
+        except Exception as e:
+            logger.error(f"Error reversing action: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def apply_animation_from_blend_file(self, target_armature, blend_file_path, frame_start, frame_end, apply_mode='NEW', apply_selected_bones_only=False, selected_bones=None, use_slots=False, mirror_animation=False, reverse_animation=False, rig_type='rigify'):
         """Apply animation by loading action from blend file, optionally filtering to selected bones and using slots"""
         try:
@@ -492,11 +550,32 @@ class ANIMLIB_OT_apply_animation(Operator):
                     if apply_selected_bones_only and selected_bones:
                         filtered_action = self.create_filtered_action(source_action, selected_bones, target_armature)
                         if filtered_action:
-                            target_armature.animation_data.action = filtered_action
+                            action_to_apply = filtered_action
                         else:
-                            target_armature.animation_data.action = source_action
+                            action_to_apply = source_action
                     else:
-                        target_armature.animation_data.action = source_action
+                        action_to_apply = source_action
+
+                    # Apply reverse if requested (standard NEW mode)
+                    if reverse_animation:
+                        logger.info("Reversing animation for standard NEW mode")
+                        reversed_action = self.reverse_action(action_to_apply, frame_start, frame_end)
+                        if reversed_action:
+                            # Remove original and use reversed
+                            if action_to_apply != source_action:
+                                bpy.data.actions.remove(action_to_apply)
+                            bpy.data.actions.remove(source_action)
+                            target_armature.animation_data.action = reversed_action
+                            # For Blender 5.0+, we must also set the action_slot
+                            from ..utils.utils import BLENDER_5_0_OR_LATER
+                            if BLENDER_5_0_OR_LATER and reversed_action.slots:
+                                target_armature.animation_data.action_slot = reversed_action.slots[0]
+                                logger.debug(f"Set action_slot to {reversed_action.slots[0].name}")
+                        else:
+                            logger.warning("Failed to reverse animation, using original")
+                            target_armature.animation_data.action = action_to_apply
+                    else:
+                        target_armature.animation_data.action = action_to_apply
 
             # Set animation slot for Blender 4.5+ compatibility (non-slot mode)
             if not use_slots:

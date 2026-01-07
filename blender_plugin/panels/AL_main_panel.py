@@ -135,10 +135,10 @@ class ANIMLIB_PT_main_panel(Panel):
             layout.separator()
             action_details_box = layout.box()
 
-            # Collapsible header
+            # Collapsible header - show armature name so user knows which rig will be captured
             header_row = action_details_box.row()
             icon = 'DOWNARROW_HLT' if scene.animlib_show_action_details else 'RIGHTARROW'
-            header_row.prop(scene, "animlib_show_action_details", text="Action Details", icon=icon, emboss=False)
+            header_row.prop(scene, "animlib_show_action_details", text=f"Capture from: {armature.name}", icon=icon, emboss=False)
 
             # Show content only if expanded
             if scene.animlib_show_action_details:

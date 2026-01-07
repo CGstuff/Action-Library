@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Mirror animation (swap left/right bones)
   - Reverse animation playback
   - Apply to selected bones only
-  - Use Action Slots (Blender 4.5+)
+  - Use Action Slots (experimental - for future animation layers workflow)
 
 - **Video Preview**
   - Hover preview popup for animation cards

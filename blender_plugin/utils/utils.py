@@ -22,6 +22,103 @@ BLENDER_5_0_OR_LATER = bpy.app.version >= (5, 0, 0)
 # In Blender 5.0, the legacy action.fcurves API was removed.
 # FCurves must now be accessed through channelbags via slots.
 
+
+def init_action_for_blender_5(action, slot_name="Slot"):
+    """
+    Initialize a new action for Blender 5.0+ with proper layer/strip/slot structure.
+
+    In Blender 5.0, actions require layers, strips, and slots to store fcurves.
+    Structure: Action → Layers → Strips → Channelbags → FCurves
+
+    The correct order according to Blender 5.0 API:
+    1. Create layer
+    2. Create keyframe strip on layer
+    3. Create slot
+    4. Get channelbag via strip.channelbag(slot, ensure=True)
+
+    Args:
+        action: Blender action object
+        slot_name: Name for the slot (default "Slot")
+
+    Returns:
+        The created slot, or None if setup failed
+    """
+    if not BLENDER_5_0_OR_LATER:
+        return None
+
+    if not action:
+        return None
+
+    try:
+        # Step 1: Create layer FIRST (required for strips and channelbags)
+        layer = None
+        if hasattr(action, 'layers'):
+            if len(action.layers) == 0:
+                layer = action.layers.new(name="Layer")
+                logger.debug(f"Created layer for action '{action.name}'")
+            else:
+                layer = action.layers[0]
+                logger.debug(f"Using existing layer for action '{action.name}'")
+
+        if not layer:
+            logger.error(f"Failed to create/get layer for action '{action.name}'")
+            return None
+
+        # Step 2: Create keyframe strip on layer
+        strip = None
+        if hasattr(layer, 'strips'):
+            if len(layer.strips) == 0:
+                try:
+                    strip = layer.strips.new(type='KEYFRAME')
+                    logger.debug(f"Created keyframe strip for action '{action.name}'")
+                except Exception as e:
+                    logger.error(f"Could not create strip: {e}")
+                    return None
+            else:
+                strip = layer.strips[0]
+                logger.debug(f"Using existing strip for action '{action.name}'")
+
+        if not strip:
+            logger.error(f"Failed to create/get strip for action '{action.name}'")
+            return None
+
+        # Step 3: Create slot
+        slot = None
+        if hasattr(action, 'slots'):
+            slot = action.slots.new('OBJECT', slot_name)
+            logger.debug(f"Created slot for action '{action.name}'")
+
+        if not slot:
+            logger.error(f"Failed to create slot for action '{action.name}'")
+            return None
+
+        # Step 4: Get channelbag for the slot using strip.channelbag() - the correct Blender 5.0 API
+        try:
+            channelbag = strip.channelbag(slot, ensure=True)
+            if channelbag:
+                logger.debug(f"Channelbag created via strip.channelbag()")
+            else:
+                logger.warning(f"strip.channelbag() returned None")
+        except Exception as e:
+            logger.warning(f"strip.channelbag() failed: {e}")
+            # Fallback to anim_utils helper
+            try:
+                from bpy_extras import anim_utils
+                channelbag = anim_utils.action_ensure_channelbag_for_slot(action, slot)
+                if channelbag:
+                    logger.debug(f"Channelbag created via anim_utils fallback")
+            except Exception as e2:
+                logger.error(f"All channelbag creation methods failed: {e2}")
+
+        return slot
+
+    except Exception as e:
+        logger.error(f"Failed to initialize action for Blender 5.0: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def get_action_fcurves(action, slot=None):
     """
     Get fcurves from action, compatible with Blender 4.x and 5.0+
@@ -37,11 +134,19 @@ def get_action_fcurves(action, slot=None):
         return []
 
     if BLENDER_5_0_OR_LATER:
-        # Blender 5.0+ - must use channelbag API
+        # Blender 5.0+ - must use channelbag API via strip
         try:
-            from bpy_extras import anim_utils
             if slot is None and hasattr(action, 'slots') and action.slots:
                 slot = action.slots[0]
+            if slot and hasattr(action, 'layers') and action.layers:
+                layer = action.layers[0]
+                if hasattr(layer, 'strips') and layer.strips:
+                    strip = layer.strips[0]
+                    # Use strip.channelbag() - the correct Blender 5.0 API
+                    channelbag = strip.channelbag(slot)
+                    return channelbag.fcurves if channelbag else []
+            # Fallback to anim_utils
+            from bpy_extras import anim_utils
             if slot:
                 channelbag = anim_utils.action_get_channelbag_for_slot(action, slot)
                 return channelbag.fcurves if channelbag else []
@@ -72,9 +177,18 @@ def find_action_fcurve(action, data_path, index=0, slot=None):
 
     if BLENDER_5_0_OR_LATER:
         try:
-            from bpy_extras import anim_utils
             if slot is None and hasattr(action, 'slots') and action.slots:
                 slot = action.slots[0]
+            if slot and hasattr(action, 'layers') and action.layers:
+                layer = action.layers[0]
+                if hasattr(layer, 'strips') and layer.strips:
+                    strip = layer.strips[0]
+                    # Use strip.channelbag() - the correct Blender 5.0 API
+                    channelbag = strip.channelbag(slot)
+                    if channelbag:
+                        return channelbag.fcurves.find(data_path, index=index)
+            # Fallback to anim_utils
+            from bpy_extras import anim_utils
             if slot:
                 channelbag = anim_utils.action_get_channelbag_for_slot(action, slot)
                 if channelbag:
@@ -108,18 +222,29 @@ def new_action_fcurve(action, data_path, index=0, slot=None, group_name=None):
 
     if BLENDER_5_0_OR_LATER:
         try:
-            from bpy_extras import anim_utils
             if slot is None and hasattr(action, 'slots') and action.slots:
                 slot = action.slots[0]
-            if slot:
-                channelbag = anim_utils.action_ensure_channelbag_for_slot(action, slot)
-                if channelbag:
-                    if group_name:
-                        return channelbag.fcurves.new(data_path, index=index, group_name=group_name)
+            if slot and hasattr(action, 'layers') and action.layers:
+                layer = action.layers[0]
+                if hasattr(layer, 'strips') and layer.strips:
+                    strip = layer.strips[0]
+                    # Use strip.channelbag() directly - this is the correct Blender 5.0 API
+                    channelbag = strip.channelbag(slot, ensure=True)
+                    if channelbag:
+                        if group_name:
+                            return channelbag.fcurves.new(data_path, index=index, group_name=group_name)
+                        else:
+                            return channelbag.fcurves.new(data_path, index=index)
                     else:
-                        return channelbag.fcurves.new(data_path, index=index)
+                        logger.warning(f"Failed to get channelbag for slot")
+                else:
+                    logger.warning(f"Action has no strips - action may not be initialized properly")
+            else:
+                logger.warning(f"No slot or layers available for action")
         except Exception as e:
             logger.warning(f"Failed to create fcurve via channelbag: {e}")
+            import traceback
+            traceback.print_exc()
         return None
     else:
         # Blender 4.x - legacy API

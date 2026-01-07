@@ -91,8 +91,12 @@ class ApplyPanel(QWidget):
         self._bones_check = QCheckBox("Selected Bones Only")
         self._bones_check.setToolTip("Only apply animation to currently selected bones in Blender")
 
-        self._slots_check = QCheckBox("Use Action Slots (Blender 4.5+)")
-        self._slots_check.setToolTip("Use Blender 4.5+ action slots system instead of legacy NLA")
+        self._slots_check = QCheckBox("Use Action Slots (requires existing action)")
+        self._slots_check.setToolTip(
+            "Experimental: Add animation to a slot on the current action.\n"
+            "Requires an action with a slot to already exist on the armature.\n"
+            "For future Blender animation layers workflow."
+        )
 
         # Separator line
         self._separator = QFrame()
