@@ -146,6 +146,7 @@ class ANIMLIB_OT_apply_animation(Operator):
                 blend_file_path,
                 frame_start,
                 frame_end,
+                animation_name=animation_name,
                 apply_mode=apply_mode,
                 apply_selected_bones_only=self.apply_selected_bones_only,
                 selected_bones=selected_bones,
@@ -341,7 +342,7 @@ class ANIMLIB_OT_apply_animation(Operator):
             traceback.print_exc()
             return None
 
-    def apply_animation_from_blend_file(self, target_armature, blend_file_path, frame_start, frame_end, apply_mode='NEW', apply_selected_bones_only=False, selected_bones=None, use_slots=False, mirror_animation=False, reverse_animation=False, rig_type='rigify'):
+    def apply_animation_from_blend_file(self, target_armature, blend_file_path, frame_start, frame_end, animation_name=None, apply_mode='NEW', apply_selected_bones_only=False, selected_bones=None, use_slots=False, mirror_animation=False, reverse_animation=False, rig_type='rigify'):
         """Apply animation by loading action from blend file, optionally filtering to selected bones and using slots"""
         try:
             # Validate slot support if requested
@@ -363,6 +364,10 @@ class ANIMLIB_OT_apply_animation(Operator):
 
             # Apply the first action (our saved action)
             source_action = data_to.actions[0]
+
+            # Rename action to the user-friendly animation name
+            if animation_name:
+                source_action.name = animation_name
 
             # Mirror the action if requested
             if mirror_animation:
@@ -417,8 +422,10 @@ class ANIMLIB_OT_apply_animation(Operator):
                         # Note: In Blender 4.4+, layers/strips may be auto-created
                         # This check is defensive in case they're not
 
-                    # Get or create slot
-                    slot_name = f"{source_action.name}_{int(time.time())}"
+                    # Get or create slot with sequential naming
+                    existing_slot_count = len(current_action.slots)
+                    display_name = animation_name or source_action.name
+                    slot_name = f"{display_name}_slot_{existing_slot_count + 1}"
                     try:
                         # Check if action already has slots (Blender auto-creates first slot)
                         if len(current_action.slots) > 0:
