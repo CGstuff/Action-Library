@@ -37,6 +37,8 @@ Add screenshots here:
 
 Download the latest portable release from the [Releases](../../releases) page.
 
+> **Note:** Windows may show an "Unknown publisher" warning on first run. Click **More info** → **Run anyway**. This is normal for unsigned open source software.
+
 ### Option 2: Run from Source
 
 **Prerequisites:**
