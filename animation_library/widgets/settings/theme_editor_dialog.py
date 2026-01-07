@@ -54,6 +54,7 @@ class ThemeEditorDialog(QDialog):
 
         self.color_pickers = {}  # Map of color_name -> ColorPickerRow
         self.live_preview_enabled = False
+        self.preview_theme_name = f"__preview__{theme.name}"  # Temp name for preview
         self.preview_debounce_timer = QTimer()
         self.preview_debounce_timer.setSingleShot(True)
         self.preview_debounce_timer.setInterval(100)  # 100ms debounce
@@ -282,16 +283,26 @@ class ThemeEditorDialog(QDialog):
             self._apply_preview()
         else:
             # Restore original theme
-            self.theme_manager.set_theme(self.original_theme.name)
+            self._restore_original_theme()
 
     def _apply_preview(self):
         """Apply working theme to main window (for live preview)"""
         if not self.live_preview_enabled:
             return
 
-        # Temporarily register and set working theme
-        self.theme_manager.register_theme(self.working_theme)
-        self.theme_manager.set_theme(self.working_theme.name)
+        # Create a preview copy with temp name (so we don't overwrite original)
+        preview_theme = self._copy_theme(self.working_theme)
+        preview_theme.name = self.preview_theme_name
+
+        # Temporarily register and set preview theme
+        self.theme_manager.register_theme(preview_theme)
+        self.theme_manager.set_theme(self.preview_theme_name)
+
+    def _restore_original_theme(self):
+        """Restore the original theme (undo live preview changes)"""
+        # Re-register original theme to ensure it's not corrupted
+        self.theme_manager.register_theme(self.original_theme)
+        self.theme_manager.set_theme(self.original_theme.name)
 
     def _on_reset(self):
         """Reset all colors to original theme"""
@@ -301,6 +312,10 @@ class ThemeEditorDialog(QDialog):
         for color_attr, picker in self.color_pickers.items():
             new_color = getattr(self.working_theme.palette, color_attr)
             picker.set_color(new_color)
+
+        # Update preview if live preview is enabled
+        if self.live_preview_enabled:
+            self._apply_preview()
 
     def _on_save(self):
         """Save theme - directly for custom themes, with dialog for built-in"""
@@ -379,11 +394,16 @@ class ThemeEditorDialog(QDialog):
         """
         return self.working_theme
 
+    def reject(self):
+        """Handle cancel button - restore original theme"""
+        self._restore_original_theme()
+        super().reject()
+
     def closeEvent(self, event):
-        """Handle dialog close"""
+        """Handle dialog close (X button)"""
         # Restore original theme if live preview was active
         if self.live_preview_enabled:
-            self.theme_manager.set_theme(self.original_theme.name)
+            self._restore_original_theme()
         super().closeEvent(event)
 
 
