@@ -298,7 +298,6 @@ class ArchiveService:
                     return True, "Animation already restored"
                 else:
                     # Folder exists but not in DB - remove orphan folder and continue
-                    import shutil
                     shutil.rmtree(str(dest_folder))
                     logger.warning(f"Removed orphan folder for {uuid}")
 

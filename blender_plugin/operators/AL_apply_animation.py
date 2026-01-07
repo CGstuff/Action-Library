@@ -577,7 +577,7 @@ class ANIMLIB_OT_apply_animation(Operator):
                             from ..utils.utils import BLENDER_5_0_OR_LATER
                             if BLENDER_5_0_OR_LATER and reversed_action.slots:
                                 target_armature.animation_data.action_slot = reversed_action.slots[0]
-                                logger.debug(f"Set action_slot to {reversed_action.slots[0].name}")
+                                logger.debug(f"Set action_slot for reversed action")
                         else:
                             logger.warning("Failed to reverse animation, using original")
                             target_armature.animation_data.action = action_to_apply
@@ -783,10 +783,19 @@ class ANIMLIB_OT_apply_animation(Operator):
 
     def create_filtered_action(self, source_action, selected_bones, target_armature):
         """Create a new action with only fcurves affecting selected bones"""
+        from ..utils.utils import BLENDER_5_0_OR_LATER, init_action_for_blender_5
+
         try:
             # Create a new action
             filtered_action = bpy.data.actions.new(name=f"{source_action.name}_filtered")
-            
+
+            # For Blender 5.0+, initialize the action with proper layer/strip/slot structure
+            slot = None
+            if BLENDER_5_0_OR_LATER:
+                slot = init_action_for_blender_5(filtered_action, slot_name="Filtered")
+                if not slot:
+                    logger.error("Failed to initialize filtered action for Blender 5.0")
+
             # Track which bones we're filtering for
             bone_data_paths = set()
             for bone_name in selected_bones:
@@ -799,11 +808,11 @@ class ANIMLIB_OT_apply_animation(Operator):
                     bone_data_paths.add(f'pose.bones["{bone_name}"].scale')
                 else:
                     logger.warning(f"Bone '{bone_name}' not found in target armature")
-            
+
             if not bone_data_paths:
                 logger.warning("No valid bone data paths found")
                 return None
-                
+
             # Copy relevant fcurves from source to filtered action
             copied_count = 0
             for src_fcurve in get_action_fcurves(source_action):
@@ -814,7 +823,8 @@ class ANIMLIB_OT_apply_animation(Operator):
                         new_fcurve = new_action_fcurve(
                             filtered_action,
                             src_fcurve.data_path,
-                            index=src_fcurve.array_index
+                            index=src_fcurve.array_index,
+                            slot=slot
                         )
                         
                         # Copy keyframe points
