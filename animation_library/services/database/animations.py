@@ -59,8 +59,8 @@ class AnimationRepository:
                         file_size_mb, tags, author, use_custom_thumbnail_gradient,
                         thumbnail_gradient_top, thumbnail_gradient_bottom,
                         created_date, modified_date,
-                        version, version_label, version_group_id, is_latest
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        version, version_label, version_group_id, is_latest, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     uuid,
                     animation_data.get('name'),
@@ -90,7 +90,9 @@ class AnimationRepository:
                     animation_data.get('version', 1),
                     animation_data.get('version_label', 'v001'),
                     animation_data.get('version_group_id', uuid),  # Default to own UUID
-                    animation_data.get('is_latest', 1)
+                    animation_data.get('is_latest', 1),
+                    # Lifecycle status (v6)
+                    animation_data.get('status', 'wip')
                 ))
 
                 return cursor.lastrowid
@@ -786,6 +788,54 @@ class AnimationRepository:
                 return cursor.rowcount > 0
         except Exception:
             return False
+
+    # ==================== LIFECYCLE STATUS ====================
+
+    VALID_STATUSES = ['none', 'wip', 'review', 'approved', 'needs_work', 'final']
+
+    def set_status(self, uuid: str, status: str) -> bool:
+        """
+        Set lifecycle status for an animation.
+
+        Args:
+            uuid: Animation UUID
+            status: Status value (wip, review, approved, needs_work, final)
+
+        Returns:
+            True if updated successfully
+        """
+        if status not in self.VALID_STATUSES:
+            return False
+
+        try:
+            with self._conn.transaction() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    'UPDATE animations SET status = ?, modified_date = ? WHERE uuid = ?',
+                    (status, datetime.now(), uuid)
+                )
+                return cursor.rowcount > 0
+        except Exception:
+            return False
+
+    def get_status(self, uuid: str) -> str:
+        """
+        Get lifecycle status for an animation.
+
+        Args:
+            uuid: Animation UUID
+
+        Returns:
+            Status string or 'none' as default
+        """
+        try:
+            conn = self._conn.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT status FROM animations WHERE uuid = ?', (uuid,))
+            result = cursor.fetchone()
+            return result[0] if result and result[0] else 'none'
+        except Exception:
+            return 'none'
 
 
 __all__ = ['AnimationRepository']

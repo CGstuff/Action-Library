@@ -8,12 +8,13 @@ Inspired by: Current animation_library metadata display
 from typing import Optional, Dict, Any
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea,
-    QFrame, QGridLayout, QPushButton, QHBoxLayout
+    QFrame, QGridLayout, QPushButton, QHBoxLayout, QMenu
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QCursor
 
 from ..themes.theme_manager import get_theme_manager
+from ..config import Config
 from .video_preview_widget import VideoPreviewWidget
 from .dialogs import VersionHistoryDialog
 
@@ -140,7 +141,7 @@ class MetadataPanel(QWidget):
         return self._video_preview
 
     def _create_version_section(self) -> QWidget:
-        """Create version information section with history button"""
+        """Create version information section with history button and status badge"""
         section = QWidget()
         layout = QVBoxLayout(section)
         layout.setContentsMargins(0, 8, 0, 8)
@@ -192,6 +193,27 @@ class MetadataPanel(QWidget):
         info_layout.addStretch()
         layout.addWidget(info_widget)
 
+        # Status row
+        status_widget = QWidget()
+        status_layout = QHBoxLayout(status_widget)
+        status_layout.setContentsMargins(8, 4, 8, 4)
+        status_layout.setSpacing(8)
+
+        # Status label
+        status_text = QLabel("Status:")
+        status_text.setStyleSheet("font-weight: bold;")
+        status_layout.addWidget(status_text)
+
+        # Status badge (clickable button styled as badge)
+        self._status_badge = QPushButton("WIP")
+        self._status_badge.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._status_badge.clicked.connect(self._on_status_badge_clicked)
+        self._update_status_badge_style('wip')
+        status_layout.addWidget(self._status_badge)
+
+        status_layout.addStretch()
+        layout.addWidget(status_widget)
+
         # View History button
         self._history_btn = QPushButton("View Lineage")
         self._history_btn.clicked.connect(self._on_view_history_clicked)
@@ -203,6 +225,48 @@ class MetadataPanel(QWidget):
         layout.addWidget(self._history_btn)
 
         return section
+
+    def _update_status_badge_style(self, status: str):
+        """Update the status badge appearance based on status"""
+        status_info = Config.LIFECYCLE_STATUSES.get(status, {'color': '#9E9E9E', 'label': status.upper()})
+        color = status_info['color']
+        label = status_info['label']
+
+        self._status_badge.setText(label)
+
+        # Special styling for 'none' status - subtle/muted appearance
+        if status == 'none' or color is None:
+            self._status_badge.setStyleSheet("""
+                QPushButton {
+                    background-color: #404040;
+                    color: #888888;
+                    padding: 4px 10px;
+                    border-radius: 4px;
+                    font-size: 10pt;
+                    font-weight: bold;
+                    border: 1px solid #555555;
+                }
+                QPushButton:hover {
+                    background-color: #505050;
+                    border: 1px solid #666666;
+                }
+            """)
+        else:
+            self._status_badge.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {color};
+                    color: white;
+                    padding: 4px 10px;
+                    border-radius: 4px;
+                    font-size: 10pt;
+                    font-weight: bold;
+                    border: none;
+                }}
+                QPushButton:hover {{
+                    background-color: {color};
+                    border: 2px solid white;
+                }}
+            """)
 
     def _create_layout(self):
         """Create panel layout"""
@@ -289,6 +353,7 @@ class MetadataPanel(QWidget):
         self._latest_badge.hide()
         self._version_count_label.setText("")
         self._history_btn.setEnabled(False)
+        self._update_status_badge_style('none')  # Reset status badge
 
     def _update_technical_section(self):
         """Update technical information section"""
@@ -592,6 +657,10 @@ class MetadataPanel(QWidget):
         else:
             self._latest_badge.hide()
 
+        # Update status badge
+        status = self._animation.get('status', 'none')
+        self._update_status_badge_style(status)
+
         # Get version count from database
         # Use version_group_id or fall back to animation's own UUID
         group_id = version_group_id or self._animation.get('uuid')
@@ -612,6 +681,56 @@ class MetadataPanel(QWidget):
         else:
             self._version_count_label.hide()
             self._history_btn.setEnabled(False)
+
+    def _on_status_badge_clicked(self):
+        """Show status selection menu when badge is clicked"""
+        if not self._animation:
+            return
+
+        menu = QMenu(self)
+
+        current_status = self._animation.get('status', 'wip')
+
+        # Add status options
+        for status_key, status_info in Config.LIFECYCLE_STATUSES.items():
+            action = menu.addAction(status_info['label'])
+            action.setData(status_key)
+
+            # Check mark for current status
+            if status_key == current_status:
+                action.setCheckable(True)
+                action.setChecked(True)
+
+            # Connect action
+            action.triggered.connect(lambda checked, s=status_key: self._on_status_selected(s))
+
+        # Show menu below the badge
+        menu.exec(self._status_badge.mapToGlobal(
+            self._status_badge.rect().bottomLeft()
+        ))
+
+    def _on_status_selected(self, status: str):
+        """Handle status selection from menu"""
+        if not self._animation:
+            return
+
+        uuid = self._animation.get('uuid')
+        if not uuid:
+            return
+
+        # Update database
+        from ..services.database_service import get_database_service
+        db_service = get_database_service()
+
+        if db_service.set_status(uuid, status):
+            # Update local animation data
+            self._animation['status'] = status
+
+            # Update badge appearance
+            self._update_status_badge_style(status)
+
+            # Notify via event bus
+            self._event_bus.animation_updated.emit(uuid)
 
     def _on_view_history_clicked(self):
         """Open version history dialog"""

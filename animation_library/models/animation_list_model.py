@@ -68,6 +68,9 @@ class AnimationRole(IntEnum):
     VersionGroupIdRole = Qt.ItemDataRole.UserRole + 82
     IsLatestRole = Qt.ItemDataRole.UserRole + 83
 
+    # Lifecycle status (v6)
+    StatusRole = Qt.ItemDataRole.UserRole + 90
+
     # Complete data dict
     AnimationDataRole = Qt.ItemDataRole.UserRole + 100
 
@@ -339,6 +342,9 @@ class AnimationListModel(QAbstractListModel):
 
         elif role == AnimationRole.IsLatestRole:
             return animation.get('is_latest', 1)
+
+        elif role == AnimationRole.StatusRole:
+            return animation.get('status', 'none')
 
         elif role == AnimationRole.AnimationDataRole:
             return animation

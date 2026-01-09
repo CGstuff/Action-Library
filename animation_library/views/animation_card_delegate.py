@@ -272,6 +272,21 @@ class AnimationCardDelegate(QStyledItemDelegate):
             )
             self._draw_version_badge(painter, badge_rect, version_label)
 
+        # Draw status badge (bottom-right of thumbnail) - skip if 'none'
+        status = index.data(AnimationRole.StatusRole)
+        if status and status != 'none':
+            badge_padding = 5
+            # Calculate width based on status label length
+            status_info = Config.LIFECYCLE_STATUSES.get(status, {'label': status.upper()})
+            label_width = max(50, len(status_info['label']) * 7 + 10)
+            status_rect = QRect(
+                rect.x() + self._card_size - label_width - badge_padding,
+                rect.y() + self._card_size - 20 - badge_padding,
+                label_width,
+                20
+            )
+            self._draw_status_badge(painter, status_rect, status)
+
         # Draw text BELOW thumbnail (28px height)
         name_height = 28
         text_rect = QRect(
@@ -362,15 +377,32 @@ class AnimationCardDelegate(QStyledItemDelegate):
             )
             self._draw_version_badge(painter, badge_rect, version_label)
 
-        # Draw text next to thumbnail (account for checkbox offset and star space)
+        # Get status for list mode (skip if 'none')
+        status = index.data(AnimationRole.StatusRole)
+        show_status = status and status != 'none'
+
+        # Draw text next to thumbnail (account for checkbox offset, star space, and status badge)
+        status_badge_width = 60 if show_status else 0
         text_x = rect.x() + thumbnail_size + (padding * 3) + checkbox_offset
         text_rect = QRect(
             text_x,
             rect.y() + padding,
-            rect.width() - text_x - star_size - star_padding - padding,
+            rect.width() - text_x - star_size - star_padding - padding - status_badge_width - 8,
             thumbnail_size
         )
         self._draw_list_text(painter, text_rect, index, palette, is_selected)
+
+        # Draw status badge (between text and star) - skip if 'none'
+        if show_status:
+            status_info = Config.LIFECYCLE_STATUSES.get(status, {'label': status.upper()})
+            label_width = max(50, len(status_info['label']) * 7 + 6)
+            status_rect = QRect(
+                rect.right() - star_size - star_padding - label_width - 8,
+                rect.y() + (rect.height() - 18) // 2,
+                label_width,
+                18
+            )
+            self._draw_status_badge(painter, status_rect, status)
 
     def _draw_thumbnail(self, painter: QPainter, rect: QRect, index):
         """Draw thumbnail image"""
@@ -559,6 +591,23 @@ class AnimationCardDelegate(QStyledItemDelegate):
         painter.setFont(font)
         painter.setPen(QColor("#FFFFFF"))
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, version_label)
+
+    def _draw_status_badge(self, painter: QPainter, rect: QRect, status: str):
+        """Draw lifecycle status badge on thumbnail"""
+
+        # Get status info from config
+        status_info = Config.LIFECYCLE_STATUSES.get(status, {'label': status.upper(), 'color': '#9E9E9E'})
+        color = status_info['color']
+        label = status_info['label']
+
+        # Draw colored background
+        painter.fillRect(rect, QColor(color))
+
+        # Draw text
+        font = QFont("Roboto", 7, QFont.Weight.Bold)
+        painter.setFont(font)
+        painter.setPen(QColor("#FFFFFF"))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
 
     def _draw_grid_text(self, painter: QPainter, rect: QRect, index, palette, is_selected: bool = False):
         """Draw text for grid mode (below thumbnail)"""

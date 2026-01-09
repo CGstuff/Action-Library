@@ -338,6 +338,18 @@ class Config:
         except Exception:
             return False
 
+    # ==================== LIFECYCLE STATUS ====================
+    # 'none' = no status (for solo animators using as simple asset browser)
+    # Other statuses = pipeline workflow (for studios)
+    LIFECYCLE_STATUSES = {
+        'none': {'color': None, 'label': 'None'},  # No badge displayed
+        'wip': {'color': '#FF9800', 'label': 'WIP'},
+        'review': {'color': '#2196F3', 'label': 'In Review'},
+        'approved': {'color': '#4CAF50', 'label': 'Approved'},
+        'needs_work': {'color': '#F44336', 'label': 'Needs Work'},
+        'final': {'color': '#9C27B0', 'label': 'Final'},
+    }
+
 
 # Export for convenient imports
 __all__ = ['Config']

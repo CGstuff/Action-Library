@@ -14,7 +14,7 @@ from .connection import DatabaseConnection
 
 
 # Current schema version
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class SchemaManager:
@@ -73,6 +73,8 @@ class SchemaManager:
                     self._migrate_to_v4(cursor)
                 if current_version < 5:
                     self._migrate_to_v5(cursor)
+                if current_version < 6:
+                    self._migrate_to_v6(cursor)
                 cursor.execute(
                     'INSERT OR REPLACE INTO schema_version (version) VALUES (?)',
                     (SCHEMA_VERSION,)
@@ -145,6 +147,9 @@ class SchemaManager:
                 version_label TEXT DEFAULT 'v001',
                 version_group_id TEXT,
                 is_latest INTEGER DEFAULT 1,
+
+                -- Lifecycle Status (v6)
+                status TEXT DEFAULT 'none',
 
                 -- Timestamps
                 created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -372,6 +377,14 @@ class SchemaManager:
 
         # Initialize version_group_id for existing animations (each animation is its own group initially)
         cursor.execute('UPDATE animations SET version_group_id = uuid WHERE version_group_id IS NULL')
+
+    def _migrate_to_v6(self, cursor: sqlite3.Cursor):
+        """Migrate database from v5 to v6 - add lifecycle status column."""
+        try:
+            cursor.execute("ALTER TABLE animations ADD COLUMN status TEXT DEFAULT 'none'")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
 
 
 def migrate_legacy_database(new_db_path: Path, legacy_db_path: Optional[Path]):

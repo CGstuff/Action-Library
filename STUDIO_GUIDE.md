@@ -54,6 +54,129 @@ Action Library stores animations in a single directory structure. For team acces
 
 ---
 
+## Lineage System (Version Control)
+
+Action Library includes a lineage system for tracking animation iterations—essential for studios where animations go through multiple revision cycles.
+
+### How Lineage Works
+
+1. **First Capture**: Animation is saved with version `v001` and a unique `version_group_id`
+2. **Apply & Edit**: Artist applies animation from library, edits it in Blender
+3. **Capture Again**: System detects the action came from the library and offers:
+   - **Create New Version** → Saves as `v002` with same lineage (version_group_id)
+   - **Create New Animation** → Saves as fresh `v001` with new lineage
+
+### Cold Storage (Version Visibility)
+
+- Only the **latest version** appears in the main library view
+- Older versions are in "cold storage"—accessible via **View Lineage** in the metadata panel
+- From the Lineage dialog, any version can be:
+  - **Promoted to Latest** (swaps visibility)
+  - **Applied** directly to Blender
+
+### Studio Workflow Example
+
+```
+Walk_Cycle_v001  ← Lead captures initial animation
+     ↓
+Walk_Cycle_v002  ← Artist A iterates, captures revision
+     ↓
+Walk_Cycle_v003  ← Director feedback, Artist B makes changes
+     ↓
+[View Lineage]   ← Compare all versions, promote v002 if v003 was wrong direction
+```
+
+### Lineage in Database
+
+Animations in the same lineage share a `version_group_id`. Pipeline tools can query:
+
+```python
+# Get all versions of an animation
+cursor.execute('''
+    SELECT uuid, name, version_label, is_latest, status
+    FROM animations
+    WHERE version_group_id = ?
+    ORDER BY version DESC
+''', (version_group_id,))
+```
+
+---
+
+## Lifecycle Status System
+
+Action Library supports pipeline status tracking for review/approval workflows.
+
+### Available Statuses
+
+| Status | Color | Use Case |
+|--------|-------|----------|
+| **None** | Gray (hidden on cards) | Default—for solo artists or animations not in review |
+| **WIP** | Orange | Work in progress, not ready for review |
+| **In Review** | Blue | Submitted for director/lead review |
+| **Needs Work** | Red | Reviewed, requires changes |
+| **Approved** | Green | Passed review, ready for use |
+| **Final** | Purple | Locked, shipped/published version |
+
+### Default Behavior
+
+- New animations default to **None** status (no badge displayed)
+- Solo artists can ignore the status system entirely—library works as simple asset browser
+- Studios enable status workflow by setting animations to WIP/Review/etc.
+
+### Setting Status
+
+**In the App:**
+- Select animation → Metadata Panel → Click status badge → Choose from dropdown
+
+**Via Database (for pipeline tools):**
+```python
+cursor.execute('''
+    UPDATE animations SET status = ?, modified_date = CURRENT_TIMESTAMP
+    WHERE uuid = ?
+''', ('review', animation_uuid))
+```
+
+### Status in Lineage
+
+Each version in a lineage can have its own status:
+```
+Walk_Cycle_v001  [Approved]   ← Original approved version
+Walk_Cycle_v002  [WIP]        ← New iteration in progress
+Walk_Cycle_v003  [In Review]  ← Latest, awaiting feedback
+```
+
+### Pipeline Integration Examples
+
+**Shotgrid/Flow Integration:**
+```python
+# Sync status from Shotgrid review
+def on_shotgrid_status_change(entity_id, new_status):
+    animation_uuid = lookup_animation_by_shotgrid_id(entity_id)
+    status_map = {'rev': 'review', 'apr': 'approved', 'rtk': 'needs_work'}
+    cursor.execute('UPDATE animations SET status = ? WHERE uuid = ?',
+                   (status_map.get(new_status, 'wip'), animation_uuid))
+```
+
+**Batch Status Update:**
+```python
+# Mark all animations in a folder as approved
+cursor.execute('''
+    UPDATE animations SET status = 'approved'
+    WHERE folder_id = ? AND status = 'review'
+''', (folder_id,))
+```
+
+**Query by Status:**
+```python
+# Get all animations pending review
+cursor.execute('''
+    SELECT uuid, name, version_label FROM animations
+    WHERE status = 'review' AND is_latest = 1
+''')
+```
+
+---
+
 ## Customization for Studios
 
 ### Rig Type Configuration
@@ -79,8 +202,9 @@ blender_plugin/operators/AL_capture_animation.py
 Common studio additions:
 - Project/show name
 - Shot/sequence identifier
-- Approval status
 - Artist assignment
+
+> **Note**: Approval status is now built-in via the [Lifecycle Status System](#lifecycle-status-system).
 
 ### Theme Customization
 Create a studio-branded theme:

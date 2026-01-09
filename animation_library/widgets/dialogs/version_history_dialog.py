@@ -17,6 +17,7 @@ from PyQt6.QtGui import QColor
 
 from typing import Optional, List, Dict, Any
 
+from ...config import Config
 from ...services.database_service import get_database_service
 
 
@@ -245,9 +246,9 @@ class VersionHistoryDialog(QDialog):
 
         # Version table
         self._table = QTableWidget()
-        self._table.setColumnCount(5)
+        self._table.setColumnCount(6)
         self._table.setHorizontalHeaderLabels([
-            "Version", "Status", "Date Created", "Duration", "Frames"
+            "Version", "Latest", "Status", "Date Created", "Duration", "Frames"
         ])
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -259,13 +260,15 @@ class VersionHistoryDialog(QDialog):
         header_view = self._table.horizontalHeader()
         header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         header_view.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        self._table.setColumnWidth(0, 80)
-        self._table.setColumnWidth(1, 100)
-        self._table.setColumnWidth(3, 100)
+        header_view.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(0, 70)
+        self._table.setColumnWidth(1, 60)
+        self._table.setColumnWidth(2, 90)
         self._table.setColumnWidth(4, 80)
+        self._table.setColumnWidth(5, 70)
 
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.itemDoubleClicked.connect(self._on_double_click)
@@ -315,29 +318,39 @@ class VersionHistoryDialog(QDialog):
             version_item.setData(Qt.ItemDataRole.UserRole, version.get('uuid'))
             self._table.setItem(row, 0, version_item)
 
-            # Status (Latest indicator)
+            # Latest indicator
             is_latest = version.get('is_latest', 0)
-            status_text = "LATEST" if is_latest else ""
-            status_item = QTableWidgetItem(status_text)
+            latest_text = "Yes" if is_latest else ""
+            latest_item = QTableWidgetItem(latest_text)
             if is_latest:
-                status_item.setForeground(QColor("#4CAF50"))
-                status_item.setData(Qt.ItemDataRole.FontRole, True)
-            self._table.setItem(row, 1, status_item)
+                latest_item.setForeground(QColor("#4CAF50"))
+            self._table.setItem(row, 1, latest_item)
+
+            # Lifecycle status with color
+            status = version.get('status', 'none')
+            status_info = Config.LIFECYCLE_STATUSES.get(status, {'label': status.upper(), 'color': '#9E9E9E'})
+            status_item = QTableWidgetItem(status_info['label'])
+            # Use gray color for 'none' status
+            if status == 'none' or status_info.get('color') is None:
+                status_item.setForeground(QColor('#888888'))
+            else:
+                status_item.setForeground(QColor(status_info['color']))
+            self._table.setItem(row, 2, status_item)
 
             # Date created
             created = version.get('created_date', '')
             date_str = created[:16] if created else '-'
-            self._table.setItem(row, 2, QTableWidgetItem(date_str))
+            self._table.setItem(row, 3, QTableWidgetItem(date_str))
 
             # Duration
             duration = version.get('duration_seconds')
             dur_str = f"{duration:.1f}s" if duration else '-'
-            self._table.setItem(row, 3, QTableWidgetItem(dur_str))
+            self._table.setItem(row, 4, QTableWidgetItem(dur_str))
 
             # Frame count
             frames = version.get('frame_count')
             frame_str = str(frames) if frames else '-'
-            self._table.setItem(row, 4, QTableWidgetItem(frame_str))
+            self._table.setItem(row, 5, QTableWidgetItem(frame_str))
 
     def _on_selection_changed(self):
         """Handle table selection change"""

@@ -254,6 +254,16 @@ class DatabaseService:
         """Initialize version tracking for an animation."""
         return self.animations.initialize_version_group(uuid)
 
+    # ==================== STATUS OPERATIONS (delegated) ====================
+
+    def set_status(self, uuid: str, status: str) -> bool:
+        """Set lifecycle status for an animation."""
+        return self.animations.set_status(uuid, status)
+
+    def get_status(self, uuid: str) -> Optional[str]:
+        """Get lifecycle status for an animation."""
+        return self.animations.get_status(uuid)
+
     # ==================== ARCHIVE OPERATIONS (delegated) ====================
 
     def add_to_archive(self, archive_data: Dict[str, Any]) -> Optional[int]:

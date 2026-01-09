@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Panel indicator shows "Library Action Detected" with source info
   - Metadata persists through edits and updates after each capture
 
+- **Lifecycle Status System**
+  - Pipeline-ready status workflow: WIP, In Review, Approved, Needs Work, Final
+  - "None" status option for solo animators who prefer a simple asset browser experience
+  - Clickable status badge in metadata panel with dropdown menu
+  - Color-coded status badges on animation cards (grid and list view)
+  - Status visible in Lineage dialog for each version
+  - New animations default to "None" status - no badge clutter for casual users
 
 
 ---
