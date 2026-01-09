@@ -23,6 +23,7 @@ Add screenshots here:
 
 ## Features
 
+### Core
 - **High Performance** - Handles 4000+ animations with <2s startup and 60 FPS scrolling
 - **Modern UI** - Grid and list views, customizable themes, smooth animations
 - **Smart Organization** - Folders, tags, favorites, and powerful search/filtering
@@ -30,6 +31,16 @@ Add screenshots here:
 - **Library Backup** - Export/import with .animlib archives, preserves all metadata
 - **Setup Wizard** - Guided first-run configuration for new users
 - **Portable** - Single-folder distribution, no installation required
+
+### Pipeline Features (v1.1)
+- **Lineage System** - Track animation versions with automatic iteration detection
+  - Apply animation → Edit in Blender → Capture as v002, v003, etc.
+  - Cold storage: only latest version visible, older versions accessible via View Lineage
+  - Promote any version to latest, compare version history
+- **Lifecycle Status** - Pipeline-ready approval workflow
+  - Statuses: None (default), WIP, In Review, Approved, Needs Work, Final
+  - Color-coded badges on cards and metadata panel
+  - Solo artists can ignore (defaults to no badge); studios enable for review tracking
 
 ## Installation
 
