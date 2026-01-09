@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-01-09
+
+### Added
+
+- **Lineage System (Animation Versioning)**
+  - Track animation versions with shared lineage (version_group_id)
+  - Automatic version detection when capturing edited library animations
+  - Version choice dialog: "Create New Version" or "Create New Animation"
+  - View Lineage dialog showing all versions of an animation
+  - Cold storage: only latest version shown in main view, older versions accessible via lineage
+  - Continuous iteration in Blender: capture v002 → edit → capture v003 without re-applying
+  - Smart version naming: strips existing suffix (Jump_v002 → Jump_v003)
+
+- **Library Action Detection in Blender**
+  - Actions applied from library store metadata (UUID, version, lineage info)
+  - Panel indicator shows "Library Action Detected" with source info
+  - Metadata persists through edits and updates after each capture
+
+
+
+---
+
 ## [1.0.0] - 2026-01-06
 
 ### Added

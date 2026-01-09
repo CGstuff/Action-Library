@@ -227,6 +227,33 @@ class DatabaseService:
         """Get all unique rig types used across all animations."""
         return self.animations.get_all_rig_types()
 
+    # ==================== VERSION OPERATIONS (delegated) ====================
+
+    def get_version_history(self, version_group_id: str) -> List[Dict[str, Any]]:
+        """Get all versions of an animation by version group ID."""
+        return self.animations.get_version_history(version_group_id)
+
+    def get_version_count(self, version_group_id: str) -> int:
+        """Get count of versions in a version group."""
+        return self.animations.get_version_count(version_group_id)
+
+    def get_latest_version(self, version_group_id: str) -> Optional[Dict[str, Any]]:
+        """Get the latest version in a version group."""
+        return self.animations.get_latest_version(version_group_id)
+
+    def create_new_version(self, source_uuid: str, new_uuid: str,
+                           file_updates: Dict[str, Any]) -> Optional[str]:
+        """Create a new version of an animation."""
+        return self.animations.create_new_version(source_uuid, new_uuid, file_updates)
+
+    def set_version_as_latest(self, uuid: str) -> bool:
+        """Set a specific version as the latest in its version group."""
+        return self.animations.set_as_latest(uuid)
+
+    def initialize_version_group(self, uuid: str) -> bool:
+        """Initialize version tracking for an animation."""
+        return self.animations.initialize_version_group(uuid)
+
     # ==================== ARCHIVE OPERATIONS (delegated) ====================
 
     def add_to_archive(self, archive_data: Dict[str, Any]) -> Optional[int]:

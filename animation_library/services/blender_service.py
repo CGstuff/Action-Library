@@ -139,7 +139,6 @@ class BlenderService:
         """
         return self._queue_dir
 
-
 # Singleton instance
 _blender_service_instance: Optional[BlenderService] = None
 

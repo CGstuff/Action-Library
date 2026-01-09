@@ -14,7 +14,7 @@ from .connection import DatabaseConnection
 
 
 # Current schema version
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class SchemaManager:
@@ -71,6 +71,8 @@ class SchemaManager:
                     self._migrate_to_v3(cursor)
                 if current_version < 4:
                     self._migrate_to_v4(cursor)
+                if current_version < 5:
+                    self._migrate_to_v5(cursor)
                 cursor.execute(
                     'INSERT OR REPLACE INTO schema_version (version) VALUES (?)',
                     (SCHEMA_VERSION,)
@@ -138,6 +140,12 @@ class SchemaManager:
                 custom_order INTEGER,
                 is_locked INTEGER DEFAULT 0,
 
+                -- Versioning (v5)
+                version INTEGER DEFAULT 1,
+                version_label TEXT DEFAULT 'v001',
+                version_group_id TEXT,
+                is_latest INTEGER DEFAULT 1,
+
                 -- Timestamps
                 created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 modified_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -156,6 +164,10 @@ class SchemaManager:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_animations_favorite ON animations(is_favorite)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_animations_last_viewed ON animations(last_viewed_date)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_animations_custom_order ON animations(custom_order)')
+
+        # v5 indexes (versioning)
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_animations_version_group ON animations(version_group_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_animations_is_latest ON animations(is_latest)')
 
         # Archive table (v4) - for soft-deleted animations (indefinite retention)
         cursor.execute('''
@@ -337,6 +349,29 @@ class SchemaManager:
         ''')
 
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_trash_uuid ON trash(uuid)')
+
+    def _migrate_to_v5(self, cursor: sqlite3.Cursor):
+        """Migrate database from v4 to v5 - add versioning columns."""
+        columns_to_add = [
+            ('version', 'INTEGER DEFAULT 1'),
+            ('version_label', "TEXT DEFAULT 'v001'"),
+            ('version_group_id', 'TEXT'),
+            ('is_latest', 'INTEGER DEFAULT 1')
+        ]
+
+        for column_name, column_type in columns_to_add:
+            try:
+                cursor.execute(f'ALTER TABLE animations ADD COLUMN {column_name} {column_type}')
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+
+        # Create indexes for versioning
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_animations_version_group ON animations(version_group_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_animations_is_latest ON animations(is_latest)')
+
+        # Initialize version_group_id for existing animations (each animation is its own group initially)
+        cursor.execute('UPDATE animations SET version_group_id = uuid WHERE version_group_id IS NULL')
 
 
 def migrate_legacy_database(new_db_path: Path, legacy_db_path: Optional[Path]):

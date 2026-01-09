@@ -6,7 +6,8 @@ from .AL_apply_animation import (
     start_queue_poll_timer,
     stop_queue_poll_timer,
 )
-from .AL_capture_animation import ANIMLIB_OT_capture_animation
+from .AL_capture_animation import ANIMLIB_OT_capture_animation, ANIMLIB_OT_cancel_versioning
+from .AL_version_choice import ANIMLIB_OT_version_choice
 from .AL_launch_desktop_app import ANIMLIB_OT_launch_desktop_app
 from .AL_slots_manager import (
     ANIMLIB_OT_delete_slot,
@@ -25,6 +26,8 @@ classes = (
     ANIMLIB_OT_apply_animation,
     ANIMLIB_OT_check_apply_queue,
     ANIMLIB_OT_capture_animation,
+    ANIMLIB_OT_cancel_versioning,
+    ANIMLIB_OT_version_choice,
     ANIMLIB_OT_launch_desktop_app,
     ANIMLIB_OT_delete_slot,
     ANIMLIB_OT_activate_slot,
@@ -64,15 +67,17 @@ def register_operators():
         _safe_register(cls)
     __OPS_REGISTERED = True
 
-    # Note: Auto-polling disabled - use Manual Apply button in Blender panel
-    # The timer approach has context issues that make it unreliable
-    # start_queue_poll_timer()
+    # Start auto-polling timer (uses temp_override for proper context)
+    start_queue_poll_timer()
 
 
 def unregister_operators():
     global __OPS_REGISTERED
     if not __OPS_REGISTERED:
         return
+
+    # Stop the auto-polling timer
+    stop_queue_poll_timer()
 
     for cls in reversed(classes):
         _safe_unregister(cls)

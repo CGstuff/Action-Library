@@ -15,6 +15,7 @@ def deserialize_animation(row_dict: Dict[str, Any]) -> Dict[str, Any]:
 
     Handles:
     - JSON-encoded tags field
+    - Version field defaults
     - Any other future JSON fields
 
     Args:
@@ -33,6 +34,17 @@ def deserialize_animation(row_dict: Dict[str, Any]) -> Dict[str, Any]:
             data['tags'] = []
     else:
         data['tags'] = []
+
+    # Ensure version fields have sensible defaults
+    if data.get('version') is None:
+        data['version'] = 1
+    if data.get('version_label') is None:
+        data['version_label'] = 'v001'
+    if data.get('version_group_id') is None:
+        # Use UUID as the version group ID for uninitialized animations
+        data['version_group_id'] = data.get('uuid')
+    if data.get('is_latest') is None:
+        data['is_latest'] = 1
 
     return data
 

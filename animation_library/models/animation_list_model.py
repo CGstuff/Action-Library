@@ -62,6 +62,12 @@ class AnimationRole(IntEnum):
     CustomOrderRole = Qt.ItemDataRole.UserRole + 72
     IsLockedRole = Qt.ItemDataRole.UserRole + 73
 
+    # Versioning (v5)
+    VersionRole = Qt.ItemDataRole.UserRole + 80
+    VersionLabelRole = Qt.ItemDataRole.UserRole + 81
+    VersionGroupIdRole = Qt.ItemDataRole.UserRole + 82
+    IsLatestRole = Qt.ItemDataRole.UserRole + 83
+
     # Complete data dict
     AnimationDataRole = Qt.ItemDataRole.UserRole + 100
 
@@ -320,6 +326,19 @@ class AnimationListModel(QAbstractListModel):
 
         elif role == AnimationRole.IsLockedRole:
             return animation.get('is_locked', 0)
+
+        # Versioning roles
+        elif role == AnimationRole.VersionRole:
+            return animation.get('version', 1)
+
+        elif role == AnimationRole.VersionLabelRole:
+            return animation.get('version_label', 'v001')
+
+        elif role == AnimationRole.VersionGroupIdRole:
+            return animation.get('version_group_id')
+
+        elif role == AnimationRole.IsLatestRole:
+            return animation.get('is_latest', 1)
 
         elif role == AnimationRole.AnimationDataRole:
             return animation

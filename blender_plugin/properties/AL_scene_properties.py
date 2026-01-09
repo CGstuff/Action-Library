@@ -152,6 +152,32 @@ class ANIMLIB_SceneProperties(PropertyGroup):
         default=False
     )
 
+    # Versioning properties (for "Create New Version" flow)
+    bpy.types.Scene.animlib_version_source_group_id = bpy.props.StringProperty(
+        name="Version Source Group ID",
+        description="UUID of version group when creating a new version (set by desktop app)",
+        default=""
+    )
+
+    bpy.types.Scene.animlib_version_source_name = bpy.props.StringProperty(
+        name="Version Source Name",
+        description="Base name of animation being versioned",
+        default=""
+    )
+
+    bpy.types.Scene.animlib_version_next_number = bpy.props.IntProperty(
+        name="Next Version Number",
+        description="Next version number to use",
+        default=1,
+        min=1
+    )
+
+    bpy.types.Scene.animlib_is_versioning = bpy.props.BoolProperty(
+        name="Is Versioning",
+        description="True if next capture should create a new version",
+        default=False
+    )
+
     # Custom property group for animations
     class ANIMLIB_AnimationItem(bpy.types.PropertyGroup):
         animation_id: bpy.props.IntProperty()

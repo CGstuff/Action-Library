@@ -140,6 +140,16 @@ class ANIMLIB_OT_apply_animation(Operator):
 
             logger.debug(f"Applying Action with mode: {apply_mode}, use_slots: {use_slots}, mirror: {mirror_animation}, reverse: {reverse_animation}")
 
+            # Build animation metadata for library tracking
+            animation_metadata = {
+                'uuid': self.animation_id,
+                'version_group_id': animation.get('version_group_id', self.animation_id),
+                'version': animation.get('version', 1),
+                'version_label': animation.get('version_label', 'v001'),
+                'name': animation.get('name', animation_name),
+                'rig_type': animation_rig_type
+            }
+
             # Apply animation by loading from blend file
             success = self.apply_animation_from_blend_file(
                 armature,
@@ -153,7 +163,8 @@ class ANIMLIB_OT_apply_animation(Operator):
                 use_slots=use_slots,
                 mirror_animation=mirror_animation,
                 reverse_animation=reverse_animation,
-                rig_type=animation_rig_type
+                rig_type=animation_rig_type,
+                animation_metadata=animation_metadata
             )
 
             if success:
@@ -342,8 +353,18 @@ class ANIMLIB_OT_apply_animation(Operator):
             traceback.print_exc()
             return None
 
-    def apply_animation_from_blend_file(self, target_armature, blend_file_path, frame_start, frame_end, animation_name=None, apply_mode='NEW', apply_selected_bones_only=False, selected_bones=None, use_slots=False, mirror_animation=False, reverse_animation=False, rig_type='rigify'):
-        """Apply animation by loading action from blend file, optionally filtering to selected bones and using slots"""
+    def apply_animation_from_blend_file(self, target_armature, blend_file_path, frame_start, frame_end, animation_name=None, apply_mode='NEW', apply_selected_bones_only=False, selected_bones=None, use_slots=False, mirror_animation=False, reverse_animation=False, rig_type='rigify', animation_metadata=None):
+        """Apply animation by loading action from blend file, optionally filtering to selected bones and using slots
+
+        Args:
+            animation_metadata: Optional dict with library tracking info:
+                - uuid: Animation UUID
+                - version_group_id: Version group for linking versions
+                - version: Version number (1, 2, 3...)
+                - version_label: Human-readable version (v001, v002...)
+                - name: Animation name
+                - rig_type: Rig type
+        """
         try:
             # Validate slot support if requested
             if use_slots:
@@ -602,12 +623,37 @@ class ANIMLIB_OT_apply_animation(Operator):
             # The user's cinematic timeline should remain untouched
             scene = bpy.context.scene
 
+            # Store library metadata on the applied action for version tracking
+            if animation_metadata:
+                current_action = target_armature.animation_data.action
+                if current_action:
+                    self._store_library_metadata(current_action, animation_metadata)
+                    logger.debug(f"Stored library metadata on action '{current_action.name}'")
+
             logger.info(f"Applied Action from {blend_file_path}")
             return True
 
         except Exception as e:
             logger.error(f"Error applying Action from blend file: {e}")
             return False
+
+    def _store_library_metadata(self, action, metadata):
+        """Store library tracking metadata on an action as custom properties
+
+        This allows the capture operator to detect that an action came from
+        the library and offer versioning options.
+
+        Args:
+            action: Blender action to store metadata on
+            metadata: Dict with uuid, version_group_id, version, version_label, name, rig_type
+        """
+        action["animlib_imported"] = True
+        action["animlib_uuid"] = metadata.get('uuid', '')
+        action["animlib_version_group_id"] = metadata.get('version_group_id', metadata.get('uuid', ''))
+        action["animlib_version"] = metadata.get('version', 1)
+        action["animlib_version_label"] = metadata.get('version_label', 'v001')
+        action["animlib_name"] = metadata.get('name', '')
+        action["animlib_rig_type"] = metadata.get('rig_type', '')
     
     def insert_animation_at_playhead(self, target_armature, source_action, frame_start, frame_end, apply_selected_bones_only=False, selected_bones=None, use_slots=False, reverse_animation=False):
         """Insert Action keyframes into existing action at playhead position, optionally into active slot"""
@@ -856,14 +902,14 @@ class ANIMLIB_OT_apply_animation(Operator):
             return None
       
 class ANIMLIB_OT_check_apply_queue(Operator):
-    """Check for pending Action apply requests from desktop app"""
+    """Check for pending Action apply requests and version requests from desktop app"""
     bl_idname = "animlib.check_apply_queue"
     bl_label = "Check Apply Queue"
     bl_description = "Check for Actions queued for application from desktop app"
-    
+
     def execute(self, context):
         try:
-            # Get pending requests from queue client
+            # Get pending apply requests from queue client
             pending_files = animation_queue_client.get_pending_apply_requests()
 
             if not pending_files:

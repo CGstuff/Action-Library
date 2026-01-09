@@ -13,6 +13,22 @@ from ..utils.logger import get_logger
 logger = get_logger()
 
 
+class ANIMLIB_OT_cancel_versioning(Operator):
+    """Cancel versioning mode"""
+    bl_idname = "animlib.cancel_versioning"
+    bl_label = "Cancel Version Mode"
+    bl_description = "Cancel creating a new version and return to normal capture mode"
+
+    def execute(self, context):
+        scene = context.scene
+        scene.animlib_is_versioning = False
+        scene.animlib_version_source_group_id = ""
+        scene.animlib_version_source_name = ""
+        scene.animlib_version_next_number = 1
+        self.report({'INFO'}, "Version mode cancelled")
+        return {'FINISHED'}
+
+
 class ANIMLIB_OT_capture_animation(Operator):
     """Capture current Action and send to library"""
     bl_idname = "animlib.capture_animation"
@@ -97,16 +113,90 @@ class ANIMLIB_OT_capture_animation(Operator):
 
                 # Store rig type and move to next state
                 self._context_data['rig_type'] = rig_type
-                self._state = 'DETERMINE_NAME'
+                self._state = 'CHECK_LIBRARY_SOURCE'
                 return {'RUNNING_MODAL'}
 
+            elif self._state == 'CHECK_LIBRARY_SOURCE':
+                # Check if this action came from the library
+                action = self._context_data['action']
+                is_library_action = action.get("animlib_imported", False)
+
+                # If already in versioning mode (user already chose), skip dialog
+                if scene.animlib_is_versioning:
+                    logger.debug("Already in versioning mode, skipping dialog")
+                    self._state = 'DETERMINE_NAME'
+                    return {'RUNNING_MODAL'}
+
+                # If action came from library, show version choice dialog
+                if is_library_action:
+                    source_name = action.get("animlib_name", "Unknown")
+                    source_version = action.get("animlib_version", 1)
+                    source_version_label = action.get("animlib_version_label", "v001")
+                    source_version_group_id = action.get("animlib_version_group_id", "")
+
+                    logger.info(f"Library action detected: {source_name} ({source_version_label})")
+
+                    # Call the version choice dialog
+                    bpy.ops.animlib.version_choice(
+                        'INVOKE_DEFAULT',
+                        source_name=source_name,
+                        source_version=source_version,
+                        source_version_label=source_version_label,
+                        source_version_group_id=source_version_group_id
+                    )
+
+                    # Wait for dialog result in next state
+                    self._state = 'WAIT_FOR_DIALOG'
+                    return {'RUNNING_MODAL'}
+                else:
+                    # Not a library action, proceed normally
+                    self._state = 'DETERMINE_NAME'
+                    return {'RUNNING_MODAL'}
+
+            elif self._state == 'WAIT_FOR_DIALOG':
+                # Check dialog result
+                from .AL_version_choice import ANIMLIB_OT_version_choice
+                result, result_data = ANIMLIB_OT_version_choice.get_result()
+
+                if result is None:
+                    # Dialog still open, wait
+                    return {'RUNNING_MODAL'}
+                elif result == 'CANCELLED':
+                    # User cancelled, abort capture
+                    self.report({'INFO'}, "Capture cancelled")
+                    self.cleanup(context)
+                    return {'CANCELLED'}
+                else:
+                    # User made a choice, proceed
+                    # Scene properties already set by the dialog
+                    self._state = 'DETERMINE_NAME'
+                    return {'RUNNING_MODAL'}
+
             elif self._state == 'DETERMINE_NAME':
+                # Check if we're in versioning mode (set by dialog or pre-existing)
+                is_versioning = scene.animlib_is_versioning
+                version_source_name = scene.animlib_version_source_name
+                version_next_number = scene.animlib_version_next_number
+
                 # Determine animation name
                 action = self._context_data['action']
-                if scene.animlib_use_action_name and action.name:
+
+                if is_versioning and version_source_name:
+                    # Creating a new version - strip any existing version suffix first
+                    base_name = self._strip_version_suffix(version_source_name)
+                    version_label = f"v{version_next_number:03d}"
+                    animation_name = f"{base_name}_{version_label}"
+                    self._context_data['is_versioning'] = True
+                    self._context_data['version_number'] = version_next_number
+                    self._context_data['version_label'] = version_label
+                    self._context_data['version_group_id'] = scene.animlib_version_source_group_id
+                    logger.info(f"Creating new version: {animation_name} (base: {base_name})")
+                elif scene.animlib_use_action_name and action.name:
                     animation_name = action.name
+                    self._context_data['is_versioning'] = False
                 else:
                     animation_name = scene.animlib_animation_name
+                    self._context_data['is_versioning'] = False
 
                 self._context_data['animation_name'] = animation_name
                 self._state = 'SAVE_ACTION'
@@ -119,8 +209,18 @@ class ANIMLIB_OT_capture_animation(Operator):
                 animation_name = self._context_data['animation_name']
                 rig_type = self._context_data['rig_type']
 
-                blend_file_path, json_file_path = self.save_action_to_library(
-                    action, animation_name, rig_type, scene
+                # Build versioning info dict
+                version_info = None
+                if self._context_data.get('is_versioning'):
+                    version_info = {
+                        'version': self._context_data.get('version_number', 1),
+                        'version_label': self._context_data.get('version_label', 'v001'),
+                        'version_group_id': self._context_data.get('version_group_id'),
+                        'is_latest': 1  # New versions are always latest
+                    }
+
+                blend_file_path, json_file_path, saved_metadata = self.save_action_to_library(
+                    action, animation_name, rig_type, scene, version_info
                 )
 
                 if not blend_file_path or not json_file_path:
@@ -128,18 +228,39 @@ class ANIMLIB_OT_capture_animation(Operator):
                     self.cleanup(context)
                     return {'CANCELLED'}
 
+                # Store saved metadata for updating action properties
+                self._context_data['saved_metadata'] = saved_metadata
+
                 self._state = 'CLEANUP'
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'CLEANUP':
+                # Update action's library metadata so subsequent captures know the new version
+                action = self._context_data['action']
+                saved_metadata = self._context_data.get('saved_metadata')
+                if saved_metadata and action:
+                    self._update_action_library_metadata(action, saved_metadata)
+                    logger.info(f"Updated action metadata: uuid={saved_metadata.get('id')}, version={saved_metadata.get('version')}")
+
                 # Clear form fields
                 scene.animlib_animation_name = DEFAULT_ANIMATION_NAME
                 scene.animlib_description = ""
                 scene.animlib_tags = ""
 
+                # Clear versioning properties
+                scene.animlib_is_versioning = False
+                scene.animlib_version_source_group_id = ""
+                scene.animlib_version_source_name = ""
+                scene.animlib_version_next_number = 1
+
                 # Report success
                 animation_name = self._context_data['animation_name']
-                self.report({'INFO'}, f"Action '{animation_name}' saved successfully")
+                is_versioning = self._context_data.get('is_versioning', False)
+                if is_versioning:
+                    version_label = self._context_data.get('version_label', 'v001')
+                    self.report({'INFO'}, f"New version '{animation_name}' ({version_label}) saved successfully")
+                else:
+                    self.report({'INFO'}, f"Action '{animation_name}' saved successfully")
 
                 # Cleanup and finish
                 self.cleanup(context)
@@ -178,9 +299,66 @@ class ANIMLIB_OT_capture_animation(Operator):
         """Called when user cancels (ESC key)"""
         self.report({'INFO'}, "Capture cancelled")
         self.cleanup(context)
-    
-    def save_action_to_library(self, action, animation_name, rig_type, scene):
-        """Save action to library .blend file and create JSON metadata"""
+
+    def _strip_version_suffix(self, name: str) -> str:
+        """
+        Strip version suffix from animation name.
+
+        Examples:
+            "Jump_v001" -> "Jump"
+            "Walk_Cycle_v002" -> "Walk_Cycle"
+            "Run" -> "Run" (no suffix)
+            "Jump_v001_v002" -> "Jump_v001" (only strips last suffix)
+
+        Args:
+            name: Animation name potentially with version suffix
+
+        Returns:
+            Base name without version suffix
+        """
+        import re
+        # Match _v followed by 1-4 digits at end of string
+        pattern = r'_v\d{1,4}$'
+        return re.sub(pattern, '', name)
+
+    def _update_action_library_metadata(self, action, metadata: dict):
+        """
+        Update the action's library metadata after saving.
+
+        This allows subsequent captures to know the current version,
+        so if user captures v002 and continues editing, next capture
+        will correctly offer v003 instead of v002 again.
+
+        Args:
+            action: Blender action to update
+            metadata: Saved animation metadata dict
+        """
+        try:
+            # Update all library tracking properties
+            action["animlib_imported"] = True
+            action["animlib_uuid"] = metadata.get('id', '')
+            action["animlib_version_group_id"] = metadata.get('version_group_id', metadata.get('id', ''))
+            action["animlib_version"] = metadata.get('version', 1)
+            action["animlib_version_label"] = metadata.get('version_label', 'v001')
+            action["animlib_name"] = metadata.get('name', '')
+            action["animlib_rig_type"] = metadata.get('rig_type', '')
+
+            logger.debug(f"Updated action '{action.name}' with library metadata: "
+                        f"uuid={metadata.get('id')}, version={metadata.get('version')}, "
+                        f"version_group_id={metadata.get('version_group_id')}")
+        except Exception as e:
+            logger.error(f"Error updating action library metadata: {e}")
+
+    def save_action_to_library(self, action, animation_name, rig_type, scene, version_info=None):
+        """Save action to library .blend file and create JSON metadata
+
+        Args:
+            action: Blender action to save
+            animation_name: Name for the animation
+            rig_type: Detected or custom rig type
+            scene: Blender scene
+            version_info: Optional dict with version, version_label, version_group_id, is_latest
+        """
         try:
             import tempfile
             import shutil
@@ -242,6 +420,18 @@ class ANIMLIB_OT_capture_animation(Operator):
             tags = [tag.strip() for tag in scene.animlib_tags.split(',') if tag.strip()]
             
             # Create JSON metadata
+            # Determine version_group_id - use provided one or default to animation_id
+            # Important: use `or` to handle empty strings, not just None
+            if version_info and version_info.get('version_group_id'):
+                final_version_group_id = version_info['version_group_id']
+                logger.info(f"Using version_group_id from version_info: {final_version_group_id}")
+            else:
+                final_version_group_id = animation_id
+                logger.info(f"Using animation_id as version_group_id: {final_version_group_id}")
+
+            if version_info:
+                logger.info(f"Version info: version={version_info.get('version')}, label={version_info.get('version_label')}, group_id={version_info.get('version_group_id')}")
+
             metadata = {
                 'id': animation_id,
                 'name': animation_name,
@@ -263,7 +453,12 @@ class ANIMLIB_OT_capture_animation(Operator):
                 'preview_path': str(preview_path),
                 'thumbnail_path': str(thumbnail_path),
                 'created_date': datetime.now().isoformat(),
-                'file_size_mb': blend_path.stat().st_size / (1024 * 1024)
+                'file_size_mb': blend_path.stat().st_size / (1024 * 1024),
+                # Versioning fields (v5)
+                'version': version_info.get('version', 1) if version_info else 1,
+                'version_label': version_info.get('version_label', 'v001') if version_info else 'v001',
+                'version_group_id': final_version_group_id,
+                'is_latest': version_info.get('is_latest', 1) if version_info else 1
             }
             
             # Save JSON metadata
@@ -272,11 +467,11 @@ class ANIMLIB_OT_capture_animation(Operator):
 
             logger.info(f"Saved animation: {blend_path}")
             logger.debug(f"Saved metadata: {json_path}")
-            return str(blend_path), str(json_path)
+            return str(blend_path), str(json_path), metadata
 
         except Exception as e:
             logger.error(f"Error saving action to library: {e}")
-            return None, None
+            return None, None, None
 
     def create_thumbnail(self, armature, scene, thumbnail_path, first_frame):
         """Create thumbnail from first frame of animation"""

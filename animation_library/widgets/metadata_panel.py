@@ -10,11 +10,12 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea,
     QFrame, QGridLayout, QPushButton, QHBoxLayout
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from ..themes.theme_manager import get_theme_manager
 from .video_preview_widget import VideoPreviewWidget
+from .dialogs import VersionHistoryDialog
 
 
 class MetadataPanel(QWidget):
@@ -28,6 +29,7 @@ class MetadataPanel(QWidget):
     - Tags display
     - File paths
     - Timestamps
+    - Version information (v5)
 
     Layout:
         ┌─────────────────┐
@@ -46,8 +48,15 @@ class MetadataPanel(QWidget):
         ├─────────────────┤
         │  Tags           │
         │  [tag1] [tag2]  │
+        ├─────────────────┤
+        │  Version Info   │
+        │  v001 [LATEST]  │
+        │  [View History] │
         └─────────────────┘
     """
+
+    # Signals
+    version_changed = pyqtSignal(str)  # Emits UUID when version changes
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -90,6 +99,7 @@ class MetadataPanel(QWidget):
         self._rig_section = self._create_section("Rig Information")
         self._file_section = self._create_section("Files")
         self._tags_section = self._create_section("Tags")
+        self._version_section = self._create_version_section()
 
     def _create_section(self, title: str) -> QWidget:
         """Create a metadata section with highlighted header"""
@@ -129,6 +139,71 @@ class MetadataPanel(QWidget):
         self._video_preview = VideoPreviewWidget()
         return self._video_preview
 
+    def _create_version_section(self) -> QWidget:
+        """Create version information section with history button"""
+        section = QWidget()
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(0, 8, 0, 8)
+
+        # Section title with subtle background
+        title_label = QLabel("Lineage")
+        title_font = QFont()
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_label.setStyleSheet("""
+            QLabel {
+                background-color: rgba(128, 128, 128, 0.15);
+                padding: 4px 8px;
+                border-radius: 3px;
+            }
+        """)
+        layout.addWidget(title_label)
+
+        # Version info container
+        info_widget = QWidget()
+        info_layout = QHBoxLayout(info_widget)
+        info_layout.setContentsMargins(8, 4, 8, 4)
+        info_layout.setSpacing(8)
+
+        # Version label (e.g., "v001")
+        self._version_label = QLabel("v001")
+        self._version_label.setStyleSheet("font-weight: bold; font-size: 12pt;")
+        info_layout.addWidget(self._version_label)
+
+        # Latest badge
+        self._latest_badge = QLabel("LATEST")
+        self._latest_badge.setStyleSheet("""
+            QLabel {
+                background-color: #4CAF50;
+                color: white;
+                padding: 2px 6px;
+                border-radius: 3px;
+                font-size: 9pt;
+                font-weight: bold;
+            }
+        """)
+        info_layout.addWidget(self._latest_badge)
+
+        # Version count label
+        self._version_count_label = QLabel("")
+        self._version_count_label.setStyleSheet("color: #888; font-size: 9pt;")
+        info_layout.addWidget(self._version_count_label)
+
+        info_layout.addStretch()
+        layout.addWidget(info_widget)
+
+        # View History button
+        self._history_btn = QPushButton("View Lineage")
+        self._history_btn.clicked.connect(self._on_view_history_clicked)
+        self._history_btn.setStyleSheet("""
+            QPushButton {
+                padding: 6px 12px;
+            }
+        """)
+        layout.addWidget(self._history_btn)
+
+        return section
+
     def _create_layout(self):
         """Create panel layout"""
 
@@ -140,8 +215,9 @@ class MetadataPanel(QWidget):
         content_layout = QVBoxLayout(self._content_widget)
         content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        # Add widgets to content (preview section first)
+        # Add widgets to content (preview section first, then version info)
         content_layout.addWidget(self._create_preview_section())
+        content_layout.addWidget(self._version_section)
         content_layout.addWidget(self._technical_section)
         content_layout.addWidget(self._description_label)
         content_layout.addWidget(self._rig_section)
@@ -190,6 +266,9 @@ class MetadataPanel(QWidget):
         # Update tags
         self._update_tags_section()
 
+        # Update version info
+        self._update_version_section()
+
     def clear(self):
         """Clear panel"""
         self._animation = None
@@ -204,6 +283,12 @@ class MetadataPanel(QWidget):
         self._clear_section(self._rig_section)
         self._clear_section(self._file_section)
         self._clear_section(self._tags_section)
+
+        # Clear version section
+        self._version_label.setText("v001")
+        self._latest_badge.hide()
+        self._version_count_label.setText("")
+        self._history_btn.setEnabled(False)
 
     def _update_technical_section(self):
         """Update technical information section"""
@@ -238,12 +323,6 @@ class MetadataPanel(QWidget):
         duration = self._animation.get('duration_seconds')
         if duration:
             self._add_info_row(grid, row, "Duration:", f"{duration:.2f}s")
-            row += 1
-
-        # UUID
-        uuid = self._animation.get('uuid')
-        if uuid:
-            self._add_info_row(grid, row, "UUID:", uuid)
             row += 1
 
     def _update_rig_section(self):
@@ -487,6 +566,96 @@ class MetadataPanel(QWidget):
         grid = section.property("grid")
         if grid:
             self._clear_grid(grid)
+
+    # ==================== VERSION SECTION ====================
+
+    def _update_version_section(self):
+        """Update version information section"""
+
+        if not self._animation:
+            self._version_section.hide()
+            return
+
+        self._version_section.show()
+
+        # Get version info
+        version_label = self._animation.get('version_label', 'v001')
+        is_latest = self._animation.get('is_latest', 1)
+        version_group_id = self._animation.get('version_group_id')
+
+        # Update version label
+        self._version_label.setText(version_label)
+
+        # Show/hide latest badge
+        if is_latest:
+            self._latest_badge.show()
+        else:
+            self._latest_badge.hide()
+
+        # Get version count from database
+        # Use version_group_id or fall back to animation's own UUID
+        group_id = version_group_id or self._animation.get('uuid')
+
+        if group_id:
+            from ..services.database_service import get_database_service
+            db_service = get_database_service()
+            version_count = db_service.get_version_count(group_id)
+
+            if version_count > 1:
+                self._version_count_label.setText(f"({version_count} versions)")
+                self._version_count_label.show()
+            else:
+                self._version_count_label.hide()
+
+            # Always enable button so user can view lineage
+            self._history_btn.setEnabled(True)
+        else:
+            self._version_count_label.hide()
+            self._history_btn.setEnabled(False)
+
+    def _on_view_history_clicked(self):
+        """Open version history dialog"""
+
+        if not self._animation:
+            return
+
+        # Use version_group_id if available, otherwise fall back to animation's own UUID
+        version_group_id = self._animation.get('version_group_id') or self._animation.get('uuid')
+        if not version_group_id:
+            return
+
+        # Open version history dialog
+        dialog = VersionHistoryDialog(
+            version_group_id,
+            parent=self,
+            theme_manager=self._theme_manager
+        )
+
+        # Connect signals
+        dialog.version_selected.connect(self._on_version_selected)
+        dialog.version_set_as_latest.connect(self._on_version_set_as_latest)
+
+        dialog.exec()
+
+    def _on_version_selected(self, uuid: str):
+        """Handle version selection from history dialog"""
+        # Emit signal for parent to handle (e.g., load that version)
+        self.version_changed.emit(uuid)
+
+    def _on_version_set_as_latest(self, uuid: str):
+        """Handle version set as latest from history dialog"""
+        # Refresh the version section if it's the current animation
+        if self._animation and self._animation.get('uuid') == uuid:
+            # Refresh animation data from database
+            from ..services.database_service import get_database_service
+            db_service = get_database_service()
+            updated = db_service.get_animation_by_uuid(uuid)
+            if updated:
+                self._animation = updated
+                self._update_version_section()
+
+        # Emit signal for parent to handle
+        self.version_changed.emit(uuid)
 
 
 __all__ = ['MetadataPanel']

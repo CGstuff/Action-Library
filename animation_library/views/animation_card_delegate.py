@@ -260,6 +260,18 @@ class AnimationCardDelegate(QStyledItemDelegate):
         )
         self._draw_favorite_star(painter, star_rect, is_favorite, is_hovered)
 
+        # Draw version badge (bottom-left of thumbnail)
+        version_label = index.data(AnimationRole.VersionLabelRole)
+        if version_label:
+            badge_padding = 5
+            badge_rect = QRect(
+                rect.x() + badge_padding,
+                rect.y() + self._card_size - 20 - badge_padding,
+                40,
+                20
+            )
+            self._draw_version_badge(painter, badge_rect, version_label)
+
         # Draw text BELOW thumbnail (28px height)
         name_height = 28
         text_rect = QRect(
@@ -338,6 +350,17 @@ class AnimationCardDelegate(QStyledItemDelegate):
             star_size
         )
         self._draw_favorite_star(painter, star_rect, is_favorite, is_hovered)
+
+        # Draw version badge on thumbnail (bottom-left)
+        version_label = index.data(AnimationRole.VersionLabelRole)
+        if version_label:
+            badge_rect = QRect(
+                thumbnail_rect.x() + 2,
+                thumbnail_rect.bottom() - 14,
+                30,
+                12
+            )
+            self._draw_version_badge(painter, badge_rect, version_label)
 
         # Draw text next to thumbnail (account for checkbox offset and star space)
         text_x = rect.x() + thumbnail_size + (padding * 3) + checkbox_offset
@@ -516,6 +539,26 @@ class AnimationCardDelegate(QStyledItemDelegate):
                 painter.setPen(QPen(color, 1))
 
         painter.drawPolygon(star_polygon)
+
+    def _draw_version_badge(self, painter: QPainter, rect: QRect, version_label: str):
+        """Draw version badge (e.g., v001) on thumbnail"""
+
+        theme = self._theme_manager.get_current_theme()
+        if not theme:
+            return
+
+        palette = theme.palette
+
+        # Draw semi-transparent background
+        bg_color = QColor("#000000")
+        bg_color.setAlpha(160)
+        painter.fillRect(rect, bg_color)
+
+        # Draw text
+        font = QFont("Roboto", 8, QFont.Weight.Bold)
+        painter.setFont(font)
+        painter.setPen(QColor("#FFFFFF"))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, version_label)
 
     def _draw_grid_text(self, painter: QPainter, rect: QRect, index, palette, is_selected: bool = False):
         """Draw text for grid mode (below thumbnail)"""

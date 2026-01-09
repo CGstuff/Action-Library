@@ -181,11 +181,46 @@ class ANIMLIB_PT_main_panel(Panel):
 
                 # Capture button
                 if library_path:
+                    # Check if action has library metadata
+                    is_library_action = action.get("animlib_imported", False)
+
+                    # Show library action indicator (when action came from library)
+                    if is_library_action and not scene.animlib_is_versioning:
+                        library_box = action_details_box.box()
+                        library_row = library_box.row()
+                        library_row.label(text="Library Action Detected", icon='LIBRARY_DATA_DIRECT')
+
+                        source_name = action.get("animlib_name", "Unknown")
+                        source_version_label = action.get("animlib_version_label", "v001")
+
+                        library_info = library_box.column(align=True)
+                        library_info.label(text=f"Source: {source_name} ({source_version_label})")
+                        library_info.label(text="Capture will offer version options", icon='INFO')
+
+                    # Show versioning mode indicator if user already chose to version
+                    elif scene.animlib_is_versioning:
+                        version_box = action_details_box.box()
+                        version_box.alert = True
+                        version_row = version_box.row()
+                        version_row.label(text="VERSION MODE ACTIVE", icon='FILE_REFRESH')
+                        version_info = version_box.column(align=True)
+                        version_label = f"v{scene.animlib_version_next_number:03d}"
+                        version_info.label(text=f"Base: {scene.animlib_version_source_name}")
+                        version_info.label(text=f"Next: {scene.animlib_version_source_name}_{version_label}")
+
+                        # Cancel versioning button
+                        cancel_row = version_box.row()
+                        cancel_row.operator("animlib.cancel_versioning", text="Cancel Version Mode", icon='X')
+
                     # Only show button if not currently capturing
                     if not context.window_manager.animlib_is_capturing:
                         capture_row = action_details_box.row()
                         capture_row.scale_y = 1.5
-                        capture_row.operator("animlib.capture_animation", text="Capture Action", icon='REC')
+                        if scene.animlib_is_versioning:
+                            version_label = f"v{scene.animlib_version_next_number:03d}"
+                            capture_row.operator("animlib.capture_animation", text=f"Capture as {version_label}", icon='REC')
+                        else:
+                            capture_row.operator("animlib.capture_animation", text="Capture Action", icon='REC')
                     else:
                         # Show status message while capturing
                         status_row = action_details_box.row()

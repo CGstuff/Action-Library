@@ -74,9 +74,40 @@ class LibraryScanner:
             if 'folder_id' not in animation_data or animation_data['folder_id'] is None:
                 animation_data['folder_id'] = self._folders.get_root_id()
 
+            # Handle versioning: if this is a new version in an existing group,
+            # clear is_latest on other versions in the same group
+            version_group_id = animation_data.get('version_group_id')
+            is_latest = animation_data.get('is_latest', 1)
+
+            if version_group_id and version_group_id != uuid and is_latest:
+                # This is a new version of an existing animation - clear is_latest on others
+                self._clear_latest_in_group(version_group_id)
+
             result = self._animations.add(animation_data)
             return result is not None
 
+        except Exception:
+            return False
+
+    def _clear_latest_in_group(self, version_group_id: str) -> bool:
+        """
+        Clear is_latest flag on all animations in a version group.
+
+        Args:
+            version_group_id: Version group UUID
+
+        Returns:
+            True if successful
+        """
+        try:
+            conn = self._conn.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                'UPDATE animations SET is_latest = 0 WHERE version_group_id = ?',
+                (version_group_id,)
+            )
+            conn.commit()
+            return True
         except Exception:
             return False
 

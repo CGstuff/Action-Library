@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QStatusBar, QDialog, QMessageBox
+    QSplitter, QStatusBar, QDialog, QMessageBox, QMenu
 )
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QCloseEvent
@@ -231,6 +231,9 @@ class MainWindow(QMainWindow):
         # Animation view double-click -> apply animation
         self._animation_view.animation_double_clicked.connect(self._on_animation_double_clicked)
 
+        # Animation view context menu -> show options
+        self._animation_view.animation_context_menu.connect(self._on_animation_context_menu)
+
         # Header toolbar search -> filter animations
         self._header_toolbar.search_text_changed.connect(self._on_search_text_changed)
 
@@ -438,6 +441,81 @@ class MainWindow(QMainWindow):
         else:
             self._status_bar.showMessage(f"Failed to apply '{name}'")
             self._event_bus.report_error("blender", f"Failed to apply animation '{name}'")
+
+    def _on_animation_context_menu(self, uuid: str, position):
+        """Handle animation right-click context menu"""
+
+        animation = self._animation_model.get_animation_by_uuid(uuid)
+        if not animation:
+            return
+
+        name = animation.get('name', 'Unknown')
+        version_group_id = animation.get('version_group_id', uuid)
+
+        # Create context menu
+        menu = QMenu(self)
+
+        # Apply action
+        apply_action = menu.addAction("Apply to Blender")
+        apply_action.triggered.connect(lambda: self._on_animation_double_clicked(uuid))
+
+        menu.addSeparator()
+
+        # View Lineage action
+        version_count = self._db_service.get_version_count(version_group_id)
+        if version_count > 1:
+            history_action = menu.addAction(f"View Lineage ({version_count} versions)")
+            history_action.triggered.connect(
+                lambda: self._show_version_history(version_group_id)
+            )
+
+        menu.addSeparator()
+
+        # Toggle Favorite
+        is_favorite = animation.get('is_favorite', 0)
+        fav_text = "Remove from Favorites" if is_favorite else "Add to Favorites"
+        fav_action = menu.addAction(fav_text)
+        fav_action.triggered.connect(lambda: self._toggle_favorite(uuid))
+
+        menu.addSeparator()
+
+        # Archive action
+        archive_action = menu.addAction("Move to Archive")
+        archive_action.triggered.connect(lambda: self._archive_animation(uuid))
+
+        # Show menu at cursor position
+        menu.exec(position)
+
+    def _show_version_history(self, version_group_id: str):
+        """Show version history dialog"""
+        from .dialogs import VersionHistoryDialog
+
+        dialog = VersionHistoryDialog(
+            version_group_id,
+            parent=self,
+            theme_manager=get_theme_manager()
+        )
+
+        # Connect signals
+        dialog.version_selected.connect(self._on_version_selected)
+
+        dialog.exec()
+
+    def _on_version_selected(self, uuid: str):
+        """Handle version selection from history dialog - apply it"""
+        self._on_animation_double_clicked(uuid)
+
+    def _toggle_favorite(self, uuid: str):
+        """Toggle favorite status for animation"""
+        success = self._db_service.toggle_favorite(uuid)
+        if success:
+            self._animation_model.refresh_animation(uuid)
+            self._animation_view.viewport().update()
+
+    def _archive_animation(self, uuid: str):
+        """Archive a single animation via context menu"""
+        # Use the archive trash controller
+        self._archive_trash_ctrl.archive_animations([uuid])
 
     def _on_search_text_changed(self, text: str):
         """Handle search text change"""
