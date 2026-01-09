@@ -374,6 +374,10 @@ CREATE INDEX idx_animations_folder ON animations(folder_id);
 CREATE INDEX idx_animations_rig_type ON animations(rig_type);
 CREATE INDEX idx_animations_favorite ON animations(is_favorite);
 CREATE INDEX idx_animations_last_viewed ON animations(last_viewed_date);
+
+-- Versioning indexes (v5)
+CREATE INDEX idx_animations_version_group ON animations(version_group_id);
+CREATE INDEX idx_animations_is_latest ON animations(is_latest);
 ```
 
 ---
@@ -459,6 +463,15 @@ CREATE TABLE animations (
     last_viewed_date TIMESTAMP,
     custom_order INTEGER,
     is_locked INTEGER DEFAULT 0,
+
+    -- Versioning / Lineage (v5)
+    version INTEGER DEFAULT 1,
+    version_label TEXT DEFAULT 'v001',
+    version_group_id TEXT,          -- Links versions together
+    is_latest INTEGER DEFAULT 1,    -- Only latest shown in main view
+
+    -- Lifecycle Status (v6)
+    status TEXT DEFAULT 'none',     -- none, wip, review, approved, needs_work, final
 
     -- Timestamps
     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -775,11 +788,23 @@ tests/integration/
   - Recursive folder filtering
   - Circular reference protection
 
+- [x] **Animation Lineage System (v1.1)** - Version tracking for animation iterations
+  - Automatic detection of library actions in Blender
+  - Version choice dialog (New Version vs New Animation)
+  - Cold storage (only latest visible, older versions via View Lineage)
+  - Promote any version to latest
+  - Continuous iteration without re-applying from desktop
+
+- [x] **Lifecycle Status System (v1.1)** - Pipeline-ready approval workflow
+  - Statuses: None (default), WIP, In Review, Approved, Needs Work, Final
+  - Color-coded badges on cards and metadata panel
+  - Status visible in Lineage dialog
+  - Defaults to "None" for solo artists (no badge clutter)
+
 ### Planned Features
 - [ ] Animation preview on double-click (in-app playback)
 - [ ] Batch thumbnail regeneration
 - [ ] Cloud sync support
-- [ ] Animation versioning
 - [ ] Custom metadata fields
 - [ ] Advanced search with AND/OR queries
 - [ ] Animation collections (playlists)

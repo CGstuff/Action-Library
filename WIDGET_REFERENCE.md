@@ -603,7 +603,14 @@ animation = {
     'file_size_mb': 2.5,
     'author': 'John Doe',
     'created_date': '2025-01-05',
-    'tags': ['walk', 'locomotion']
+    'tags': ['walk', 'locomotion'],
+    # Lineage fields (v1.1)
+    'version': 1,
+    'version_label': 'v001',
+    'version_group_id': 'abc-123-def',
+    'is_latest': 1,
+    # Status field (v1.1)
+    'status': 'none'  # none, wip, review, approved, needs_work, final
 }
 
 panel.set_animation(animation)
@@ -649,6 +656,32 @@ badge_style = """
     }
 """
 # + Remove button (× symbol)
+```
+
+### Lineage Section (v1.1)
+
+Displays version info and provides access to version history:
+- **Version Label**: Shows current version (e.g., "v001", "v002")
+- **LATEST Badge**: Green badge shown if `is_latest == 1`
+- **Version Count**: Shows "(X versions)" if multiple versions exist
+- **View Lineage Button**: Opens `VersionHistoryDialog`
+
+### Status Badge (v1.1)
+
+Clickable badge showing lifecycle status:
+
+```python
+# Status colors from Config.LIFECYCLE_STATUSES
+LIFECYCLE_STATUSES = {
+    'none': {'color': None, 'label': 'None'},        # Gray, muted
+    'wip': {'color': '#FF9800', 'label': 'WIP'},     # Orange
+    'review': {'color': '#2196F3', 'label': 'In Review'},  # Blue
+    'approved': {'color': '#4CAF50', 'label': 'Approved'}, # Green
+    'needs_work': {'color': '#F44336', 'label': 'Needs Work'}, # Red
+    'final': {'color': '#9C27B0', 'label': 'Final'}, # Purple
+}
+
+# Clicking badge shows QMenu dropdown to change status
 ```
 
 ### Video Formats Supported

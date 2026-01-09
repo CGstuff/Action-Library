@@ -126,6 +126,34 @@ Once you have animations in your library, you can apply them to rigs in Blender:
 
 ## Managing Animations
 
+### Lineage System (Version Control)
+
+When you edit and re-capture library animations, Action Library tracks versions automatically:
+
+1. **Apply an animation** from the library to Blender
+2. **Edit it** (modify keyframes, timing, etc.)
+3. **Capture again** - The addon detects it's a library animation and offers:
+   - **Create New Version** → Saves as v002 (same lineage)
+   - **Create New Animation** → Saves as new v001 (fresh start)
+
+**View Lineage**: Select any animation → Metadata Panel → Click **View Lineage** to see all versions
+
+> **Tip:** Only the latest version shows in the main library. Older versions are in "cold storage" but accessible via View Lineage.
+
+### Lifecycle Status (Optional)
+
+For pipeline workflows, you can set a status on animations:
+
+1. Select an animation
+2. In the Metadata Panel, click the **Status badge** (defaults to "None")
+3. Choose: WIP, In Review, Approved, Needs Work, or Final
+
+> **Solo Artists:** You can ignore status entirely—new animations default to "None" (no badge shown on cards).
+
+See the [Studio Guide](STUDIO_GUIDE.md) for detailed pipeline integration.
+
+---
+
 ### Archive & Trash
 
 Action Library uses a two-stage deletion system to prevent accidental data loss:
