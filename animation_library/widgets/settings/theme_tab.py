@@ -9,10 +9,12 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QComboBox, QLabel, QPushButton, QFileDialog,
-    QMessageBox, QFrame, QSpinBox
+    QMessageBox, QFrame, QSpinBox, QCheckBox
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QColor
+
+from ...config import Config
 
 from .theme_editor_dialog import ThemeEditorDialog
 
@@ -53,6 +55,13 @@ class ThemeTab(QWidget):
         """Create tab UI"""
         layout = QVBoxLayout(self)
         layout.setSpacing(20)
+
+        # Sharp button style
+        self._button_style = """
+            QPushButton {
+                border-radius: 0px;
+            }
+        """
 
         # Theme Selection Group
         selection_group = QGroupBox("Theme Selection")
@@ -98,6 +107,50 @@ class ThemeTab(QWidget):
         folder_size_row.addStretch()
         ui_layout.addLayout(folder_size_row)
 
+        # Hide shortcut toggles (power user mode)
+        self.hide_toggles_check = QCheckBox("Hide Mirror/Slots toggles (use keyboard shortcuts)")
+        self.hide_toggles_check.setToolTip(
+            "Hide the Mirror and Use Slots checkboxes in the Apply panel.\n"
+            "Power users can use keyboard shortcuts instead:\n"
+            "  - Ctrl+double-click for Mirror\n"
+            "  - Shift+double-click for Use Slots"
+        )
+        settings = QSettings(Config.APP_AUTHOR, Config.APP_NAME)
+        self.hide_toggles_check.setChecked(
+            settings.value("apply/hide_shortcut_toggles", False, type=bool)
+        )
+        self.hide_toggles_check.stateChanged.connect(self._on_hide_toggles_changed)
+
+        # Style checkbox - gray unchecked, accent when checked
+        current_theme = self.theme_manager.get_current_theme()
+        accent = current_theme.palette.accent if current_theme else "#4a90e2"
+        text_color = current_theme.palette.text_primary if current_theme else "#ffffff"
+        self.hide_toggles_check.setStyleSheet(f"""
+            QCheckBox {{
+                color: {text_color};
+                spacing: 8px;
+            }}
+            QCheckBox::indicator {{
+                width: 14px;
+                height: 14px;
+            }}
+            QCheckBox::indicator:unchecked {{
+                background-color: #555555;
+                border: none;
+            }}
+            QCheckBox::indicator:unchecked:hover {{
+                background-color: #666666;
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {accent};
+                border: none;
+            }}
+            QCheckBox::indicator:checked:hover {{
+                background-color: {accent};
+            }}
+        """)
+        ui_layout.addWidget(self.hide_toggles_check)
+
         layout.addWidget(ui_group)
 
         # Management Buttons
@@ -107,10 +160,12 @@ class ThemeTab(QWidget):
         # Row 1: Customize, Import
         row1 = QHBoxLayout()
         self.customize_btn = QPushButton("Customize Theme...")
+        self.customize_btn.setStyleSheet(self._button_style)
         self.customize_btn.clicked.connect(self._on_customize_clicked)
         row1.addWidget(self.customize_btn)
 
         self.import_btn = QPushButton("Import Theme...")
+        self.import_btn.setStyleSheet(self._button_style)
         self.import_btn.clicked.connect(self._on_import_clicked)
         row1.addWidget(self.import_btn)
 
@@ -119,10 +174,12 @@ class ThemeTab(QWidget):
         # Row 2: Export, Delete
         row2 = QHBoxLayout()
         self.export_btn = QPushButton("Export Theme...")
+        self.export_btn.setStyleSheet(self._button_style)
         self.export_btn.clicked.connect(self._on_export_clicked)
         row2.addWidget(self.export_btn)
 
         self.delete_btn = QPushButton("Delete Theme")
+        self.delete_btn.setStyleSheet(self._button_style)
         self.delete_btn.clicked.connect(self._on_delete_clicked)
         row2.addWidget(self.delete_btn)
 
@@ -263,6 +320,22 @@ class ThemeTab(QWidget):
             size: New font size in points
         """
         self.theme_manager.set_folder_text_size(size)
+
+    def _on_hide_toggles_changed(self, state: int):
+        """
+        Handle hide shortcut toggles checkbox change
+
+        Args:
+            state: Checkbox state (Qt.CheckState)
+        """
+        hide = state == Qt.CheckState.Checked.value
+        settings = QSettings(Config.APP_AUTHOR, Config.APP_NAME)
+        settings.setValue("apply/hide_shortcut_toggles", hide)
+
+        # Notify main window to update apply panel
+        from ...events.event_bus import get_event_bus
+        event_bus = get_event_bus()
+        event_bus.settings_changed.emit("hide_shortcut_toggles", hide)
 
     def _on_customize_clicked(self):
         """Open theme editor dialog"""

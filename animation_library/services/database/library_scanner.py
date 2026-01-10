@@ -68,7 +68,17 @@ class LibraryScanner:
 
             existing = self._animations.get_by_uuid(uuid)
             if existing:
-                return False  # Already exists
+                # Update is_pose and is_partial flags if they differ (for migrations)
+                updates = {}
+                new_is_pose = animation_data.get('is_pose', 0)
+                if existing.get('is_pose', 0) != new_is_pose:
+                    updates['is_pose'] = new_is_pose
+                new_is_partial = animation_data.get('is_partial', 0)
+                if existing.get('is_partial', 0) != new_is_partial:
+                    updates['is_partial'] = new_is_partial
+                if updates:
+                    self._animations.update(uuid, updates)
+                return False  # Already exists (but may have updated flags)
 
             # Ensure folder_id is set
             if 'folder_id' not in animation_data or animation_data['folder_id'] is None:

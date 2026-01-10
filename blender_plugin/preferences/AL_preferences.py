@@ -130,9 +130,11 @@ def get_library_path():
     """Get the actions library path from preferences"""
     try:
         addon_name = __name__.split('.')[0]
+        if addon_name not in bpy.context.preferences.addons:
+            return ""
         prefs = bpy.context.preferences.addons[addon_name].preferences
         return prefs.actions_library_path
-    except:
+    except Exception:
         return ""
 
 def get_preview_settings():

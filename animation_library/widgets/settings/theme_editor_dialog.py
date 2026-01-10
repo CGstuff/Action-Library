@@ -92,6 +92,34 @@ class ThemeEditorDialog(QDialog):
         # Live preview toggle
         self.live_preview_checkbox = QCheckBox("Live Preview")
         self.live_preview_checkbox.stateChanged.connect(self._on_live_preview_toggled)
+
+        # Style checkbox - gray unchecked, accent when checked
+        accent = self.working_theme.palette.accent if self.working_theme else "#4a90e2"
+        text_color = self.working_theme.palette.text_primary if self.working_theme else "#ffffff"
+        self.live_preview_checkbox.setStyleSheet(f"""
+            QCheckBox {{
+                color: {text_color};
+                spacing: 8px;
+            }}
+            QCheckBox::indicator {{
+                width: 14px;
+                height: 14px;
+            }}
+            QCheckBox::indicator:unchecked {{
+                background-color: #555555;
+                border: none;
+            }}
+            QCheckBox::indicator:unchecked:hover {{
+                background-color: #666666;
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {accent};
+                border: none;
+            }}
+            QCheckBox::indicator:checked:hover {{
+                background-color: {accent};
+            }}
+        """)
         layout.addWidget(self.live_preview_checkbox)
 
         # Scrollable color picker area

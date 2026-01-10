@@ -11,6 +11,7 @@ logger = get_logger()
 # Constants
 ADDON_NAME = "Animation Library"
 DEFAULT_ANIMATION_NAME = "New Action"
+DEFAULT_POSE_NAME = "New Pose"
 
 # Blender version check for API compatibility
 BLENDER_5_0_OR_LATER = bpy.app.version >= (5, 0, 0)

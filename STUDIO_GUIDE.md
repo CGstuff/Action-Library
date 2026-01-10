@@ -54,6 +54,58 @@ Action Library stores animations in a single directory structure. For team acces
 
 ---
 
+## Pose Library (v1.2)
+
+Action Library now supports **poses** alongside actions. Poses are single-frame bone snapshots designed as quick building blocks for animation.
+
+### Poses vs Actions
+
+| Feature | Actions | Poses |
+|---------|---------|-------|
+| Frame count | Multi-frame | Single frame |
+| Versioning | Full lineage system | None (simple) |
+| Lifecycle status | WIP, Approved, etc. | None |
+| Use case | Complete animations | Building blocks |
+| Workflow | Iterate and refine | Create, use, discard |
+
+### Studio Pose Workflow
+
+Poses are intentionally **lightweight**:
+- Capture a pose in seconds
+- Apply instantly to any armature
+- Auto-keyframe when Blender's auto-key is enabled
+- No approval workflow overhead—if it works, keep it; if not, delete it
+
+### Folder Organization
+
+The virtual folder structure separates poses from actions:
+- **Home** - All items (actions + poses)
+- **Actions** - Only actions
+- **Poses** - Only poses
+- **Recent** / **Favorites** - Both types
+
+This allows teams to maintain separate pose libraries (e.g., facial expressions, hand poses) without cluttering the action view.
+
+### Instant Application
+
+Actions and poses now apply via real-time TCP socket connection:
+- No file-based polling delays
+- Poses appear instantly on the armature
+- Fallback to file queue if socket unavailable
+
+### Pose Blending
+
+Blend between poses directly in the desktop app:
+- **Right-click hold + drag** on any pose card to blend from current pose to target
+- **Drag right** to increase blend amount (0-100%)
+- **Hold Ctrl** while dragging to mirror the pose
+- **Left-click** to cancel and restore original pose
+- **Release** right-click to apply the blended result
+
+This enables rapid pose exploration without leaving the library interface.
+
+---
+
 ## Lineage System (Version Control)
 
 Action Library includes a lineage system for tracking animation iterations—essential for studios where animations go through multiple revision cycles.

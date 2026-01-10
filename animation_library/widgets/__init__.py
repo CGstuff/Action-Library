@@ -5,6 +5,7 @@ from .header_toolbar import HeaderToolbar
 from .folder_tree import FolderTree
 from .metadata_panel import MetadataPanel
 from .bulk_edit_toolbar import BulkEditToolbar
+from .help_overlay import HelpOverlay
 
 __all__ = [
     'MainWindow',
@@ -12,4 +13,5 @@ __all__ = [
     'FolderTree',
     'MetadataPanel',
     'BulkEditToolbar',
+    'HelpOverlay',
 ]

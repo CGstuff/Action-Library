@@ -1,6 +1,6 @@
-# Developer Guide - Animation Library v2
+# Developer Guide - Action Library v1.2
 
-Welcome to the Animation Library v2 development guide! This document will help you get started with developing and extending the application.
+Welcome to the Action Library development guide! This document will help you get started with developing and extending the application.
 
 ---
 
@@ -120,6 +120,7 @@ animation_library/
 │   ├── database_service.py    # Database operations
 │   ├── thumbnail_loader.py    # Async thumbnail loading
 │   ├── blender_service.py     # Blender integration
+│   ├── socket_client.py       # TCP socket client for instant apply (v1.2)
 │   ├── backup_service.py      # Library export/import (.animlib)
 │   └── folder_icon_service.py # Folder icon management
 │
@@ -257,6 +258,167 @@ class MetadataPanel(QWidget):
         if self._current_uuid:
             self._db_service.set_rating(self._current_uuid, rating)
 ```
+
+---
+
+## Socket Bridge (v1.2)
+
+Action Library uses a TCP socket bridge for instant communication with Blender.
+
+### Architecture
+
+```
+[ Desktop App ]  ─── TCP Socket ───▶  [ Blender Addon Server ]
+     Client                              Listener (port 9876)
+                                              ↓
+                                    [ Modal Operator Timer ]
+                                              ↓
+                                    [ Main Thread Execution ]
+```
+
+### Desktop App Side (`services/socket_client.py`)
+
+```python
+from animation_library.services.socket_client import try_socket_apply
+
+# Apply animation via socket (with file fallback)
+success = try_socket_apply(
+    animation_id="uuid",
+    animation_name="Walk Cycle",
+    blend_file_path="/path/to/anim.blend",
+    options={'apply_mode': 'NEW', 'mirror': False}
+)
+```
+
+### Blender Addon Side
+
+The socket server runs in a background thread, but all `bpy` operations execute on the main thread via a modal operator timer:
+
+```python
+# blender_plugin/utils/socket_server.py - Background thread
+def _handle_client(client_socket, client_id):
+    # Receive JSON command, queue for main thread
+    _command_queue.put({'command': command, 'client_id': client_id})
+
+# blender_plugin/operators/AL_socket_listener.py - Main thread
+class ANIMLIB_OT_start_socket_listener(Operator):
+    def modal(self, context, event):
+        if event.type == 'TIMER':
+            process_command_queue()  # Execute bpy operations safely
+        return {'PASS_THROUGH'}
+```
+
+### Adding New Socket Commands
+
+```python
+# 1. Register handler in socket_commands.py
+def handle_my_command(command: dict, client_id: str) -> dict:
+    # Do bpy operations here (runs on main thread)
+    return {'status': 'success', 'message': 'Done'}
+
+register_command_handler('my_command', handle_my_command)
+
+# 2. Send from desktop app
+client = BlenderSocketClient()
+response = client.send_command({
+    'type': 'my_command',
+    'data': 'value'
+})
+```
+
+---
+
+## Pose System (v1.2)
+
+Poses are single-frame bone snapshots, intentionally simpler than actions.
+
+### Key Differences from Actions
+
+| Aspect | Actions | Poses |
+|--------|---------|-------|
+| Versioning | Full lineage system | None |
+| Status badges | WIP, Approved, etc. | None |
+| Frame count | Multi-frame | Always 1 |
+| `is_pose` field | 0 | 1 |
+
+### Filtering by Type
+
+```python
+# In animation_filter_proxy_model.py
+def filterAcceptsRow(self, source_row, source_parent):
+    is_pose = source_model.data(index, AnimationRole.IsPoseRole)
+
+    # Poses folder: only show poses
+    if self._poses_only and not is_pose:
+        return False
+
+    # Actions folder: only show actions
+    if self._animations_only and is_pose:
+        return False
+
+    return True
+```
+
+### Pose Capture (Blender Addon)
+
+```python
+# Poses don't set version fields
+metadata = {
+    'uuid': pose_id,
+    'name': pose_name,
+    'is_pose': 1,  # Critical flag
+    'frame_count': 1,
+    # No version_group_id, version_label, is_latest
+}
+```
+
+### Auto-Keyframe on Apply
+
+When Blender's auto-key is enabled, applying a pose inserts keyframes:
+
+```python
+# socket_commands.py
+if bpy.context.scene.tool_settings.use_keyframe_insert_auto:
+    for bone_name in bone_names:
+        pose_bone = armature.pose.bones[bone_name]
+        pose_bone.keyframe_insert(data_path="location", frame=current_frame)
+        pose_bone.keyframe_insert(data_path="rotation_quaternion", frame=current_frame)
+        pose_bone.keyframe_insert(data_path="scale", frame=current_frame)
+```
+
+### Pose Blending
+
+The desktop app supports real-time pose blending via TCP socket:
+
+**Desktop App Side** (`views/animation_view.py`):
+- Right-click hold on pose card starts blend session
+- Mouse drag updates blend factor (0.0 to 1.0)
+- Ctrl modifier enables mirror mode
+- Left-click cancels, right-click release applies
+
+```python
+# Start blend session
+client.blend_pose_start(pose_id, pose_name, blend_file_path)
+
+# Update blend (called on mouse move)
+client.blend_pose(blend_factor=0.5, mirror=False)
+
+# End session (apply or cancel)
+client.blend_pose_end(cancelled=False)
+```
+
+**Blender Addon Side** (`utils/socket_commands.py`):
+
+```python
+# Uses Blender's built-in pose blending API
+armature.pose.blend_pose_from_action(
+    action=target_action,
+    blend_factor=factor,
+    evaluation_time=0.0
+)
+```
+
+The addon stores original bone transforms on blend start and restores them if cancelled.
 
 ---
 

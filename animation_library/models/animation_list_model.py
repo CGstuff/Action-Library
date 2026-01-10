@@ -71,6 +71,10 @@ class AnimationRole(IntEnum):
     # Lifecycle status (v6)
     StatusRole = Qt.ItemDataRole.UserRole + 90
 
+    # Pose flag (v7)
+    IsPoseRole = Qt.ItemDataRole.UserRole + 95
+    IsPartialRole = Qt.ItemDataRole.UserRole + 96
+
     # Complete data dict
     AnimationDataRole = Qt.ItemDataRole.UserRole + 100
 
@@ -345,6 +349,12 @@ class AnimationListModel(QAbstractListModel):
 
         elif role == AnimationRole.StatusRole:
             return animation.get('status', 'none')
+
+        elif role == AnimationRole.IsPoseRole:
+            return animation.get('is_pose', 0)
+
+        elif role == AnimationRole.IsPartialRole:
+            return animation.get('is_partial', 0)
 
         elif role == AnimationRole.AnimationDataRole:
             return animation

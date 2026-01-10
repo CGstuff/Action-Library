@@ -10,13 +10,39 @@ Usage:
 import sys
 from pathlib import Path
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QPixmapCache
+from PyQt6.QtGui import QPixmapCache, QIcon
 from PyQt6.QtCore import Qt
 
 from .config import Config
 from .themes.theme_manager import get_theme_manager
 from .events.event_bus import get_event_bus
 from .utils.logging_config import LoggingConfig
+
+
+def _get_icon_path() -> Path:
+    """
+    Get the path to the application icon.
+
+    Handles both running from source and PyInstaller builds.
+
+    Returns:
+        Path to the icon file, or None if not found
+    """
+    # Check if running as PyInstaller bundle
+    if getattr(sys, 'frozen', False):
+        # Running as compiled executable
+        base_path = Path(sys._MEIPASS)
+    else:
+        # Running from source - icon is in project root
+        base_path = Path(__file__).parent.parent
+
+    icon_path = base_path / 'AL.ico'
+
+    # Also check in current directory (for portable builds)
+    if not icon_path.exists():
+        icon_path = Path.cwd() / 'AL.ico'
+
+    return icon_path if icon_path.exists() else None
 
 
 def setup_application() -> QApplication:
@@ -33,6 +59,11 @@ def setup_application() -> QApplication:
     app.setApplicationName(Config.APP_NAME)
     app.setApplicationVersion(Config.APP_VERSION)
     app.setOrganizationName(Config.APP_AUTHOR)
+
+    # Set application icon (for taskbar and titlebar)
+    icon_path = _get_icon_path()
+    if icon_path and icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     # Note: High DPI scaling is enabled by default in PyQt6
 

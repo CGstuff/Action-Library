@@ -32,6 +32,26 @@ Add screenshots here:
 - **Setup Wizard** - Guided first-run configuration for new users
 - **Portable** - Single-folder distribution, no installation required
 
+### Pose Support (v1.2)
+- **Pose Capture & Apply** - Save and reuse bone poses as building blocks
+  - Capture current pose with one click
+  - Apply poses instantly to armatures
+  - Auto-keyframe when Blender's auto-key is enabled
+  - Poses are simple and disposable (no versioning overhead)
+- **Pose Blending** - Blend between poses in real-time
+  - Right-click hold + drag on any pose to blend (0-100%)
+  - Ctrl modifier for mirrored blending
+  - Left-click to cancel, release to apply
+- **Instant Application** - Real-time socket connection to Blender
+  - Actions and poses apply instantly via TCP socket bridge
+  - No file-based polling delays
+- **Smart Organization** - Home, Actions, Poses, Recent, Favorites folders
+  - Filter by type: Actions-only or Poses-only views
+- **Keyboard Shortcuts** - Fast workflow for power users
+  - Double-click to apply, Ctrl+double-click for mirrored
+  - Shift+double-click for action slots
+  - Press H or click ? for shortcuts help overlay
+
 ### Pipeline Features (v1.1)
 - **Lineage System** - Track animation versions with automatic iteration detection
   - Apply animation → Edit in Blender → Capture as v002, v003, etc.

@@ -178,7 +178,6 @@ class MetadataPanel(QWidget):
                 background-color: #4CAF50;
                 color: white;
                 padding: 2px 6px;
-                border-radius: 3px;
                 font-size: 9pt;
                 font-weight: bold;
             }
@@ -241,7 +240,7 @@ class MetadataPanel(QWidget):
                     background-color: #404040;
                     color: #888888;
                     padding: 4px 10px;
-                    border-radius: 4px;
+                    border-radius: 0px;
                     font-size: 10pt;
                     font-weight: bold;
                     border: 1px solid #555555;
@@ -257,7 +256,7 @@ class MetadataPanel(QWidget):
                     background-color: {color};
                     color: white;
                     padding: 4px 10px;
-                    border-radius: 4px;
+                    border-radius: 0px;
                     font-size: 10pt;
                     font-weight: bold;
                     border: none;
@@ -638,6 +637,11 @@ class MetadataPanel(QWidget):
         """Update version information section"""
 
         if not self._animation:
+            self._version_section.hide()
+            return
+
+        # Poses don't use versioning - hide the section entirely
+        if self._animation.get('is_pose'):
             self._version_section.hide()
             return
 

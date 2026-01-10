@@ -335,7 +335,16 @@ class DatabaseService:
         library_path = Config.load_library_path()
         if not library_path:
             return (0, 0)
-        return self._scanner.sync_library(library_path)
+        result = self._scanner.sync_library(library_path)
+
+        # Fix pose flags for existing animations (in case they were imported before is_pose was added)
+        self.fix_pose_flags()
+
+        return result
+
+    def fix_pose_flags(self) -> int:
+        """Fix is_pose flag for animations that should be poses (frame_count = 1)."""
+        return self.animations.fix_pose_flags()
 
     # ==================== METADATA EXPORT/IMPORT (delegated) ====================
 

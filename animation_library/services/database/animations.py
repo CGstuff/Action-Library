@@ -59,8 +59,8 @@ class AnimationRepository:
                         file_size_mb, tags, author, use_custom_thumbnail_gradient,
                         thumbnail_gradient_top, thumbnail_gradient_bottom,
                         created_date, modified_date,
-                        version, version_label, version_group_id, is_latest, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        version, version_label, version_group_id, is_latest, status, is_pose, is_partial
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     uuid,
                     animation_data.get('name'),
@@ -92,7 +92,11 @@ class AnimationRepository:
                     animation_data.get('version_group_id', uuid),  # Default to own UUID
                     animation_data.get('is_latest', 1),
                     # Lifecycle status (v6)
-                    animation_data.get('status', 'wip')
+                    animation_data.get('status', 'wip'),
+                    # Pose flag (v7) - 0 for actions, 1 for poses
+                    animation_data.get('is_pose', 0),
+                    # Partial pose flag (v8) - 1 if captured with selected bones only
+                    animation_data.get('is_partial', 0)
                 ))
 
                 return cursor.lastrowid
@@ -836,6 +840,30 @@ class AnimationRepository:
             return result[0] if result and result[0] else 'none'
         except Exception:
             return 'none'
+
+    def fix_pose_flags(self) -> int:
+        """
+        Fix is_pose flag for animations that should be poses.
+
+        Identifies poses based on frame_count = 1 (single-frame snapshots)
+        and updates their is_pose flag to 1.
+
+        Returns:
+            Number of animations updated
+        """
+        try:
+            conn = self._conn.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE animations
+                SET is_pose = 1
+                WHERE frame_count = 1 AND is_pose = 0
+            ''')
+            updated = cursor.rowcount
+            conn.commit()
+            return updated
+        except Exception:
+            return 0
 
 
 __all__ = ['AnimationRepository']

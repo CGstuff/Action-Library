@@ -46,6 +46,12 @@ class IconLoader:
         "recent_icon": "recent.svg",
         "archive_icon": "Archives.svg",  # Archive folder icon
         "trash_icon": "delete.svg",  # Reuse delete icon for trash
+        "pose_icon": "pose.svg",  # Pose folder icon
+        "animation_icon": "action.svg",  # Animation folder icon
+
+        # Card badges
+        "action_badge": "action.svg",  # Badge for action cards
+        "pose_badge": "pose.svg",  # Badge for pose cards
 
         # Folder presets
         "folder_default": "folder_presets/default.svg",

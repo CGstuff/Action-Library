@@ -17,7 +17,7 @@ class Config:
 
     # Application metadata
     APP_NAME: Final[str] = "Action Library"
-    APP_VERSION: Final[str] = "1.0.0"
+    APP_VERSION: Final[str] = "1.2.0"
     APP_AUTHOR: Final[str] = "CGstuff"
 
     # Paths
@@ -74,7 +74,9 @@ class Config:
 
     # Folder tree settings
     VIRTUAL_FOLDERS: Final[list] = [
-        "All Animations",
+        "Home",
+        "Actions",
+        "Poses",
         "Recent",
         "Favorites",
     ]

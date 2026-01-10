@@ -85,6 +85,13 @@ class LibraryTab(QWidget):
         layout.setContentsMargins(15, 15, 15, 15)
         layout.setSpacing(15)
 
+        # Sharp button style
+        self._button_style = """
+            QPushButton {
+                border-radius: 0px;
+            }
+        """
+
         # Database Info Group
         layout.addWidget(self._create_database_section())
 
@@ -125,6 +132,7 @@ class LibraryTab(QWidget):
 
         # Button
         open_btn = QPushButton("Open Folder")
+        open_btn.setStyleSheet(self._button_style)
         open_btn.clicked.connect(self._open_database_folder)
         group_layout.addWidget(open_btn)
 
@@ -145,6 +153,7 @@ class LibraryTab(QWidget):
         group_layout.addSpacing(5)
 
         export_btn = QPushButton("Export Library...")
+        export_btn.setStyleSheet(self._button_style)
         export_btn.clicked.connect(self._export_library)
         group_layout.addWidget(export_btn)
 
@@ -171,6 +180,7 @@ class LibraryTab(QWidget):
         group_layout.addSpacing(5)
 
         import_btn = QPushButton("Import Library...")
+        import_btn.setStyleSheet(self._button_style)
         import_btn.clicked.connect(self._import_library)
         group_layout.addWidget(import_btn)
 

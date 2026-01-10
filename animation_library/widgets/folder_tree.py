@@ -27,14 +27,14 @@ class FolderTree(QTreeWidget):
     Tree widget for folder navigation
 
     Features:
-    - Virtual folders (All Animations, Recent, Favorites)
+    - Virtual folders (Home, Recent, Favorites)
     - User folders from database
     - Context menus (create, rename, delete)
     - Drag & drop support for animations
     - Selection handling
 
     Layout:
-        All Animations
+        Home
         Recent
         Favorites
         ───────────────
@@ -224,7 +224,7 @@ class FolderTree(QTreeWidget):
         # Create Trash folder (second stage - hard delete staging)
         self._create_trash_folder()
 
-        # Select "All Animations" by default
+        # Select "Home" by default
         if self.topLevelItemCount() > 0:
             first_item = self.topLevelItem(0)
             self.setCurrentItem(first_item)
@@ -236,7 +236,9 @@ class FolderTree(QTreeWidget):
 
         # Map folder names to icon keys
         virtual_folder_icons = {
-            "All Animations": "root_icon",
+            "Home": "root_icon",
+            "Actions": "animation_icon",
+            "Poses": "pose_icon",
             "Favorites": "favorite_icon",
             "Recent": "recent_icon",
         }
@@ -475,7 +477,9 @@ class FolderTree(QTreeWidget):
 
         # Map of virtual folder names to icon keys
         virtual_folder_icons = {
-            "All Animations": "root_icon",
+            "Home": "root_icon",
+            "Actions": "animation_icon",
+            "Poses": "pose_icon",
             "Favorites": "favorite_icon",
             "Recent": "recent_icon",
             "Archive": "archive_icon",  # Archive uses archive icon

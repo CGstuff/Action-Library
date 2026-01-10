@@ -9,14 +9,21 @@ Provides archive functionality:
 
 import shutil
 import logging
-import time
 import gc
-from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
-from ..config import Config
 from .database_service import get_database_service, DatabaseService
+from .utils.path_utils import (
+    get_library_path,
+    get_library_folder,
+    get_archive_folder,
+    get_trash_folder,
+)
+from .utils.file_operations import (
+    safe_copy_folder_contents,
+    safe_delete_folder_contents,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -41,120 +48,6 @@ class ArchiveService:
         """
         self._db = db_service or get_database_service()
 
-    def _get_library_path(self) -> Optional[Path]:
-        """Get configured library path"""
-        return Config.load_library_path()
-
-    def _get_archive_folder(self) -> Optional[Path]:
-        """
-        Get .archive folder path, creating if needed
-
-        Returns:
-            Path to .archive folder or None if library not configured
-        """
-        library_path = self._get_library_path()
-        if not library_path:
-            return None
-
-        archive_folder = library_path / Config.ARCHIVE_FOLDER_NAME
-        archive_folder.mkdir(parents=True, exist_ok=True)
-        return archive_folder
-
-    def _get_trash_folder(self) -> Optional[Path]:
-        """
-        Get .trash folder path, creating if needed
-
-        Returns:
-            Path to .trash folder or None if library not configured
-        """
-        library_path = self._get_library_path()
-        if not library_path:
-            return None
-
-        trash_folder = library_path / Config.TRASH_FOLDER_NAME
-        trash_folder.mkdir(parents=True, exist_ok=True)
-        return trash_folder
-
-    def _get_library_folder(self) -> Optional[Path]:
-        """Get library/animations folder path"""
-        library_path = self._get_library_path()
-        if not library_path:
-            return None
-        return library_path / "library"
-
-    def _copy_folder_contents(self, source_folder: Path, dest_folder: Path) -> Tuple[bool, List[str]]:
-        """
-        Copy folder contents file by file, handling locked files gracefully
-
-        Args:
-            source_folder: Source folder path
-            dest_folder: Destination folder path
-
-        Returns:
-            Tuple of (all_success, list of failed files)
-        """
-        dest_folder.mkdir(parents=True, exist_ok=True)
-        failed_files = []
-
-        for file_path in source_folder.iterdir():
-            dest_path = dest_folder / file_path.name
-            try:
-                if file_path.is_file():
-                    # Try to copy with retry
-                    for attempt in range(3):
-                        try:
-                            gc.collect()
-                            shutil.copy2(str(file_path), str(dest_path))
-                            break
-                        except PermissionError:
-                            if attempt < 2:
-                                time.sleep(0.3)
-                            else:
-                                failed_files.append(file_path.name)
-            except Exception as e:
-                logger.warning(f"Failed to copy {file_path.name}: {e}")
-                failed_files.append(file_path.name)
-
-        return len(failed_files) == 0, failed_files
-
-    def _delete_folder_contents(self, folder: Path, skip_files: List[str] = None) -> List[str]:
-        """
-        Delete folder contents, skipping specified files
-
-        Args:
-            folder: Folder to clean
-            skip_files: Files to skip (still locked)
-
-        Returns:
-            List of files that couldn't be deleted
-        """
-        skip_files = skip_files or []
-        still_locked = []
-
-        for file_path in folder.iterdir():
-            if file_path.name in skip_files:
-                still_locked.append(file_path.name)
-                continue
-
-            try:
-                gc.collect()
-                if file_path.is_file():
-                    file_path.unlink()
-            except PermissionError:
-                still_locked.append(file_path.name)
-            except Exception as e:
-                logger.warning(f"Failed to delete {file_path.name}: {e}")
-                still_locked.append(file_path.name)
-
-        # Try to remove folder if empty
-        if not still_locked:
-            try:
-                folder.rmdir()
-            except OSError:
-                pass  # Not empty or locked
-
-        return still_locked
-
     def move_to_archive(self, uuid: str) -> Tuple[bool, str]:
         """
         Move animation to archive (soft delete)
@@ -172,8 +65,8 @@ class ArchiveService:
                 return False, "Animation not found"
 
             # Get paths
-            archive_folder = self._get_archive_folder()
-            library_folder = self._get_library_folder()
+            archive_folder = get_archive_folder()
+            library_folder = get_library_folder()
             if not archive_folder or not library_folder:
                 return False, "Library path not configured"
 
@@ -204,7 +97,7 @@ class ArchiveService:
 
             # Copy files to archive (more reliable than move on Windows)
             gc.collect()  # Release any Python file handles
-            all_copied, failed_files = self._copy_folder_contents(source_folder, dest_folder)
+            all_copied, failed_files = safe_copy_folder_contents(source_folder, dest_folder)
 
             if not all_copied:
                 logger.warning(f"Some files couldn't be copied to archive: {failed_files}")
@@ -244,7 +137,7 @@ class ArchiveService:
             self._db.delete_animation(uuid)
 
             # Try to delete original files
-            still_locked = self._delete_folder_contents(source_folder, failed_files)
+            still_locked = safe_delete_folder_contents(source_folder, skip_files=failed_files)
 
             if still_locked:
                 logger.info(f"Some files still locked, will be cleaned up later: {still_locked}")
@@ -275,7 +168,7 @@ class ArchiveService:
                 return False, "Item not found in archive"
 
             # Get paths
-            library_folder = self._get_library_folder()
+            library_folder = get_library_folder()
             if not library_folder:
                 return False, "Library path not configured"
 
@@ -386,7 +279,7 @@ class ArchiveService:
                 return False, "Item not found in archive"
 
             # Get paths
-            trash_folder = self._get_trash_folder()
+            trash_folder = get_trash_folder()
             if not trash_folder:
                 return False, "Library path not configured"
 

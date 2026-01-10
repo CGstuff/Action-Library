@@ -9,11 +9,12 @@ import os
 from typing import Optional
 from PyQt6.QtWidgets import QListView, QAbstractItemView
 from PyQt6.QtCore import Qt, QTimer, QModelIndex, pyqtSignal, QPoint, QSize
-from PyQt6.QtGui import QResizeEvent, QMouseEvent
+from PyQt6.QtGui import QResizeEvent, QMouseEvent, QKeyEvent, QPainter, QColor, QFont
 
 from .animation_card_delegate import AnimationCardDelegate
 from ..models.animation_list_model import AnimationRole
 from ..services.database_service import get_database_service
+from ..services.socket_client import get_socket_client
 from ..events.event_bus import get_event_bus
 from ..widgets.hover_video_popup import HoverVideoPopup
 from ..config import Config
@@ -31,6 +32,7 @@ class AnimationView(QListView):
     - Drag & drop support
     - Async thumbnail loading via delegate
     - Event bus integration
+    - Pose blending via right-click drag
 
     Usage:
         view = AnimationView()
@@ -39,7 +41,7 @@ class AnimationView(QListView):
     """
 
     # Signals
-    animation_double_clicked = pyqtSignal(str)  # animation_uuid
+    animation_double_clicked = pyqtSignal(str, bool, bool)  # animation_uuid, mirror, use_slots
     animation_context_menu = pyqtSignal(str, QPoint)  # animation_uuid, position
     hover_started = pyqtSignal(str, QPoint)  # animation_uuid, position
     hover_ended = pyqtSignal()
@@ -70,6 +72,15 @@ class AnimationView(QListView):
 
         # Hover video popup (lazy loading - only create when first needed)
         self._hover_popup: Optional[HoverVideoPopup] = None
+
+        # Pose blending state
+        self._blend_active = False
+        self._blend_just_ended = False  # Prevents context menu after blend
+        self._blend_start_x = 0
+        self._blend_factor = 0.0
+        self._blend_mirror = False
+        self._blend_pose_name = ""
+        self._blend_sensitivity = 200  # Pixels for full 0-1 range
 
         # Setup view
         self._setup_view()
@@ -203,8 +214,37 @@ class AnimationView(QListView):
         # Force layout recalculation after mode change
         self.scheduleDelayedItemsLayout()
 
+    def mousePressEvent(self, event: QMouseEvent):
+        """Handle mouse press for pose blending"""
+
+        # Left-click cancels active blend
+        if event.button() == Qt.MouseButton.LeftButton and self._blend_active:
+            self._cancel_pose_blend()
+            event.accept()
+            return
+
+        # Check for right-click on a pose to start blend
+        if event.button() == Qt.MouseButton.RightButton:
+            index = self.indexAt(event.pos())
+            if index.isValid():
+                # Check if this is a pose (not an animation)
+                is_pose = index.data(AnimationRole.IsPoseRole)
+                if is_pose:
+                    # Start pose blend
+                    if self._start_pose_blend(index, event.pos()):
+                        event.accept()
+                        return
+
+        super().mousePressEvent(event)
+
     def mouseMoveEvent(self, event: QMouseEvent):
-        """Handle mouse move for hover detection"""
+        """Handle mouse move for hover detection and pose blending"""
+
+        # Handle pose blending
+        if self._blend_active:
+            self._update_pose_blend(event.pos())
+            event.accept()
+            return
 
         super().mouseMoveEvent(event)
 
@@ -226,6 +266,205 @@ class AnimationView(QListView):
                 self._hover_index = None
                 self._hover_timer.stop()
                 self.hover_ended.emit()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        """Handle mouse release for pose blending"""
+
+        if event.button() == Qt.MouseButton.RightButton and self._blend_active:
+            self._end_pose_blend()
+            event.accept()
+            return
+
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent):
+        """Handle key press for pose blending cancel"""
+
+        if event.key() == Qt.Key.Key_Escape and self._blend_active:
+            self._cancel_pose_blend()
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
+
+    def paintEvent(self, event):
+        """Override paint event to draw blend overlay"""
+        super().paintEvent(event)
+
+        if self._blend_active:
+            self._draw_blend_overlay()
+
+    def _start_pose_blend(self, index: QModelIndex, pos: QPoint) -> bool:
+        """
+        Start pose blend session
+
+        Args:
+            index: Model index of the pose
+            pos: Mouse position
+
+        Returns:
+            True if blend started successfully
+        """
+        uuid = index.data(AnimationRole.UUIDRole)
+        name = index.data(AnimationRole.NameRole)
+        blend_path = index.data(AnimationRole.BlendFilePathRole)
+
+        if not uuid or not blend_path:
+            return False
+
+        # Send blend start to Maya
+        client = get_socket_client()
+        response = client.blend_pose_start(uuid, name, blend_path)
+
+        if response.get('status') != 'success':
+            print(f"[AnimationView] Failed to start blend: {response.get('message')}")
+            return False
+
+        # Initialize blend state
+        self._blend_active = True
+        self._blend_start_x = pos.x()
+        self._blend_factor = 0.0
+        self._blend_mirror = False
+        self._blend_pose_name = name or "Pose"
+
+        # Grab focus for keyboard (Escape key)
+        self.setFocus()
+
+        print(f"[AnimationView] Blend started: {name}, start_x={pos.x()}")
+
+        # Force repaint to show overlay
+        self.viewport().update()
+
+        return True
+
+    def _update_pose_blend(self, pos: QPoint):
+        """
+        Update pose blend based on mouse position
+
+        Args:
+            pos: Current mouse position
+        """
+        # Calculate blend factor from horizontal mouse movement
+        delta_x = pos.x() - self._blend_start_x
+        self._blend_factor = max(0.0, min(1.0, delta_x / self._blend_sensitivity))
+        print(f"[AnimationView] Blend update: pos.x={pos.x()}, start_x={self._blend_start_x}, delta={delta_x}, factor={self._blend_factor:.2f}")
+
+        # Check for Ctrl modifier for mirror
+        modifiers = self.cursor().pos()  # Dummy call to get modifiers working
+        from PyQt6.QtWidgets import QApplication
+        self._blend_mirror = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier)
+
+        # Send blend update to Maya
+        client = get_socket_client()
+        client.blend_pose(self._blend_factor, self._blend_mirror)
+
+        # Force repaint to update overlay
+        self.viewport().update()
+
+    def _end_pose_blend(self):
+        """End pose blend session"""
+
+        if not self._blend_active:
+            return
+
+        # Send blend end to Blender
+        client = get_socket_client()
+        client.blend_pose_end()
+
+        # Reset blend state
+        self._blend_active = False
+        self._blend_just_ended = True  # Prevent context menu
+        self._blend_start_x = 0
+        self._blend_factor = 0.0
+        self._blend_mirror = False
+        self._blend_pose_name = ""
+
+        print(f"[AnimationView] Blend ended")
+
+        # Force repaint to remove overlay
+        self.viewport().update()
+
+    def _cancel_pose_blend(self):
+        """Cancel pose blend and restore original pose"""
+        if not self._blend_active:
+            return
+
+        print(f"[AnimationView] Blend cancelled")
+
+        # Send cancel to Blender (cancelled=True restores original)
+        client = get_socket_client()
+        client.blend_pose_end(cancelled=True)
+
+        # Reset blend state
+        self._blend_active = False
+        self._blend_just_ended = True  # Prevent context menu
+        self._blend_start_x = 0
+        self._blend_factor = 0.0
+        self._blend_mirror = False
+        self._blend_pose_name = ""
+
+        # Force repaint to remove overlay
+        self.viewport().update()
+
+    def _draw_blend_overlay(self):
+        """Draw sharp blend progress overlay at top center"""
+        from PyQt6.QtCore import QRectF
+        from PyQt6.QtGui import QPen
+
+        painter = QPainter(self.viewport())
+
+        viewport_rect = self.viewport().rect()
+        percentage = int(self._blend_factor * 100)
+
+        # Box dimensions
+        box_width = 240
+        box_height = 52
+        box_x = (viewport_rect.width() - box_width) // 2
+        box_y = 16
+
+        box_rect = QRectF(box_x, box_y, box_width, box_height)
+
+        # Sharp background
+        painter.fillRect(box_rect, QColor(25, 25, 30, 245))
+
+        # Thin progress bar at bottom
+        progress_height = 3
+        progress_y = box_y + box_height - progress_height
+        progress_bg = QRectF(box_x, progress_y, box_width, progress_height)
+        painter.fillRect(progress_bg, QColor(50, 50, 60))
+
+        # Progress fill
+        if self._blend_factor > 0:
+            fill_width = box_width * self._blend_factor
+            progress_fill = QRectF(box_x, progress_y, fill_width, progress_height)
+            fill_color = QColor(100, 160, 255) if self._blend_mirror else QColor(80, 200, 120)
+            painter.fillRect(progress_fill, fill_color)
+
+        # Percentage text (large)
+        painter.setPen(QColor(255, 255, 255))
+        font = QFont()
+        font.setPointSize(16)
+        font.setBold(True)
+        painter.setFont(font)
+
+        pct_rect = QRectF(box_x, box_y + 6, box_width, 24)
+        painter.drawText(pct_rect, Qt.AlignmentFlag.AlignCenter, f"{percentage}%")
+
+        # Pose name
+        name_font = QFont()
+        name_font.setPointSize(9)
+        painter.setFont(name_font)
+        painter.setPen(QColor(140, 140, 150))
+
+        mirror_text = " [M]" if self._blend_mirror else ""
+        name_rect = QRectF(box_x, box_y + 26, box_width, 16)
+        painter.drawText(name_rect, Qt.AlignmentFlag.AlignCenter, f"{self._blend_pose_name}{mirror_text}")
+
+        # Border
+        painter.setPen(QPen(QColor(60, 60, 70), 1))
+        painter.drawRect(box_rect)
+
+        painter.end()
 
     def leaveEvent(self, event):
         """Handle mouse leaving view"""
@@ -259,6 +498,8 @@ class AnimationView(QListView):
 
     def _on_double_clicked(self, index: QModelIndex):
         """Handle double click and track last viewed"""
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtCore import Qt
 
         if not index.isValid():
             return
@@ -268,7 +509,12 @@ class AnimationView(QListView):
             # Update last viewed (double-click is a strong viewing signal)
             self._db_service.update_last_viewed(uuid)
 
-            self.animation_double_clicked.emit(uuid)
+            # Check modifiers: Ctrl = mirror, Shift = use_slots (actions only)
+            modifiers = QApplication.keyboardModifiers()
+            mirror = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+            use_slots = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+
+            self.animation_double_clicked.emit(uuid, mirror, use_slots)
 
             # Update event bus
             self._event_bus.set_selected_animation(uuid)
@@ -304,6 +550,16 @@ class AnimationView(QListView):
 
     def contextMenuEvent(self, event):
         """Handle context menu"""
+
+        # Don't show context menu while blending or right after blend ended
+        if self._blend_active:
+            event.accept()
+            return
+
+        if self._blend_just_ended:
+            self._blend_just_ended = False  # Reset flag
+            event.accept()
+            return
 
         index = self.indexAt(event.pos())
         if index.isValid():

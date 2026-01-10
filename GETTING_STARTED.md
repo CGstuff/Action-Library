@@ -110,6 +110,13 @@ The animation will be saved to your library and appear in the desktop app!
 
 Once you have animations in your library, you can apply them to rigs in Blender:
 
+### Quick Apply (Recommended)
+- **Double-click** any animation or pose to apply it instantly
+- **Ctrl + Double-click** to apply mirrored (swaps left/right bones)
+- **Shift + Double-click** to apply as action slot (actions only)
+- **Ctrl + Shift + Double-click** to apply mirrored as slot
+
+### Using the Apply Panel
 1. **Select an animation** in the desktop app by clicking on it
 2. Configure apply options in the **Apply Panel** (right side):
    - **Apply Mode**: New Action (replaces current) or Insert at Playhead
@@ -117,10 +124,61 @@ Once you have animations in your library, you can apply them to rigs in Blender:
    - **Reverse**: Play animation backwards
    - **Selected Bones Only**: Apply only to bones selected in Blender
    - **Use Slots**: Use Blender 4.5+ action slots system
-3. Click **APPLY ACTION TO BLENDER**
-4. In Blender, click **Manual Apply** in the Animation Library panel (sidebar)
+3. Click **APPLY TO BLENDER**
 
-> **Tip:** Double-clicking an animation also queues it for apply with current options.
+> **Tip:** Power users can hide the Mirror/Slots toggles in Settings > Appearance and use keyboard shortcuts instead.
+
+---
+
+## Keyboard Shortcuts
+
+Press **H** or click the **?** button in the toolbar to see all shortcuts:
+
+| Shortcut | Action |
+|----------|--------|
+| Double-click | Apply animation/pose |
+| Ctrl + Double-click | Apply mirrored |
+| Shift + Double-click | Apply as slot (actions only) |
+| Ctrl + Shift + Double-click | Apply mirrored as slot |
+| Right-click + Drag | Blend pose (poses only) |
+| Ctrl (while blending) | Mirror blend |
+| Left-click / Escape | Cancel blend |
+| H | Toggle help overlay |
+| Escape | Close dialogs |
+
+---
+
+## Working with Poses
+
+Poses are single-frame bone snapshots - perfect for building pose libraries.
+
+### Capturing Poses
+
+1. **Pose your armature** in Blender
+2. Open the **Animation Library** panel (N key in 3D Viewport)
+3. Fill in the pose details:
+   - **Pose Name**
+   - **Description** (optional)
+   - **Tags** (comma-separated)
+4. Click **Capture Pose**
+
+### Applying Poses
+
+- **Double-click** a pose to apply it instantly
+- **Ctrl + Double-click** to apply mirrored
+
+### Pose Blending
+
+Smoothly blend between your current pose and a library pose:
+
+1. **Right-click and hold** on any pose card
+2. **Drag right** to increase blend (0% → 100%)
+3. **Drag left** to decrease blend
+4. **Hold Ctrl** while dragging to mirror the target pose
+5. **Release** to apply the blended result
+6. **Left-click or Escape** to cancel and restore original pose
+
+> **Tip:** Pose blending is great for creating in-between poses or mixing expressions.
 
 ---
 

@@ -40,6 +40,13 @@ class BlenderIntegrationTab(QWidget):
         layout.setContentsMargins(15, 15, 15, 15)
         layout.setSpacing(15)
 
+        # Sharp button style
+        self._button_style = """
+            QPushButton {
+                border-radius: 0px;
+            }
+        """
+
         # Blender executable section
         layout.addWidget(self._create_blender_path_section())
 
@@ -64,6 +71,7 @@ class BlenderIntegrationTab(QWidget):
         path_layout.addWidget(self.blender_path_input)
 
         browse_btn = QPushButton("Browse...")
+        browse_btn.setStyleSheet(self._button_style)
         browse_btn.clicked.connect(self.browse_blender_exe)
         path_layout.addWidget(browse_btn)
 
@@ -71,6 +79,7 @@ class BlenderIntegrationTab(QWidget):
 
         # Verify button
         verify_btn = QPushButton("Verify Blender")
+        verify_btn.setStyleSheet(self._button_style)
         verify_btn.clicked.connect(self.verify_blender)
         blender_layout.addWidget(verify_btn)
 
@@ -91,6 +100,7 @@ class BlenderIntegrationTab(QWidget):
         addon_layout.addWidget(info_label)
 
         install_btn = QPushButton("Install Addon")
+        install_btn.setStyleSheet(self._button_style)
         install_btn.clicked.connect(self.install_addon)
         addon_layout.addWidget(install_btn)
 

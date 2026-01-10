@@ -14,6 +14,7 @@ from ..models.animation_list_model import AnimationRole
 from ..services.thumbnail_loader import get_thumbnail_loader
 from ..services.database_service import get_database_service
 from ..themes.theme_manager import get_theme_manager
+from ..utils.icon_loader import IconLoader
 from ..config import Config
 
 
@@ -43,8 +44,26 @@ class AnimationCardDelegate(QStyledItemDelegate):
         self._db_service = get_database_service()
         self._edit_mode = False
 
+        # Cache type badge pixmaps
+        self._action_badge_pixmap = None
+        self._pose_badge_pixmap = None
+        self._load_type_badges()
+
         # Connect thumbnail loader signals
         self._thumbnail_loader.thumbnail_loaded.connect(self._on_thumbnail_loaded)
+
+    def _load_type_badges(self):
+        """Load and cache type badge pixmaps"""
+        try:
+            # Load action badge
+            action_path = IconLoader.get("action_badge")
+            self._action_badge_pixmap = QPixmap(action_path)
+
+            # Load pose badge
+            pose_path = IconLoader.get("pose_badge")
+            self._pose_badge_pixmap = QPixmap(pose_path)
+        except Exception as e:
+            print(f"Warning: Could not load type badges: {e}")
 
     def set_view_mode(self, mode: str):
         """
@@ -142,11 +161,12 @@ class AnimationCardDelegate(QStyledItemDelegate):
                 star_size,
                 star_size
             )
-            # Grid mode: checkbox in top-left
+            # Grid mode: checkbox in top-left (below type badge)
             checkbox_size = 20
+            badge_size = 24
             checkbox_rect = QRect(
                 rect.x() + 5,
-                rect.y() + 5,
+                rect.y() + 5 + badge_size + 3,  # Below type badge
                 checkbox_size,
                 checkbox_size
             )
@@ -237,12 +257,17 @@ class AnimationCardDelegate(QStyledItemDelegate):
         )
         self._draw_thumbnail(painter, thumbnail_rect, index)
 
-        # Draw edit mode checkbox (overlaid on top-left of thumbnail)
+        # Draw type badge (action/pose) in upper left corner
+        is_pose = index.data(AnimationRole.IsPoseRole)
+        self._draw_type_badge(painter, thumbnail_rect, bool(is_pose), badge_size=24)
+
+        # Draw edit mode checkbox (overlaid on top-left of thumbnail, below type badge)
         if self._edit_mode:
             checkbox_size = 20
+            badge_size = 24
             checkbox_rect = QRect(
                 rect.x() + 5,
-                rect.y() + 5,
+                rect.y() + 5 + badge_size + 3,  # Position below the type badge
                 checkbox_size,
                 checkbox_size
             )
@@ -260,32 +285,47 @@ class AnimationCardDelegate(QStyledItemDelegate):
         )
         self._draw_favorite_star(painter, star_rect, is_favorite, is_hovered)
 
-        # Draw version badge (bottom-left of thumbnail)
-        version_label = index.data(AnimationRole.VersionLabelRole)
-        if version_label:
-            badge_padding = 5
-            badge_rect = QRect(
-                rect.x() + badge_padding,
-                rect.y() + self._card_size - 20 - badge_padding,
-                40,
-                20
-            )
-            self._draw_version_badge(painter, badge_rect, version_label)
+        # Draw version badge (bottom-left of thumbnail) - skip for poses (they don't use versioning)
+        if not is_pose:
+            version_label = index.data(AnimationRole.VersionLabelRole)
+            if version_label:
+                badge_padding = 5
+                badge_rect = QRect(
+                    rect.x() + badge_padding,
+                    rect.y() + self._card_size - 20 - badge_padding,
+                    40,
+                    20
+                )
+                self._draw_version_badge(painter, badge_rect, version_label)
 
-        # Draw status badge (bottom-right of thumbnail) - skip if 'none'
-        status = index.data(AnimationRole.StatusRole)
-        if status and status != 'none':
-            badge_padding = 5
-            # Calculate width based on status label length
-            status_info = Config.LIFECYCLE_STATUSES.get(status, {'label': status.upper()})
-            label_width = max(50, len(status_info['label']) * 7 + 10)
-            status_rect = QRect(
-                rect.x() + self._card_size - label_width - badge_padding,
-                rect.y() + self._card_size - 20 - badge_padding,
-                label_width,
-                20
-            )
-            self._draw_status_badge(painter, status_rect, status)
+        # Draw status badge (bottom-right of thumbnail) - skip for poses (no lifecycle tracking)
+        if not is_pose:
+            status = index.data(AnimationRole.StatusRole)
+            if status and status != 'none':
+                badge_padding = 5
+                # Calculate width based on status label length
+                status_info = Config.LIFECYCLE_STATUSES.get(status, {'label': status.upper()})
+                label_width = max(50, len(status_info['label']) * 7 + 10)
+                status_rect = QRect(
+                    rect.x() + self._card_size - label_width - badge_padding,
+                    rect.y() + self._card_size - 20 - badge_padding,
+                    label_width,
+                    20
+                )
+                self._draw_status_badge(painter, status_rect, status)
+        else:
+            # For poses: draw partial indicator if this is a partial pose (selected bones only)
+            is_partial = index.data(AnimationRole.IsPartialRole)
+            if is_partial:
+                # Small circle in bottom-right corner
+                indicator_size = 12
+                padding = 6
+                self._draw_partial_indicator(
+                    painter,
+                    rect.x() + self._card_size - indicator_size - padding,
+                    rect.y() + self._card_size - indicator_size - padding,
+                    indicator_size
+                )
 
         # Draw text BELOW thumbnail (28px height)
         name_height = 28
@@ -348,6 +388,10 @@ class AnimationCardDelegate(QStyledItemDelegate):
         # Draw thumbnail
         self._draw_thumbnail(painter, thumbnail_rect, index)
 
+        # Draw type badge (action/pose) in upper left of thumbnail
+        is_pose = index.data(AnimationRole.IsPoseRole)
+        self._draw_type_badge(painter, thumbnail_rect, bool(is_pose), badge_size=16)
+
         # Draw selection indicator
         if is_selected:
             pen = QPen(QColor(palette.accent), 2)
@@ -366,33 +410,38 @@ class AnimationCardDelegate(QStyledItemDelegate):
         )
         self._draw_favorite_star(painter, star_rect, is_favorite, is_hovered)
 
-        # Draw version badge on thumbnail (bottom-left)
-        version_label = index.data(AnimationRole.VersionLabelRole)
-        if version_label:
-            badge_rect = QRect(
-                thumbnail_rect.x() + 2,
-                thumbnail_rect.bottom() - 14,
-                30,
-                12
-            )
-            self._draw_version_badge(painter, badge_rect, version_label)
+        # Draw version badge on thumbnail (bottom-left) - skip for poses (they don't use versioning)
+        if not is_pose:
+            version_label = index.data(AnimationRole.VersionLabelRole)
+            if version_label:
+                badge_rect = QRect(
+                    thumbnail_rect.x() + 2,
+                    thumbnail_rect.bottom() - 14,
+                    30,
+                    12
+                )
+                self._draw_version_badge(painter, badge_rect, version_label)
 
-        # Get status for list mode (skip if 'none')
+        # Get status for list mode (skip for poses - no lifecycle tracking)
         status = index.data(AnimationRole.StatusRole)
-        show_status = status and status != 'none'
+        show_status = status and status != 'none' and not is_pose
 
-        # Draw text next to thumbnail (account for checkbox offset, star space, and status badge)
-        status_badge_width = 60 if show_status else 0
+        # Check for partial pose badge
+        is_partial = index.data(AnimationRole.IsPartialRole) if is_pose else False
+        show_partial = is_pose and is_partial
+
+        # Draw text next to thumbnail (account for checkbox offset, star space, and status/partial badge)
+        badge_width = 60 if show_status else (20 if show_partial else 0)
         text_x = rect.x() + thumbnail_size + (padding * 3) + checkbox_offset
         text_rect = QRect(
             text_x,
             rect.y() + padding,
-            rect.width() - text_x - star_size - star_padding - padding - status_badge_width - 8,
+            rect.width() - text_x - star_size - star_padding - padding - badge_width - 8,
             thumbnail_size
         )
         self._draw_list_text(painter, text_rect, index, palette, is_selected)
 
-        # Draw status badge (between text and star) - skip if 'none'
+        # Draw status badge (between text and star) - skip for poses
         if show_status:
             status_info = Config.LIFECYCLE_STATUSES.get(status, {'label': status.upper()})
             label_width = max(50, len(status_info['label']) * 7 + 6)
@@ -403,6 +452,15 @@ class AnimationCardDelegate(QStyledItemDelegate):
                 18
             )
             self._draw_status_badge(painter, status_rect, status)
+        elif show_partial:
+            # Draw partial indicator circle for poses with selected bones only
+            indicator_size = 10
+            self._draw_partial_indicator(
+                painter,
+                rect.right() - star_size - star_padding - indicator_size - 12,
+                rect.y() + (rect.height() - indicator_size) // 2,
+                indicator_size
+            )
 
     def _draw_thumbnail(self, painter: QPainter, rect: QRect, index):
         """Draw thumbnail image"""
@@ -579,9 +637,10 @@ class AnimationCardDelegate(QStyledItemDelegate):
         if not theme:
             return
 
-        palette = theme.palette
+        # Disable antialiasing for sharp edges
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
-        # Draw semi-transparent background
+        # Draw semi-transparent background (sharp rectangle)
         bg_color = QColor("#000000")
         bg_color.setAlpha(160)
         painter.fillRect(rect, bg_color)
@@ -595,12 +654,15 @@ class AnimationCardDelegate(QStyledItemDelegate):
     def _draw_status_badge(self, painter: QPainter, rect: QRect, status: str):
         """Draw lifecycle status badge on thumbnail"""
 
+        # Disable antialiasing for sharp edges
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
         # Get status info from config
         status_info = Config.LIFECYCLE_STATUSES.get(status, {'label': status.upper(), 'color': '#9E9E9E'})
         color = status_info['color']
         label = status_info['label']
 
-        # Draw colored background
+        # Draw colored background (sharp rectangle)
         painter.fillRect(rect, QColor(color))
 
         # Draw text
@@ -608,6 +670,51 @@ class AnimationCardDelegate(QStyledItemDelegate):
         painter.setFont(font)
         painter.setPen(QColor("#FFFFFF"))
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
+
+    def _draw_partial_indicator(self, painter: QPainter, x: int, y: int, size: int = 10):
+        """Draw partial pose indicator (small circle for poses captured with selected bones only)"""
+        from PyQt6.QtGui import QBrush
+
+        # Teal circle to indicate partial pose
+        painter.setBrush(QBrush(QColor("#00ACC1")))  # Cyan/teal
+        painter.setPen(QPen(QColor("#FFFFFF"), 1))  # White border
+        painter.drawEllipse(x, y, size, size)
+
+    def _draw_type_badge(self, painter: QPainter, rect: QRect, is_pose: bool, badge_size: int = 24):
+        """
+        Draw type badge (action or pose) in upper left corner of thumbnail.
+
+        Args:
+            painter: QPainter instance
+            rect: Rectangle for positioning (typically thumbnail rect)
+            is_pose: True for pose badge, False for action badge
+            badge_size: Size of the badge icon
+        """
+        # Select the appropriate badge pixmap
+        badge_pixmap = self._pose_badge_pixmap if is_pose else self._action_badge_pixmap
+
+        if not badge_pixmap or badge_pixmap.isNull():
+            return
+
+        # Position in upper left corner with small padding
+        padding = 5
+        badge_rect = QRect(
+            rect.x() + padding,
+            rect.y() + padding,
+            badge_size,
+            badge_size
+        )
+
+        # Scale pixmap to badge size
+        scaled_badge = badge_pixmap.scaled(
+            badge_size,
+            badge_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+
+        # Draw the badge
+        painter.drawPixmap(badge_rect.x(), badge_rect.y(), scaled_badge)
 
     def _draw_grid_text(self, painter: QPainter, rect: QRect, index, palette, is_selected: bool = False):
         """Draw text for grid mode (below thumbnail)"""

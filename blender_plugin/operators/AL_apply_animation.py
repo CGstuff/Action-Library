@@ -203,7 +203,24 @@ class ANIMLIB_OT_apply_animation(Operator):
             # Store original context
             original_action = target_armature.animation_data.action if target_armature.animation_data else None
             original_mode = bpy.context.mode
-            original_area_type = bpy.context.area.type if bpy.context.area else None
+
+            # Find an available area - context.area may be None when called from socket/timer
+            area = bpy.context.area
+            if area is None:
+                # Find a 3D View or any suitable area from the current screen
+                for window in bpy.context.window_manager.windows:
+                    for a in window.screen.areas:
+                        if a.type in ('VIEW_3D', 'DOPESHEET_EDITOR', 'GRAPH_EDITOR'):
+                            area = a
+                            break
+                    if area:
+                        break
+
+            if area is None:
+                logger.error("No suitable area found for mirror operation")
+                return None
+
+            original_area_type = area.type
 
             # Ensure animation data exists
             if not target_armature.animation_data:
@@ -223,8 +240,6 @@ class ANIMLIB_OT_apply_animation(Operator):
             bpy.ops.pose.select_all(action='SELECT')
 
             # Switch to Dope Sheet context to copy keyframes
-            # Save current area type
-            area = bpy.context.area
             old_type = area.type
             area.type = 'DOPESHEET_EDITOR'
 
@@ -234,12 +249,28 @@ class ANIMLIB_OT_apply_animation(Operator):
                     space.mode = 'ACTION'
                     break
 
-            # Select all keyframes
-            bpy.ops.action.select_all(action='SELECT')
+            # Find the region for context override
+            region = None
+            for r in area.regions:
+                if r.type == 'WINDOW':
+                    region = r
+                    break
 
-            # Copy keyframes
-            bpy.ops.action.copy()
-            logger.info("Copied all keyframes from source action")
+            # Find window for context override
+            window = bpy.context.window
+            if window is None:
+                for w in bpy.context.window_manager.windows:
+                    window = w
+                    break
+
+            # Use context override for dopesheet operators
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                # Select all keyframes
+                bpy.ops.action.select_all(action='SELECT')
+
+                # Copy keyframes
+                bpy.ops.action.copy()
+                logger.info("Copied all keyframes from source action")
 
             # Create new action for mirrored animation
             mirrored_action = bpy.data.actions.new(name=f"{source_action.name}_mirrored")
@@ -254,21 +285,46 @@ class ANIMLIB_OT_apply_animation(Operator):
             # Set current frame to start frame
             bpy.context.scene.frame_set(int(frame_start))
 
+            # Switch back to 3D View for keyframe insert
+            area.type = 'VIEW_3D'
+
+            # Find 3D view region
+            view3d_region = None
+            for r in area.regions:
+                if r.type == 'WINDOW':
+                    view3d_region = r
+                    break
+
             # Insert a single keyframe on all selected bones to create fcurves
             # This is required for paste to work
-            bpy.ops.anim.keyframe_insert_menu(type='WholeCharacter')
+            with bpy.context.temp_override(window=window, area=area, region=view3d_region):
+                bpy.ops.anim.keyframe_insert_menu(type='WholeCharacter')
             logger.info(f"Inserted initial keyframe at frame {frame_start}")
 
-            # Select all keyframes in new action
-            bpy.ops.action.select_all(action='SELECT')
+            # Switch back to dopesheet for paste
+            area.type = 'DOPESHEET_EDITOR'
+            for space in area.spaces:
+                if space.type == 'DOPESHEET_EDITOR':
+                    space.mode = 'ACTION'
+                    break
 
-            # Paste flipped - this uses Blender's built-in mirroring logic
-            bpy.ops.action.paste(flipped=True)
-            logger.info("Pasted keyframes with flipped option")
+            # Re-find region after area type change
+            for r in area.regions:
+                if r.type == 'WINDOW':
+                    region = r
+                    break
 
-            # Clean up: delete the initial keyframe we created (only at start frame)
-            # The pasted keys should now be there
-            bpy.ops.action.select_all(action='DESELECT')
+            # Use context override for dopesheet operators again
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                # Select all keyframes in new action
+                bpy.ops.action.select_all(action='SELECT')
+
+                # Paste flipped - this uses Blender's built-in mirroring logic
+                bpy.ops.action.paste(flipped=True)
+                logger.info("Pasted keyframes with flipped option")
+
+                # Clean up
+                bpy.ops.action.select_all(action='DESELECT')
 
             # Restore original area type
             area.type = old_type
@@ -288,8 +344,8 @@ class ANIMLIB_OT_apply_animation(Operator):
             try:
                 if original_action:
                     target_armature.animation_data.action = original_action
-                if original_area_type and bpy.context.area:
-                    bpy.context.area.type = original_area_type
+                if original_area_type and area:
+                    area.type = original_area_type
             except:
                 pass
 
@@ -925,7 +981,14 @@ class ANIMLIB_OT_check_apply_queue(Operator):
             if not request_data or request_data.get('status') != 'pending':
                 self.report({'INFO'}, "No pending requests")
                 return {'FINISHED'}
-            
+
+            # Check request type - pose or animation
+            request_type = request_data.get('type', 'animation')
+
+            if request_type == 'pose':
+                # Handle pose apply request
+                return self._apply_pose_request(context, request_data, request_file)
+
             # Apply the animation
             animation_id = request_data.get('animation_id')
             animation_name = request_data.get('animation_name', 'Unknown')
@@ -981,12 +1044,136 @@ class ANIMLIB_OT_check_apply_queue(Operator):
 
         return {'FINISHED'}
 
+    def _apply_pose_request(self, context, request_data, request_file):
+        """
+        Apply a pose request from the desktop app queue.
+
+        Poses are single-frame actions. We apply them instantly by loading the action
+        and using apply_pose_from_action() for immediate application.
+
+        Args:
+            context: Blender context
+            request_data: Request data dict from queue file
+            request_file: Path to the queue file
+
+        Returns:
+            Operator result ('FINISHED' or 'CANCELLED')
+        """
+        try:
+            armature = context.active_object
+
+            # Validate armature selection
+            if not armature or armature.type != 'ARMATURE':
+                self.report({'ERROR'}, "Please select an armature object")
+                animation_queue_client.mark_request_completed(request_file)
+                return {'CANCELLED'}
+
+            pose_id = request_data.get('animation_id') or request_data.get('pose_id')
+            pose_name = request_data.get('animation_name') or request_data.get('pose_name', 'Unknown Pose')
+            blend_file_path = request_data.get('blend_file_path')
+
+            if not blend_file_path or not os.path.exists(blend_file_path):
+                self.report({'ERROR'}, f"Pose blend file not found: {blend_file_path}")
+                animation_queue_client.mark_request_completed(request_file)
+                return {'CANCELLED'}
+
+            logger.info(f"Applying pose: {pose_name} from {blend_file_path}")
+
+            # Load the pose action from blend file
+            with bpy.data.libraries.load(blend_file_path) as (data_from, data_to):
+                data_to.actions = data_from.actions
+
+            if not data_to.actions:
+                self.report({'ERROR'}, "No actions found in pose file")
+                animation_queue_client.mark_request_completed(request_file)
+                return {'CANCELLED'}
+
+            pose_action = data_to.actions[0]
+
+            # Ensure armature has pose data
+            if not armature.pose:
+                self.report({'ERROR'}, "Armature has no pose data")
+                bpy.data.actions.remove(pose_action)
+                animation_queue_client.mark_request_completed(request_file)
+                return {'CANCELLED'}
+
+            # Apply the pose using Blender's built-in method (instant application)
+            # This applies all transforms from the action at frame 0
+            try:
+                armature.pose.apply_pose_from_action(pose_action, evaluation_time=0.0)
+                logger.info(f"Applied pose using apply_pose_from_action()")
+            except AttributeError:
+                # Fallback for older Blender versions: manually apply transforms
+                logger.debug("apply_pose_from_action not available, using manual method")
+                self._apply_pose_manually(armature, pose_action)
+
+            # Clean up - remove the loaded action
+            bpy.data.actions.remove(pose_action)
+
+            # Force viewport update
+            bpy.context.view_layer.update()
+
+            # Mark request as completed
+            animation_queue_client.mark_request_completed(request_file)
+
+            self.report({'INFO'}, f"Applied pose: {pose_name}")
+            return {'FINISHED'}
+
+        except Exception as e:
+            logger.error(f"Error applying pose: {e}")
+            import traceback
+            traceback.print_exc()
+            self.report({'ERROR'}, f"Error applying pose: {str(e)}")
+            animation_queue_client.mark_request_completed(request_file)
+            return {'CANCELLED'}
+
+    def _apply_pose_manually(self, armature, pose_action):
+        """
+        Manually apply pose transforms from an action (fallback method).
+
+        Args:
+            armature: Target armature object
+            pose_action: Blender action containing pose keyframes
+        """
+        for fcurve in get_action_fcurves(pose_action):
+            if not fcurve.keyframe_points:
+                continue
+
+            # Get the value at frame 0
+            value = fcurve.evaluate(0)
+
+            # Parse the data path to get bone and property
+            data_path = fcurve.data_path
+            if 'pose.bones[' not in data_path:
+                continue
+
+            try:
+                # Extract bone name: pose.bones["BoneName"].location
+                bone_name = data_path.split('"')[1]
+
+                if bone_name not in armature.pose.bones:
+                    continue
+
+                pose_bone = armature.pose.bones[bone_name]
+
+                # Extract property name and set value
+                if '.location' in data_path:
+                    pose_bone.location[fcurve.array_index] = value
+                elif '.rotation_quaternion' in data_path:
+                    pose_bone.rotation_quaternion[fcurve.array_index] = value
+                elif '.rotation_euler' in data_path:
+                    pose_bone.rotation_euler[fcurve.array_index] = value
+                elif '.scale' in data_path:
+                    pose_bone.scale[fcurve.array_index] = value
+            except (IndexError, KeyError) as e:
+                logger.debug(f"Could not apply fcurve {data_path}: {e}")
+
 
 # ==================== AUTO-POLLING TIMER ====================
 
 # Global flag to track if timer is running
 _queue_poll_timer_running = False
-_POLL_INTERVAL = 0.5  # Poll every 0.5 seconds
+_POLL_INTERVAL = 0.1  # Poll every 0.1 seconds (faster for responsive pose apply)
 
 
 def _auto_poll_queue():
@@ -1062,19 +1249,18 @@ def start_queue_poll_timer():
     global _queue_poll_timer_running
 
     if _queue_poll_timer_running:
-        print("[AnimLib] Timer already running")
         return  # Already running
 
     _queue_poll_timer_running = True
+
+    # Refresh queue directory now that preferences are loaded
+    animation_queue_client.refresh_queue_dir()
 
     # Register the timer if not already registered
     # Use 2.0 second delay to ensure Blender is fully initialized
     if not bpy.app.timers.is_registered(_auto_poll_queue):
         bpy.app.timers.register(_auto_poll_queue, first_interval=2.0)
-        print("[AnimLib] Queue poll timer STARTED - auto-apply enabled")
-        logger.info("Queue poll timer started (with temp_override)")
-    else:
-        print("[AnimLib] Timer was already registered")
+        logger.info("Queue poll timer started")
 
 
 def stop_queue_poll_timer():

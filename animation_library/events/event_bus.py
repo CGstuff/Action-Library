@@ -80,13 +80,16 @@ class EventBus(QObject):
     # Error events
     error_occurred = pyqtSignal(str, str)  # error_type, error_message
 
+    # Settings events
+    settings_changed = pyqtSignal(str, object)  # setting_name, value
+
     def __init__(self):
         super().__init__()
 
         # State storage
         self._selected_animation_id: Optional[str] = None
         self._selected_animation_ids: Set[str] = set()
-        self._current_folder: str = "All Animations"
+        self._current_folder: str = "Home"
         self._view_mode: str = "grid"
         self._card_size: int = 160
         self._edit_mode: bool = False

@@ -1,6 +1,6 @@
 import bpy
 from bpy.types import PropertyGroup
-from ..utils.utils import DEFAULT_ANIMATION_NAME
+from ..utils.utils import DEFAULT_ANIMATION_NAME, DEFAULT_POSE_NAME
 
 class ANIMLIB_SceneProperties(PropertyGroup):
     # Basic metadata
@@ -13,6 +13,19 @@ class ANIMLIB_SceneProperties(PropertyGroup):
     bpy.types.Scene.animlib_use_action_name = bpy.props.BoolProperty(
         name="Use Action Name",
         description="Automatically use the active action's name",
+        default=False
+    )
+
+    # Pose capture properties
+    bpy.types.Scene.animlib_pose_name = bpy.props.StringProperty(
+        name="Pose Name",
+        description="Name for the Pose",
+        default=DEFAULT_POSE_NAME
+    )
+
+    bpy.types.Scene.animlib_selected_bones_only = bpy.props.BoolProperty(
+        name="Selected Bones Only",
+        description="Only capture selected bones (for partial poses like hands)",
         default=False
     )
 

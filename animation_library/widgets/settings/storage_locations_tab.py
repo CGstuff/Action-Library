@@ -32,6 +32,13 @@ class StorageLocationsTab(QWidget):
         layout.setContentsMargins(15, 15, 15, 15)
         layout.setSpacing(15)
 
+        # Sharp button style
+        self._button_style = """
+            QPushButton {
+                border-radius: 0px;
+            }
+        """
+
         # Locations Group
         locations_group = QGroupBox("Storage Locations")
         locations_layout = QVBoxLayout(locations_group)
@@ -42,6 +49,7 @@ class StorageLocationsTab(QWidget):
         locations_layout.addWidget(app_root_label)
 
         open_app_btn = QPushButton("Open Application Folder")
+        open_app_btn.setStyleSheet(self._button_style)
         open_app_btn.clicked.connect(lambda: self._open_folder(Config.get_user_data_dir()))
         locations_layout.addWidget(open_app_btn)
 
@@ -59,10 +67,12 @@ class StorageLocationsTab(QWidget):
 
         if library_path:
             open_library_btn = QPushButton("Open Library Folder")
+            open_library_btn.setStyleSheet(self._button_style)
             open_library_btn.clicked.connect(lambda: self._open_folder(library_path))
             library_buttons_layout.addWidget(open_library_btn)
 
         change_library_btn = QPushButton("Change Library Location...")
+        change_library_btn.setStyleSheet(self._button_style)
         change_library_btn.clicked.connect(self._change_library_location)
         library_buttons_layout.addWidget(change_library_btn)
 
@@ -105,6 +115,35 @@ class StorageLocationsTab(QWidget):
         self.hard_delete_checkbox = QCheckBox("Allow permanent deletion")
         self.hard_delete_checkbox.setChecked(Config.load_allow_hard_delete())
         self.hard_delete_checkbox.toggled.connect(self._on_hard_delete_changed)
+
+        # Style checkbox - gray unchecked, accent when checked
+        current_theme = self.theme_manager.get_current_theme()
+        accent = current_theme.palette.accent if current_theme else "#4a90e2"
+        text_color = current_theme.palette.text_primary if current_theme else "#ffffff"
+        self.hard_delete_checkbox.setStyleSheet(f"""
+            QCheckBox {{
+                color: {text_color};
+                spacing: 8px;
+            }}
+            QCheckBox::indicator {{
+                width: 14px;
+                height: 14px;
+            }}
+            QCheckBox::indicator:unchecked {{
+                background-color: #555555;
+                border: none;
+            }}
+            QCheckBox::indicator:unchecked:hover {{
+                background-color: #666666;
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {accent};
+                border: none;
+            }}
+            QCheckBox::indicator:checked:hover {{
+                background-color: {accent};
+            }}
+        """)
         deletion_layout.addWidget(self.hard_delete_checkbox)
 
         # Warning text

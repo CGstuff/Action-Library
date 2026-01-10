@@ -6,6 +6,11 @@ Features:
 - Apply mode selection (New Action / Insert at Playhead)
 - Option checkboxes (Mirror, Reverse, Selected Bones, Use Slots)
 - Settings persistence
+- Optional hide of Mirror/Slots toggles for power users (keyboard shortcuts available)
+
+Keyboard shortcuts (always available):
+- Ctrl+double-click for Mirror
+- Shift+double-click for Use Slots
 """
 
 from typing import Optional, Dict, Any
@@ -30,10 +35,10 @@ class ApplyPanel(QWidget):
         │                                 │
         │  Apply Mode: [New Action     v] │
         │                                 │
-        │  [ ] Mirror Animation (L<->R)   │
+        │  [ ] Mirror Animation (L<->R)   │  <- hideable
         │  [ ] Reverse Animation          │
         │  [ ] Selected Bones Only        │
-        │  [ ] Use Action Slots (4.5+)    │
+        │  [ ] Use Action Slots           │  <- hideable
         └─────────────────────────────────┘
 
     Signals:
@@ -67,7 +72,7 @@ class ApplyPanel(QWidget):
         """Create panel widgets"""
 
         # Big apply button
-        self._apply_button = QPushButton("APPLY ACTION TO BLENDER")
+        self._apply_button = QPushButton("APPLY TO BLENDER")
         self._apply_button.setMinimumHeight(50)
         self._apply_button.setEnabled(False)  # Disabled until animation selected
         self._apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -83,7 +88,7 @@ class ApplyPanel(QWidget):
 
         # Option checkboxes
         self._mirror_check = QCheckBox("Mirror Animation (L<->R)")
-        self._mirror_check.setToolTip("Mirror left/right bones (e.g., swap Left Hand with Right Hand)")
+        self._mirror_check.setToolTip("Mirror left/right bones (e.g., swap Left Hand with Right Hand)\nShortcut: Ctrl+double-click")
 
         self._reverse_check = QCheckBox("Reverse Animation")
         self._reverse_check.setToolTip("Play the animation backwards")
@@ -91,11 +96,11 @@ class ApplyPanel(QWidget):
         self._bones_check = QCheckBox("Selected Bones Only")
         self._bones_check.setToolTip("Only apply animation to currently selected bones in Blender")
 
-        self._slots_check = QCheckBox("Use Action Slots (requires existing action)")
+        self._slots_check = QCheckBox("Use Action Slots")
         self._slots_check.setToolTip(
-            "Experimental: Add animation to a slot on the current action.\n"
+            "Add animation to a slot on the current action.\n"
             "Requires an action with a slot to already exist on the armature.\n"
-            "For future Blender animation layers workflow."
+            "Shortcut: Shift+double-click"
         )
 
         # Separator line
@@ -308,6 +313,9 @@ class ApplyPanel(QWidget):
         self._bones_check.setChecked(settings.value("apply/selected_bones", False, type=bool))
         self._slots_check.setChecked(settings.value("apply/use_slots", False, type=bool))
 
+        # Apply visibility setting for power user mode
+        self._update_shortcut_toggles_visibility()
+
     def _save_options(self):
         """Save current options to settings"""
         settings = QSettings(Config.APP_AUTHOR, Config.APP_NAME)
@@ -317,6 +325,23 @@ class ApplyPanel(QWidget):
         settings.setValue("apply/reverse", self._reverse_check.isChecked())
         settings.setValue("apply/selected_bones", self._bones_check.isChecked())
         settings.setValue("apply/use_slots", self._slots_check.isChecked())
+
+    def _update_shortcut_toggles_visibility(self):
+        """Update visibility of Mirror and Slots toggles based on settings"""
+        settings = QSettings(Config.APP_AUTHOR, Config.APP_NAME)
+        hide_toggles = settings.value("apply/hide_shortcut_toggles", False, type=bool)
+
+        self._mirror_check.setVisible(not hide_toggles)
+        self._slots_check.setVisible(not hide_toggles)
+
+    def set_shortcut_toggles_visible(self, visible: bool):
+        """Show or hide the Mirror and Slots toggles (for power users)"""
+        self._mirror_check.setVisible(visible)
+        self._slots_check.setVisible(visible)
+
+        # Save preference
+        settings = QSettings(Config.APP_AUTHOR, Config.APP_NAME)
+        settings.setValue("apply/hide_shortcut_toggles", not visible)
 
 
 __all__ = ['ApplyPanel']

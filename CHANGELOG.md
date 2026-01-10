@@ -5,6 +5,72 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-01-10
+
+### Added
+
+- **Pose Support**
+  - Capture poses (single-frame bone snapshots) directly from Blender
+  - Apply poses instantly to armatures in Blender
+  - Poses are simple building blocks - no versioning or lifecycle tracking
+  - Auto-keyframe support: when Blender's auto-key is enabled, applying a pose inserts keyframes
+  - Pose badge on cards distinguishes poses from actions
+
+- **Pose Blending**
+  - Right-click hold + drag on any pose to blend from current pose to target
+  - Drag right to increase blend (0-100%), drag left to decrease
+  - Hold Ctrl while dragging to mirror the pose
+  - Left-click or Escape to cancel and restore original pose
+  - Release right-click to apply the blended result
+  - Clean overlay UI showing percentage, pose name, and mirror status
+
+- **Keyboard Shortcuts**
+  - **Double-click** - Apply animation/pose
+  - **Ctrl + Double-click** - Apply mirrored (swaps left/right bones)
+  - **Shift + Double-click** - Apply action as slot (actions only)
+  - **Ctrl + Shift + Double-click** - Apply mirrored as slot
+  - **?** button in toolbar - Show keyboard shortcuts
+
+- **Help Overlay**
+  - click ? to view all keyboard shortcuts
+  - Organized by category: Apply Actions, Pose Blending, Navigation, General
+
+- **Instant Application via Socket Bridge**
+  - Real-time TCP socket connection between desktop app and Blender
+  - Apply actions and poses instantly without file-based polling
+  - Automatic fallback to file-based queue if socket unavailable
+  - Modal operator ensures reliable main-thread execution in Blender
+
+- **Reorganized Virtual Folders**
+  - **Home** - Shows all items (actions + poses)
+  - **Actions** - Shows only actions (excludes poses)
+  - **Poses** - Shows only poses
+  - **Recent** - Recently viewed items
+  - **Favorites** - Favorited items
+
+- **Blender 5.0 Action API Compatibility**
+  - Updated pose capture for Blender 5.0's layered action system
+  - Proper handling of action layers, strips, and channelbags
+
+- **Power User Setting**
+  - Option to hide Mirror/Slots toggles in Apply panel (Settings > Appearance)
+  - Power users can use keyboard shortcuts instead for cleaner UI
+
+### Changed
+
+- Poses do not use versioning/lineage (they're fast, iterative building blocks)
+- Poses do not show version badges or lifecycle status badges
+- Metadata panel hides version section for poses
+- Apply button renamed from "APPLY ACTION TO BLENDER" to "APPLY TO BLENDER"
+- Mirrored pose application now uses Blender's native pose copy/paste for accurate results
+
+### Fixed
+
+- Fixed checkbox styling in settings - clear distinction between on (accent) and off (gray) states
+- Sharp UI styling throughout settings dialogs for consistent appearance
+
+---
+
 ## [1.1.0] - 2026-01-09
 
 ### Added

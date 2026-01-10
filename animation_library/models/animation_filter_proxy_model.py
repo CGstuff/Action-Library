@@ -43,6 +43,8 @@ class AnimationFilterProxyModel(QSortFilterProxyModel):
         self._filter_rig_types: Set[str] = set()
         self._favorites_only: bool = False
         self._recent_only: bool = False
+        self._poses_only: bool = False
+        self._animations_only: bool = False
 
         # Sort configuration
         self._sort_by: str = "name"  # name, date, duration, fps
@@ -167,6 +169,28 @@ class AnimationFilterProxyModel(QSortFilterProxyModel):
             self._recent_only = recent_only
             self.invalidateFilter()
 
+    def set_poses_only(self, poses_only: bool):
+        """
+        Set poses only filter
+
+        Args:
+            poses_only: True to show only poses (single-frame snapshots)
+        """
+        if self._poses_only != poses_only:
+            self._poses_only = poses_only
+            self.invalidateFilter()
+
+    def set_animations_only(self, animations_only: bool):
+        """
+        Set animations only filter (excludes poses)
+
+        Args:
+            animations_only: True to show only animations (multi-frame actions)
+        """
+        if self._animations_only != animations_only:
+            self._animations_only = animations_only
+            self.invalidateFilter()
+
     def set_sort_config(self, sort_by: str, sort_order: str):
         """
         Set sort configuration
@@ -217,6 +241,14 @@ class AnimationFilterProxyModel(QSortFilterProxyModel):
             self._recent_only = False
             changed = True
 
+        if self._poses_only:
+            self._poses_only = False
+            changed = True
+
+        if self._animations_only:
+            self._animations_only = False
+            changed = True
+
         if changed:
             self.invalidateFilter()
 
@@ -249,8 +281,20 @@ class AnimationFilterProxyModel(QSortFilterProxyModel):
             if not last_viewed:
                 return False
 
+        # Poses only filter
+        if self._poses_only:
+            is_pose = source_model.data(index, AnimationRole.IsPoseRole)
+            if not is_pose:
+                return False
+
+        # Animations only filter (excludes poses)
+        if self._animations_only:
+            is_pose = source_model.data(index, AnimationRole.IsPoseRole)
+            if is_pose:
+                return False
+
         # Folder filter - check tags instead of folder_id
-        if self._folder_name and self._folder_name not in ["All Animations", "Favorites", "Recent"]:
+        if self._folder_name and self._folder_name not in ["Home", "Actions", "Poses", "Favorites", "Recent"]:
             # Get animation tags
             animation_tags = source_model.data(index, AnimationRole.TagsRole)
 

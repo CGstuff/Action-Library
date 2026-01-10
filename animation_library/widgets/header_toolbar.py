@@ -49,6 +49,7 @@ class HeaderToolbar(QWidget):
     rig_type_filter_changed = pyqtSignal(list)  # List of selected rig types
     tags_filter_changed = pyqtSignal(list)  # List of selected tags
     sort_changed = pyqtSignal(str, str)  # (sort_by, sort_order)
+    help_clicked = pyqtSignal()  # Help button clicked
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -189,6 +190,17 @@ class HeaderToolbar(QWidget):
         self._settings_btn.setFixedSize(40, 40)
         self._settings_btn.setToolTip("Settings (Ctrl+,)")
 
+        # Help button (shows keyboard shortcuts)
+        self._help_btn = QPushButton("?")
+        self._help_btn.setFixedSize(40, 40)
+        self._help_btn.setToolTip("Keyboard Shortcuts (H)")
+        self._help_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 18px;
+                font-weight: bold;
+            }
+        """)
+
         # Rig type filter dropdown
         self._rig_type_combo = QComboBox()
         self._rig_type_combo.addItem("All Rig Types")
@@ -254,6 +266,8 @@ class HeaderToolbar(QWidget):
         layout.addSpacing(4)
         layout.addWidget(self._console_btn)
         layout.addSpacing(4)
+        layout.addWidget(self._help_btn)
+        layout.addSpacing(4)
         layout.addWidget(self._settings_btn)
 
     def _connect_signals(self):
@@ -282,6 +296,9 @@ class HeaderToolbar(QWidget):
 
         # Settings button
         self._settings_btn.clicked.connect(self.settings_clicked.emit)
+
+        # Help button
+        self._help_btn.clicked.connect(self.help_clicked.emit)
 
         # About button
         self._about_btn.clicked.connect(self._on_about_clicked)

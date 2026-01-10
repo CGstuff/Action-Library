@@ -88,6 +88,30 @@ class FilterController:
             self._current_context = "Recent"
         self._update_status()
 
+    def set_poses_only(self, enabled: bool) -> None:
+        """
+        Enable/disable poses-only filter.
+
+        Args:
+            enabled: True to show only poses
+        """
+        self._proxy.set_poses_only(enabled)
+        if enabled:
+            self._current_context = "Poses"
+        self._update_status()
+
+    def set_animations_only(self, enabled: bool) -> None:
+        """
+        Enable/disable animations-only filter (excludes poses).
+
+        Args:
+            enabled: True to show only actions
+        """
+        self._proxy.set_animations_only(enabled)
+        if enabled:
+            self._current_context = "Actions"
+        self._update_status()
+
     def set_rig_type_filter(self, rig_types: Set[str]) -> None:
         """
         Set rig type filter.
@@ -119,14 +143,16 @@ class FilterController:
         self._proxy.set_sort_config(sort_by, sort_order)
 
     def clear_special_filters(self) -> None:
-        """Clear favorites and recent filters."""
+        """Clear favorites, recent, poses, and animations filters."""
         self._proxy.set_favorites_only(False)
         self._proxy.set_recent_only(False)
+        self._proxy.set_poses_only(False)
+        self._proxy.set_animations_only(False)
 
     def clear_folder_filter(self) -> None:
         """Clear folder filter to show all animations."""
         self._proxy.set_folder_filter(None, None, None)
-        self._current_context = "All Animations"
+        self._current_context = "Home"
         self._update_status()
 
     def clear_all_filters(self) -> None:

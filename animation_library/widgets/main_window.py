@@ -30,6 +30,7 @@ from .metadata_panel import MetadataPanel
 from .apply_panel import ApplyPanel
 from .bulk_edit_toolbar import BulkEditToolbar
 from .settings.settings_dialog import SettingsDialog
+from .help_overlay import HelpOverlay
 from .controllers import ArchiveTrashController, BulkEditController, FilterController
 
 
@@ -171,6 +172,10 @@ class MainWindow(QMainWindow):
         # Add splitter to layout
         main_layout.addWidget(self._splitter, 1)
 
+        # Help overlay (hidden by default, toggle with 'H')
+        # Created after layout so it overlays correctly
+        self._help_overlay = HelpOverlay(central_widget)
+
     def _init_controllers(self):
         """Initialize controllers for delegated functionality"""
 
@@ -261,6 +266,9 @@ class MainWindow(QMainWindow):
         # Header toolbar settings -> show settings dialog
         self._header_toolbar.settings_clicked.connect(self._show_settings)
 
+        # Header toolbar help -> show keyboard shortcuts overlay
+        self._header_toolbar.help_clicked.connect(self._help_overlay.toggle)
+
         # Header toolbar filters -> filter animations
         self._header_toolbar.rig_type_filter_changed.connect(
             lambda rig_types: self._proxy_model.set_rig_type_filter(set(rig_types))
@@ -282,6 +290,7 @@ class MainWindow(QMainWindow):
         self._event_bus.loading_finished.connect(self._on_loading_finished)
         self._event_bus.error_occurred.connect(self._on_error)
         self._event_bus.folder_changed.connect(self._on_folder_changed)
+        self._event_bus.settings_changed.connect(self._on_settings_changed)
 
     def _load_settings(self):
         """Load window and splitter settings"""
@@ -333,6 +342,9 @@ class MainWindow(QMainWindow):
             self._status_bar.showMessage("Scanning library...")
             self._db_service.sync_library()
 
+        # Fix pose flags for any animations with frame_count=1 that aren't marked as poses
+        self._db_service.fix_pose_flags()
+
         # Apply any pending metadata from import
         if BackupService.has_pending_metadata():
             self._status_bar.showMessage("Restoring metadata...")
@@ -377,8 +389,14 @@ class MainWindow(QMainWindow):
         self._archive_trash_ctrl.exit_special_views()
         self._bulk_edit_toolbar.set_special_view_mode()  # Reset to normal mode
 
-        if folder_name == "All Animations":
+        if folder_name == "Home":
             self._filter_ctrl.clear_folder_filter()
+        elif folder_name == "Actions":
+            self._filter_ctrl.clear_folder_filter()
+            self._filter_ctrl.set_animations_only(True)
+        elif folder_name == "Poses":
+            self._filter_ctrl.clear_folder_filter()
+            self._filter_ctrl.set_poses_only(True)
         elif folder_name == "Favorites":
             self._filter_ctrl.clear_folder_filter()
             self._filter_ctrl.set_favorites_only(True)
@@ -421,23 +439,40 @@ class MainWindow(QMainWindow):
 
             self._status_bar.showMessage("Ready")
 
-    def _on_animation_double_clicked(self, uuid: str):
-        """Handle animation double-click - Immediately apply to Blender with options"""
+    def _on_animation_double_clicked(self, uuid: str, mirror: bool = False, use_slots: bool = False):
+        """Handle animation double-click - Immediately apply to Blender with options
+
+        Args:
+            uuid: Animation/pose UUID
+            mirror: If True, apply mirrored (Ctrl+double-click)
+            use_slots: If True, add as slot instead of replacing (Shift+double-click, actions only)
+        """
 
         animation = self._animation_model.get_animation_by_uuid(uuid)
         if not animation:
             return
 
         name = animation.get('name', 'Unknown')
+        is_pose = animation.get('is_pose', 0)
 
-        # Get options from apply panel
-        options = self._apply_panel.get_options()
-
-        # Queue animation for Blender with options
-        success = self._blender_service.queue_apply_animation(uuid, name, options)
+        if is_pose:
+            # Pose: Apply instantly with optional mirror (use_slots doesn't apply to poses)
+            blend_file_path = animation.get('blend_file_path', '')
+            success = self._blender_service.queue_apply_pose(uuid, name, blend_file_path, mirror=mirror)
+        else:
+            # Animation: Apply with options from apply panel, override mirror/slots if modifiers held
+            options = self._apply_panel.get_options()
+            if mirror:
+                options['mirror'] = True
+            if use_slots:
+                options['use_slots'] = True
+            success = self._blender_service.queue_apply_animation(uuid, name, options)
 
         if success:
-            self._status_bar.showMessage(f"Applied '{name}' to Blender")
+            item_type = "pose" if is_pose else "animation"
+            mirror_text = " (mirrored)" if mirror else ""
+            slots_text = " (as slot)" if use_slots and not is_pose else ""
+            self._status_bar.showMessage(f"Applied {item_type} '{name}'{mirror_text}{slots_text} to Blender")
         else:
             self._status_bar.showMessage(f"Failed to apply '{name}'")
             self._event_bus.report_error("blender", f"Failed to apply animation '{name}'")
@@ -554,12 +589,19 @@ class MainWindow(QMainWindow):
 
         uuid = animation.get('uuid')
         name = animation.get('name', 'Unknown')
+        is_pose = animation.get('is_pose', 0)
 
-        # Queue animation for Blender with options
-        success = self._blender_service.queue_apply_animation(uuid, name, options)
+        if is_pose:
+            # Pose: Apply instantly without options
+            blend_file_path = animation.get('blend_file_path', '')
+            success = self._blender_service.queue_apply_pose(uuid, name, blend_file_path)
+        else:
+            # Animation: Queue with options
+            success = self._blender_service.queue_apply_animation(uuid, name, options)
 
         if success:
-            self._status_bar.showMessage(f"Applied '{name}' to Blender")
+            item_type = "pose" if is_pose else "animation"
+            self._status_bar.showMessage(f"Applied {item_type} '{name}' to Blender")
         else:
             self._status_bar.showMessage(f"Failed to apply '{name}'")
             self._event_bus.report_error("blender", f"Failed to apply animation '{name}'")
@@ -636,6 +678,12 @@ class MainWindow(QMainWindow):
         """Handle error"""
         self._status_bar.showMessage(f"Error: {error_message}")
 
+    def _on_settings_changed(self, setting_name: str, value):
+        """Handle settings changes from settings dialog"""
+        if setting_name == "hide_shortcut_toggles":
+            # Update apply panel toggles visibility
+            self._apply_panel.set_shortcut_toggles_visible(not value)
+
     def _on_folder_changed(self, folder_id: int):
         """Handle animations moved to different folder"""
         # Reload ALL animations from database to get updated tags
@@ -649,7 +697,7 @@ class MainWindow(QMainWindow):
             if data:
                 folder_name = data.get('folder_name')
                 # Reapply current filter
-                if folder_name == "All Animations":
+                if folder_name == "Home":
                     self._filter_ctrl.clear_folder_filter()
                 else:
                     folder_item_id = data.get('folder_id')
@@ -667,6 +715,30 @@ class MainWindow(QMainWindow):
         self._archive_trash_ctrl.empty_trash()
 
     # ==================== EVENTS ====================
+
+    def keyPressEvent(self, event):
+        """Handle global key presses"""
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit
+
+        # 'H' toggles help overlay
+        if event.key() == Qt.Key.Key_H:
+            # Don't trigger if typing in a text input field
+            focus = self.focusWidget()
+            if not isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit)):
+                self._help_overlay.toggle()
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
+
+    def resizeEvent(self, event):
+        """Handle window resize - update help overlay size"""
+        super().resizeEvent(event)
+        if hasattr(self, '_help_overlay') and self._help_overlay.isVisible():
+            central = self.centralWidget()
+            if central:
+                self._help_overlay.setGeometry(0, 0, central.width(), central.height())
 
     def closeEvent(self, event: QCloseEvent):
         """Handle window close"""

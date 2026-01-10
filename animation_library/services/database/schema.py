@@ -14,7 +14,7 @@ from .connection import DatabaseConnection
 
 
 # Current schema version
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 
 
 class SchemaManager:
@@ -75,6 +75,10 @@ class SchemaManager:
                     self._migrate_to_v5(cursor)
                 if current_version < 6:
                     self._migrate_to_v6(cursor)
+                if current_version < 7:
+                    self._migrate_to_v7(cursor)
+                if current_version < 8:
+                    self._migrate_to_v8(cursor)
                 cursor.execute(
                     'INSERT OR REPLACE INTO schema_version (version) VALUES (?)',
                     (SCHEMA_VERSION,)
@@ -150,6 +154,12 @@ class SchemaManager:
 
                 -- Lifecycle Status (v6)
                 status TEXT DEFAULT 'none',
+
+                -- Pose flag (v7) - 0 for actions, 1 for poses
+                is_pose INTEGER DEFAULT 0,
+
+                -- Partial pose flag (v8) - 1 if pose was captured with selected bones only
+                is_partial INTEGER DEFAULT 0,
 
                 -- Timestamps
                 created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -382,6 +392,33 @@ class SchemaManager:
         """Migrate database from v5 to v6 - add lifecycle status column."""
         try:
             cursor.execute("ALTER TABLE animations ADD COLUMN status TEXT DEFAULT 'none'")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+    def _migrate_to_v7(self, cursor: sqlite3.Cursor):
+        """Migrate database from v6 to v7 - add is_pose flag for pose support."""
+        try:
+            cursor.execute("ALTER TABLE animations ADD COLUMN is_pose INTEGER DEFAULT 0")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+        # Create index for pose filtering
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_animations_is_pose ON animations(is_pose)')
+
+        # Identify and update existing poses based on frame_count
+        # Poses have frame_count = 1 (single-frame snapshots)
+        cursor.execute('''
+            UPDATE animations
+            SET is_pose = 1
+            WHERE frame_count = 1 AND is_pose = 0
+        ''')
+
+    def _migrate_to_v8(self, cursor: sqlite3.Cursor):
+        """Migrate database from v7 to v8 - add is_partial flag for partial poses."""
+        try:
+            cursor.execute("ALTER TABLE animations ADD COLUMN is_partial INTEGER DEFAULT 0")
         except sqlite3.OperationalError as e:
             if "duplicate column name" not in str(e).lower():
                 raise

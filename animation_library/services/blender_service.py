@@ -1,15 +1,25 @@
 """
-BlenderService - Communication with Blender plugin via single file
+BlenderService - Communication with Blender plugin
 
-Pattern: File-based communication (single file, replaced on each apply)
-Inspired by: Current animation_library Blender integration
+Communication Methods (in order of preference):
+1. Socket-based: Real-time TCP socket for instant application (~10-50ms latency)
+2. File-based: JSON queue files as fallback (~100-500ms latency)
+
+The service automatically tries socket communication first and falls back
+to file-based communication if the socket server is not available.
 """
 
 import json
+import logging
 import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
+
+from ..config import Config
+
+
+logger = logging.getLogger(__name__)
 
 
 class BlenderService:
@@ -20,6 +30,10 @@ class BlenderService:
     - Desktop app writes single "apply_animation.json" file (overwrites each time)
     - Blender plugin polls and processes the request
     - Plugin deletes file after processing
+
+    Queue Location:
+    - Uses .queue folder inside the library path (shared between Blender and desktop app)
+    - Falls back to system temp if no library configured
 
     File Format:
     {
@@ -38,12 +52,28 @@ class BlenderService:
     APPLY_FILE = "apply_animation.json"
 
     def __init__(self):
-        # Queue directory in system temp
-        self._queue_dir = Path(tempfile.gettempdir()) / "animation_library_queue"
-        self._queue_dir.mkdir(parents=True, exist_ok=True)
+        self._queue_dir = None
+        self._init_queue_dir()
 
         # Clean up any old queue files from previous versions
         self._cleanup_old_queue_files()
+
+    def _init_queue_dir(self):
+        """Initialize queue directory from library path"""
+        library_path = Config.load_library_path()
+        if library_path and library_path.exists():
+            # Use .queue folder inside library (shared between Blender and desktop app)
+            self._queue_dir = library_path / ".queue"
+        else:
+            # Fallback to system temp if no library configured
+            self._queue_dir = Path(tempfile.gettempdir()) / "animation_library_queue"
+
+        self._queue_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"Queue directory: {self._queue_dir}")
+
+    def refresh_queue_dir(self):
+        """Refresh queue directory (call when library path changes)"""
+        self._init_queue_dir()
 
     def _cleanup_old_queue_files(self):
         """Remove old-style queue files (apply_*.json with timestamps)"""
@@ -62,7 +92,7 @@ class BlenderService:
         options: dict = None
     ) -> bool:
         """
-        Set animation for application in Blender (replaces any previous)
+        Apply animation in Blender - tries socket first, then file-based fallback.
 
         Args:
             animation_id: Animation UUID
@@ -75,22 +105,53 @@ class BlenderService:
                 - use_slots: bool
 
         Returns:
-            True if set successfully
+            True if command sent successfully
         """
+        # Default options if not provided
+        if options is None:
+            options = {
+                "apply_mode": "NEW",
+                "mirror": False,
+                "reverse": False,
+                "selected_bones_only": False,
+                "use_slots": False
+            }
+
+        # Try socket communication first (instant)
         try:
-            # Single file - overwrites each time
+            from .socket_client import try_socket_apply
+            response = try_socket_apply(
+                animation_id=animation_id,
+                animation_name=animation_name,
+                options=options,
+                is_pose=False
+            )
+
+            if response is not None:
+                if response.get('status') == 'success':
+                    logger.info(f"Socket: Applied animation '{animation_name}'")
+                    return True
+                else:
+                    logger.warning(f"Socket: Error - {response.get('message')}")
+                    # Don't fall back on actual errors (like no armature selected)
+                    # Only fall back if socket communication itself failed
+                    return False
+        except Exception as e:
+            logger.debug(f"Socket unavailable, using file fallback: {e}")
+
+        # Fallback to file-based communication
+        return self._queue_apply_animation_file(animation_id, animation_name, options)
+
+    def _queue_apply_animation_file(
+        self,
+        animation_id: str,
+        animation_name: str,
+        options: dict
+    ) -> bool:
+        """File-based fallback for animation application"""
+        try:
             timestamp = datetime.now().isoformat()
             apply_file = self._queue_dir / self.APPLY_FILE
-
-            # Default options if not provided
-            if options is None:
-                options = {
-                    "apply_mode": "NEW",
-                    "mirror": False,
-                    "reverse": False,
-                    "selected_bones_only": False,
-                    "use_slots": False
-                }
 
             request_data = {
                 "status": "pending",
@@ -103,9 +164,88 @@ class BlenderService:
             with open(apply_file, 'w') as f:
                 json.dump(request_data, f, indent=2)
 
+            logger.debug(f"Wrote queue file: {apply_file}")
             return True
 
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error writing queue file: {e}")
+            return False
+
+    def queue_apply_pose(
+        self,
+        pose_id: str,
+        pose_name: str,
+        blend_file_path: str,
+        mirror: bool = False
+    ) -> bool:
+        """
+        Apply a pose in Blender - tries socket first, then file-based fallback.
+
+        Poses are applied instantly (no keyframe insertion, just transforms).
+
+        Args:
+            pose_id: Pose UUID
+            pose_name: Pose name (for display)
+            blend_file_path: Path to the .blend file containing the pose action
+            mirror: If True, apply pose mirrored (swap L/R bones)
+
+        Returns:
+            True if command sent successfully
+        """
+        # Try socket communication first (instant)
+        try:
+            from .socket_client import try_socket_apply
+            response = try_socket_apply(
+                animation_id=pose_id,
+                animation_name=pose_name,
+                is_pose=True,
+                blend_file_path=blend_file_path,
+                mirror=mirror
+            )
+
+            if response is not None:
+                if response.get('status') == 'success':
+                    logger.info(f"Socket: Applied pose '{pose_name}'")
+                    return True
+                else:
+                    logger.warning(f"Socket: Error - {response.get('message')}")
+                    return False
+        except Exception as e:
+            logger.debug(f"Socket unavailable, using file fallback: {e}")
+
+        # Fallback to file-based communication
+        return self._queue_apply_pose_file(pose_id, pose_name, blend_file_path, mirror)
+
+    def _queue_apply_pose_file(
+        self,
+        pose_id: str,
+        pose_name: str,
+        blend_file_path: str,
+        mirror: bool = False
+    ) -> bool:
+        """File-based fallback for pose application"""
+        try:
+            timestamp = datetime.now().isoformat()
+            apply_file = self._queue_dir / self.APPLY_FILE
+
+            request_data = {
+                "type": "pose",  # Mark as pose request
+                "status": "pending",
+                "animation_id": pose_id,  # Use same key for compatibility
+                "animation_name": pose_name,
+                "blend_file_path": blend_file_path,
+                "timestamp": timestamp,
+                "options": {"mirror": mirror}
+            }
+
+            with open(apply_file, 'w') as f:
+                json.dump(request_data, f, indent=2)
+
+            logger.debug(f"Wrote pose queue file: {apply_file}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error writing pose queue file: {e}")
             return False
 
     def get_queue_size(self) -> int:
@@ -138,6 +278,35 @@ class BlenderService:
             Path to queue directory
         """
         return self._queue_dir
+
+    def is_blender_connected(self) -> bool:
+        """
+        Check if Blender is connected via socket.
+
+        Returns:
+            True if socket connection is available
+        """
+        try:
+            from .socket_client import get_socket_client
+            client = get_socket_client()
+            return client.ping()
+        except Exception:
+            return False
+
+    def get_blender_status(self) -> Optional[Dict[str, Any]]:
+        """
+        Get Blender status via socket.
+
+        Returns:
+            Dict with Blender info, or None if not connected
+        """
+        try:
+            from .socket_client import get_socket_client
+            client = get_socket_client()
+            return client.get_status()
+        except Exception:
+            return None
+
 
 # Singleton instance
 _blender_service_instance: Optional[BlenderService] = None

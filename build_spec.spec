@@ -22,6 +22,9 @@ PROJECT_ROOT = Path(SPECPATH)
 
 # Data files to include
 datas = [
+    # Application icon (for window/taskbar icon at runtime)
+    (str(PROJECT_ROOT / 'AL.ico'), '.'),
+
     # Assets (Icon.png for about/wizard)
     (str(PROJECT_ROOT / 'assets'), 'assets'),
 

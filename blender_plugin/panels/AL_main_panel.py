@@ -251,6 +251,36 @@ class ANIMLIB_PT_main_panel(Panel):
                     disabled_row = action_details_box.row()
                     disabled_row.label(text="Library Not Configured", icon='ERROR')
 
+        # 2.5. Pose Capture Section (shows when armature is selected, even without action)
+        if armature and armature.type == 'ARMATURE' and library_path:
+            layout.separator()
+            pose_box = layout.box()
+            pose_header = pose_box.row()
+            pose_header.label(text="Capture Pose", icon='ARMATURE_DATA')
+
+            # Pose form
+            pose_form = pose_box.column(align=True)
+            pose_form.prop(scene, "animlib_pose_name", icon='SORTALPHA')
+            pose_form.prop(scene, "animlib_selected_bones_only", icon='RESTRICT_SELECT_OFF')
+
+            # Show selected bone count if capturing selected only
+            if scene.animlib_selected_bones_only and context.mode == 'POSE':
+                selected_bones = context.selected_pose_bones
+                if selected_bones:
+                    pose_form.label(text=f"Will capture {len(selected_bones)} bones", icon='INFO')
+                else:
+                    pose_form.label(text="No bones selected!", icon='ERROR')
+
+            # Capture Pose button
+            if not context.window_manager.animlib_is_capturing:
+                capture_pose_row = pose_box.row()
+                capture_pose_row.scale_y = 1.5
+                capture_pose_row.operator("animlib.capture_pose", text="Capture Pose", icon='REC')
+            else:
+                status_row = pose_box.row()
+                status_row.scale_y = 1.5
+                status_row.label(text="Capturing...", icon='SORTTIME')
+
         # 3. Collapsible Desktop Integration Section
         layout.separator()
         integration_box = layout.box()

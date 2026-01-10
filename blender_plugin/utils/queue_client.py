@@ -68,9 +68,28 @@ class AnimationLibraryQueueClient:
 
     def __init__(self):
         """Initialize queue client"""
-        self.queue_dir = Path(tempfile.gettempdir()) / "animation_library_queue"
+        self.queue_dir = None
+        self._init_queue_dir()
+
+    def _init_queue_dir(self):
+        """Initialize queue directory from library path"""
+        from ..preferences import get_library_path
+
+        library_path = get_library_path()
+
+        if library_path:
+            # Use .queue folder inside library (shared between Blender and desktop app)
+            self.queue_dir = Path(library_path) / ".queue"
+        else:
+            # Fallback to system temp if no library configured
+            self.queue_dir = Path(tempfile.gettempdir()) / "animation_library_queue"
+
         self.queue_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"AnimationLibraryQueueClient initialized. Queue directory: {self.queue_dir}")
+
+    def refresh_queue_dir(self):
+        """Refresh queue directory (call when library path changes)"""
+        self._init_queue_dir()
 
     def get_pending_apply_requests(self):
         """
@@ -80,6 +99,19 @@ class AnimationLibraryQueueClient:
             list: List of Path objects for pending apply_*.json files,
                   sorted by modification time (newest first)
         """
+        # Always get fresh library path (preferences may have loaded after init)
+        from ..preferences import get_library_path
+        library_path = get_library_path()
+
+        if library_path:
+            current_queue_dir = Path(library_path) / ".queue"
+            if current_queue_dir != self.queue_dir:
+                self.queue_dir = current_queue_dir
+                self.queue_dir.mkdir(parents=True, exist_ok=True)
+
+        if not self.queue_dir or not self.queue_dir.exists():
+            return []
+
         try:
             pending_files = list(self.queue_dir.glob("apply_*.json"))
             # Sort by modification time (newest first)
@@ -218,5 +250,27 @@ class AnimationLibraryQueueClient:
         return score / total_checks if total_checks > 0 else 0.0
 
 
-# Global instance
-animation_queue_client = AnimationLibraryQueueClient()
+# Lazy singleton - don't create at import time (preferences not available yet)
+_animation_queue_client = None
+
+
+def get_animation_queue_client():
+    """Get the global AnimationLibraryQueueClient instance (lazy initialization)"""
+    global _animation_queue_client
+    if _animation_queue_client is None:
+        _animation_queue_client = AnimationLibraryQueueClient()
+    return _animation_queue_client
+
+
+# For backwards compatibility - this property-like access triggers lazy init
+class _LazyQueueClient:
+    """Lazy proxy for animation_queue_client - defers creation until first access"""
+
+    def __getattr__(self, name):
+        return getattr(get_animation_queue_client(), name)
+
+    def __repr__(self):
+        return repr(get_animation_queue_client())
+
+
+animation_queue_client = _LazyQueueClient()

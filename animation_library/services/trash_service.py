@@ -15,6 +15,7 @@ from typing import List, Dict, Any, Optional, Tuple
 
 from ..config import Config
 from .database_service import get_database_service, DatabaseService
+from .utils.path_utils import get_archive_folder, get_trash_folder
 
 
 logger = logging.getLogger(__name__)
@@ -39,40 +40,6 @@ class TrashService:
         """
         self._db = db_service or get_database_service()
 
-    def _get_library_path(self) -> Optional[Path]:
-        """Get configured library path"""
-        return Config.load_library_path()
-
-    def _get_trash_folder(self) -> Optional[Path]:
-        """
-        Get .trash folder path, creating if needed
-
-        Returns:
-            Path to .trash folder or None if library not configured
-        """
-        library_path = self._get_library_path()
-        if not library_path:
-            return None
-
-        trash_folder = library_path / Config.TRASH_FOLDER_NAME
-        trash_folder.mkdir(parents=True, exist_ok=True)
-        return trash_folder
-
-    def _get_archive_folder(self) -> Optional[Path]:
-        """
-        Get .archive folder path, creating if needed
-
-        Returns:
-            Path to .archive folder or None if library not configured
-        """
-        library_path = self._get_library_path()
-        if not library_path:
-            return None
-
-        archive_folder = library_path / Config.ARCHIVE_FOLDER_NAME
-        archive_folder.mkdir(parents=True, exist_ok=True)
-        return archive_folder
-
     def _is_hard_delete_allowed(self) -> bool:
         """Check if hard delete is allowed based on settings"""
         return Config.load_allow_hard_delete()
@@ -94,7 +61,7 @@ class TrashService:
                 return False, "Item not found in trash"
 
             # Get paths
-            archive_folder = self._get_archive_folder()
+            archive_folder = get_archive_folder()
             if not archive_folder:
                 return False, "Library path not configured"
 

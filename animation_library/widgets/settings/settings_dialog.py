@@ -46,6 +46,13 @@ class SettingsDialog(QDialog):
         """Create UI layout"""
         layout = QVBoxLayout(self)
 
+        # Sharp button style for dialog buttons
+        button_style = """
+            QPushButton {
+                border-radius: 0px;
+            }
+        """
+
         # Tab widget
         self.tab_widget = QTabWidget()
 
@@ -78,6 +85,10 @@ class SettingsDialog(QDialog):
         button_box.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(
             self._on_apply
         )
+
+        # Apply sharp style to dialog buttons
+        for button in button_box.buttons():
+            button.setStyleSheet(button_style)
 
         layout.addWidget(button_box)
 
