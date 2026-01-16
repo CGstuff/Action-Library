@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Action Library",
     "author": "CG_stuff",
-    "version": (1, 3, 1),
+    "version": (1, 3, 2),
     "blender": (4, 5, 0),  # Minimum version; supports up to 5.0+
     "location": "3D Viewport > Sidebar > Animation Library",
     "description": "Capture and manage Actions across different rig types",

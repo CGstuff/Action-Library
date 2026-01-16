@@ -17,7 +17,7 @@ class Config:
 
     # Application metadata
     APP_NAME: Final[str] = "Action Library"
-    APP_VERSION: Final[str] = "1.3.1"
+    APP_VERSION: Final[str] = "1.3.2"
     APP_AUTHOR: Final[str] = "CGstuff"
 
     # Paths
