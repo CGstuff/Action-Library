@@ -329,7 +329,7 @@ class AddonInstallerService:
                 except:
                     pass
 
-    def check_addon_installed(self, blender_path: str) -> Tuple[bool, Optional[Path]]:
+    def check_addon_installed(self, blender_path: str) -> Tuple[bool, Optional[Path], Optional[Tuple[int, int, int]]]:
         """
         Check if the addon is currently installed
 
@@ -337,11 +337,11 @@ class AddonInstallerService:
             blender_path: Path to blender.exe
 
         Returns:
-            Tuple of (is_installed, installation_path)
+            Tuple of (is_installed, installation_path, version_tuple)
         """
         addons_dir = self.get_blender_addons_directory(blender_path)
         if not addons_dir:
-            return False, None
+            return False, None, None
 
         addon_dest_path = addons_dir / self.ADDON_FOLDER_NAME
 
@@ -349,6 +349,28 @@ class AddonInstallerService:
             # Check if it has the __init__.py file
             init_file = addon_dest_path / "__init__.py"
             if init_file.exists():
-                return True, addon_dest_path
+                # Parse version from __init__.py
+                try:
+                    with open(init_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        
+                    # Simple parsing for bl_info dictionary
+                    # Looking for: "version": (1, 3, 1),
+                    import re
+                    match = re.search(r'"version"\s*:\s*\((\d+),\s*(\d+),\s*(\d+)\)', content)
+                    if match:
+                        version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+                        return True, addon_dest_path, version
+                    
+                    # Try finding without quotes (some styles)
+                    match = re.search(r"'version'\s*:\s*\((\d+),\s*(\d+),\s*(\d+)\)", content)
+                    if match:
+                        version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+                        return True, addon_dest_path, version
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to parse installed addon version: {e}")
+                
+                return True, addon_dest_path, None
 
-        return False, None
+        return False, None, None

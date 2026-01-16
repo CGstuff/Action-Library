@@ -424,6 +424,29 @@ def _execute_command(command: dict, client_id: str) -> dict:
             }
         }
 
+    if command_type == 'get_version':
+        # Get addon version from bl_info in __init__ if possible, or use hardcoded fallback
+        try:
+            addon_name = __name__.split('.')[0]
+            # Since we are inside a package, getting bl_info can be tricky via __init__
+            # But we can check bpy.context.preferences.addons[addon_name]
+            # However, simpler is just to report the version we know
+            # Ideally this should match bl_info
+            from ... import bl_info
+            version = bl_info.get("version", (0, 0, 0))
+        except ImportError:
+            version = (0, 0, 0)
+        except Exception:
+            version = (0, 0, 0)
+            
+        return {
+            'status': 'success',
+            'data': {
+                'version': version,
+                'version_str': f"{version[0]}.{version[1]}.{version[2]}"
+            }
+        }
+
     return {
         'status': 'error',
         'message': f'Unknown command type: {command_type}'

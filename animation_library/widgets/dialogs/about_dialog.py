@@ -5,19 +5,20 @@ import os
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QSizePolicy,
-    QFrame, QPushButton, QApplication
+    QFrame, QPushButton, QApplication, QMessageBox
 )
-from PyQt6.QtGui import QPixmap
-from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPixmap, QDesktopServices
+from PyQt6.QtCore import Qt, QUrl
 
 from ...config import Config
+from ...services.update_service import UpdateService
 
 
 class AboutDialog(QDialog):
     """About dialog showing application information"""
 
     WIDTH = 500
-    HEIGHT = 512
+    HEIGHT = 600
 
     def __init__(self, parent, theme_manager):
         super().__init__(parent)
@@ -37,7 +38,7 @@ class AboutDialog(QDialog):
         self.setModal(True)
 
         # Fixed size & disable maximize
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        # self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setWindowFlags(
             Qt.WindowType.Dialog |
             Qt.WindowType.WindowTitleHint |
@@ -193,11 +194,46 @@ class AboutDialog(QDialog):
         layout.addWidget(info_frame)
         layout.addStretch()
 
+        # Update button
+        self._update_btn = QPushButton("Check for Updates")
+        self._update_btn.setFixedHeight(40)
+        self._update_btn.clicked.connect(self._on_check_updates)
+        layout.addWidget(self._update_btn)
+
         # Close button
         close_btn = QPushButton("Close")
         close_btn.setFixedHeight(40)
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn)
 
+    def _on_check_updates(self):
+        """Check for updates"""
+        self._update_btn.setText("Checking...")
+        self._update_btn.setEnabled(False)
+        QApplication.processEvents() # Force UI update
+
+        service = UpdateService()
+        has_update, latest_version, url = service.check_for_updates()
+
+        self._update_btn.setText("Check for Updates")
+        self._update_btn.setEnabled(True)
+
+        if has_update:
+            reply = QMessageBox.question(
+                self,
+                "Update Available",
+                f"A new version ({latest_version}) is available!\n\n"
+                "Do you want to open the download page?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                QDesktopServices.openUrl(QUrl(url))
+        else:
+            QMessageBox.information(
+                self,
+                "Up to Date",
+                f"You are running the latest version ({Config.APP_VERSION})."
+            )
 
 __all__ = ['AboutDialog']

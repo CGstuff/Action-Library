@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Addon Installation** - The installer now installs the plugin as a zip (ensuring persistent preferences), activates it, and automatically configures the library storage path and executable location.
+- **Update Notification** - Added a "Check for Updates" button in the About dialog.
+- **Persistent Configuration** - Settings and database configuration are now stored in the user's AppData folder, ensuring they persist across future application updates.
 
 ## [1.3.0] - 2026-01-15
 

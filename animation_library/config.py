@@ -17,7 +17,7 @@ class Config:
 
     # Application metadata
     APP_NAME: Final[str] = "Action Library"
-    APP_VERSION: Final[str] = "1.3.0"
+    APP_VERSION: Final[str] = "1.3.1"
     APP_AUTHOR: Final[str] = "CGstuff"
 
     # Paths
@@ -103,9 +103,30 @@ class Config:
 
     @classmethod
     def get_user_data_dir(cls) -> Path:
-        """Get user data directory (in app directory for portability)"""
-        # Use app directory for portable installation (not AppData)
-        user_dir = cls.APP_ROOT.parent / 'data'
+        """
+        Get user data directory.
+        
+        Uses system AppData/Local (Windows) or .local/share (Linux)
+        to ensure settings persist across application updates.
+        """
+        import sys
+        
+        # Check if we should override with portable mode (optional flag file)
+        # If 'portable.txt' exists next to exe, stick to local folder
+        portable_flag = cls.APP_ROOT.parent / 'portable.txt'
+        if portable_flag.exists():
+            user_dir = cls.APP_ROOT.parent / 'data'
+        else:
+            # Standard persistent storage
+            if sys.platform == 'win32':
+                base_path = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')))
+                user_dir = base_path / 'ActionLibrary'
+            elif sys.platform == 'darwin':
+                user_dir = Path.home() / 'Library' / 'Application Support' / 'ActionLibrary'
+            else:
+                # Linux / Unix
+                user_dir = Path.home() / '.local' / 'share' / 'ActionLibrary'
+
         user_dir.mkdir(parents=True, exist_ok=True)
         return user_dir
 

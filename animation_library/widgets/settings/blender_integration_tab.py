@@ -34,6 +34,10 @@ class BlenderIntegrationTab(QWidget):
         self.addon_installer = AddonInstallerService()
 
         self._init_ui()
+        
+        # Verify immediately if path exists
+        if self.blender_path:
+            self.verify_blender()
 
     def _init_ui(self):
         """Initialize UI layout"""
@@ -192,9 +196,72 @@ class BlenderIntegrationTab(QWidget):
             self.blender_status_label.setText(f"✓ {message}")
             self.blender_status_label.setStyleSheet("color: green;")
             self.blender_path = blender_path
+            
+            # Check addon status after valid blender found
+            self.check_addon_status()
         else:
             self.blender_status_label.setText(f"✗ {message}")
             self.blender_status_label.setStyleSheet("color: red;")
+
+    def check_addon_status(self):
+        """Check installed addon version against app version"""
+        if not self.blender_path:
+            return
+
+        is_installed, path, installed_version = self.addon_installer.check_addon_installed(self.blender_path)
+        
+        # Get app version
+        try:
+            app_version_str = Config.APP_VERSION.split('-')[0]
+            app_parts = [int(x) for x in app_version_str.split('.')]
+            app_version = tuple(app_parts)
+        except:
+            app_version = (0, 0, 0)
+
+        # Find install button
+        install_btn = None
+        for child in self.findChildren(QPushButton):
+            if "Install Addon" in child.text() or "Update Addon" in child.text():
+                install_btn = child
+                break
+        
+        if not install_btn:
+            return
+
+        if is_installed:
+            if installed_version:
+                if installed_version < app_version:
+                    # Update available
+                    install_btn.setText(f"Update Addon (v{Config.APP_VERSION} Available)")
+                    install_btn.setStyleSheet("""
+                        QPushButton {
+                            border-radius: 0px;
+                            background-color: #FF9800; /* Orange for update */
+                            color: white;
+                            font-weight: bold;
+                        }
+                        QPushButton:hover {
+                            background-color: #F57C00;
+                        }
+                    """)
+                    self.addon_status_label.setText(f"⚠ Update available: v{installed_version[0]}.{installed_version[1]}.{installed_version[2]} -> v{Config.APP_VERSION}")
+                    self.addon_status_label.setStyleSheet("color: orange;")
+                else:
+                    # Up to date
+                    install_btn.setText("Re-install Addon")
+                    install_btn.setStyleSheet(self._button_style)
+                    self.addon_status_label.setText(f"✓ Installed (v{installed_version[0]}.{installed_version[1]}.{installed_version[2]})")
+                    self.addon_status_label.setStyleSheet("color: green;")
+            else:
+                # Installed but unknown version
+                install_btn.setText("Update/Re-install Addon")
+                self.addon_status_label.setText("✓ Installed (Unknown version)")
+                self.addon_status_label.setStyleSheet("color: green;")
+        else:
+            # Not installed
+            install_btn.setText("Install Addon")
+            install_btn.setStyleSheet(self._button_style)
+            self.addon_status_label.setText("")
 
     def install_addon(self):
         """Install addon to Blender"""
@@ -243,6 +310,9 @@ class BlenderIntegrationTab(QWidget):
 
             # Save Blender path after successful installation
             self.save_settings()
+            
+            # Refresh status button
+            self.check_addon_status()
         else:
             self.addon_status_label.setText(f"✗ Installation failed")
             self.addon_status_label.setStyleSheet("color: red;")

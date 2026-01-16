@@ -278,6 +278,24 @@ class BlenderSocketClient:
 
         return None
 
+    def get_plugin_version(self) -> Optional[tuple]:
+        """
+        Get Blender plugin version.
+
+        Returns:
+            Tuple (major, minor, patch) or None if failed
+        """
+        response = self.send_command({'type': 'get_version'})
+
+        if response and response.get('status') == 'success':
+            data = response.get('data', {})
+            version = data.get('version')
+            if isinstance(version, list):
+                return tuple(version)
+            return version
+
+        return None
+
     # ==================== POSE BLENDING ====================
 
     def blend_pose_start(

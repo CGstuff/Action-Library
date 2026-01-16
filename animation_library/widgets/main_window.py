@@ -22,8 +22,10 @@ from ..services.blender_service import get_blender_service
 from ..services.archive_service import get_archive_service
 from ..services.trash_service import get_trash_service
 from ..services.thumbnail_loader import get_thumbnail_loader
+from ..services.update_service import UpdateService
 from ..themes.theme_manager import get_theme_manager
 from ..models.animation_list_model import AnimationListModel
+import threading
 from ..models.animation_filter_proxy_model import AnimationFilterProxyModel
 from ..views.animation_view import AnimationView
 from .header_toolbar import HeaderToolbar
