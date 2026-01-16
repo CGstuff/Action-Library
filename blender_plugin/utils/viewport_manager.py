@@ -50,8 +50,17 @@ class ViewportManager:
                             space.show_region_toolbar = False
                             space.show_region_header = False
 
-                            # Configure lighting
-                            ViewportManager._setup_lighting(space, prefs)
+                            # Use STUDIO lighting for quality previews
+                            space.shading.light = 'STUDIO'
+                            # Try studio lights in order of preference
+                            for light in ['studio.sl', 'rim.sl', 'outdoor.sl', 'Default']:
+                                try:
+                                    space.shading.studio_light = light
+                                    logger.debug(f"Using studio light: {light}")
+                                    break
+                                except TypeError:
+                                    continue
+                            space.shading.studiolight_intensity = 1.0
 
                             return viewport_settings
                     break
@@ -61,19 +70,6 @@ class ViewportManager:
         except Exception as e:
             logger.error(f"Error setting up viewport for preview: {e}")
             return {}
-
-    @staticmethod
-    def _setup_lighting(space, prefs: Dict) -> None:
-        """Setup viewport lighting based on preferences"""
-        if prefs.get('use_lighting', True):
-            if prefs.get('quality', 'MEDIUM') == 'LOW':
-                space.shading.light = 'FLAT'
-            else:
-                space.shading.light = 'STUDIO'
-                space.shading.studio_light = 'forest.exr'
-                space.shading.studiolight_intensity = 1.0
-        else:
-            space.shading.light = 'FLAT'
 
     @staticmethod
     def restore_viewport_settings(viewport_settings: Dict) -> None:
@@ -127,18 +123,41 @@ class ViewportManager:
             keyframe_start: Start frame
             keyframe_end: End frame
         """
-        try:
-            # Store current frame and timeline
-            original_frame = scene.frame_current
-            original_start = scene.frame_start
-            original_end = scene.frame_end
+        original_frame = scene.frame_current
+        original_start = scene.frame_start
+        original_end = scene.frame_end
 
+        try:
             # Temporarily set the scene range for the animation render only
             scene.frame_start = keyframe_start
             scene.frame_end = keyframe_end
 
-            # Use built-in OpenGL animation render
-            bpy.ops.render.opengl(animation=True)
+            frame_count = keyframe_end - keyframe_start + 1
+            logger.info(f"[RENDER] Starting OpenGL animation render: {frame_count} frames ({keyframe_start}-{keyframe_end})")
+
+            # Find a 3D View area for context override (required for Blender 4.0+/5.0)
+            view3d_area = None
+            view3d_region = None
+            for area in bpy.context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    view3d_area = area
+                    for region in area.regions:
+                        if region.type == 'WINDOW':
+                            view3d_region = region
+                            break
+                    break
+
+            # Use context override with view_context=True for proper viewport render
+            if view3d_area and view3d_region:
+                with bpy.context.temp_override(area=view3d_area, region=view3d_region):
+                    result = bpy.ops.render.opengl(animation=True, view_context=True)
+                    logger.debug(f"render.opengl result: {result}")
+            else:
+                logger.warning("No 3D View found for viewport render, trying without override")
+                result = bpy.ops.render.opengl(animation=True, view_context=True)
+                logger.debug(f"render.opengl result: {result}")
+
+            logger.info("[RENDER] OpenGL animation render complete")
 
             # Immediately restore original timeline
             scene.frame_start = original_start
@@ -147,6 +166,8 @@ class ViewportManager:
 
         except Exception as e:
             logger.error(f"Error rendering keyframe range: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             # Make sure we restore timeline even if there's an error
             try:
                 scene.frame_start = original_start

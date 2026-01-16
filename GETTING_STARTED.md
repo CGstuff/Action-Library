@@ -2,6 +2,18 @@
 
 This guide walks you through setting up Action Library from first launch to capturing your first animation.
 
+> **⚠️ Upgrading from v1.2 or earlier?**
+>
+> Version 1.3 has a new database format that is **not backwards compatible**.
+>
+> 1. **Before updating**: Apply your animations to Blender and save them as .blend files
+> 2. **Install v1.3** with a fresh storage folder
+> 3. **Re-capture** your animations from Blender into the new library
+>
+> See the [Changelog](CHANGELOG.md) for details.
+
+---
+
 ## Prerequisites
 
 - **Blender 4.5 or later** (supports up to Blender 5.0+)
@@ -209,6 +221,34 @@ For pipeline workflows, you can set a status on animations:
 > **Solo Artists:** You can ignore status entirely—new animations default to "None" (no badge shown on cards).
 
 See the [Studio Guide](STUDIO_GUIDE.md) for detailed pipeline integration.
+
+### Renaming Animations
+
+Click the **Rename** button in the Metadata Panel (next to the animation name):
+
+- **Edit the base name** - Change `hero_walk` to `hero_run`
+- **Version stays locked** - You cannot change `v001` to `v002` (versions are immutable)
+- **Preview** - See the new name before applying
+- **Apply to lineage** - Optionally rename all versions at once
+
+> **Studio Naming:** If you use the Studio Naming Engine, the rename dialog shows template fields instead of a simple text input. See the [Studio Guide](STUDIO_GUIDE.md) for details.
+
+### Version Comparison
+
+Compare two versions of an animation side-by-side:
+
+1. Select an animation → **View Lineage**
+2. Click **Compare**
+3. Select 2 versions
+4. Videos play in sync - great for spotting differences
+
+### Version Notes
+
+Add notes to track changes per version:
+
+1. **View Lineage** → Select a version
+2. Type notes in the **Notes** field
+3. Click **Save Notes**
 
 ---
 

@@ -7,12 +7,15 @@ Inspired by: Hybrid plan + Maya Studio Library patterns
 
 import time
 from enum import IntEnum
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from PyQt6.QtCore import (
     QAbstractListModel, QModelIndex, Qt, QMimeData, QByteArray
 )
 
 from ..config import Config
+from ..services.database_service import get_database_service
+from ..services.notes_database import get_notes_database
 
 
 class AnimationRole(IntEnum):
@@ -75,6 +78,10 @@ class AnimationRole(IntEnum):
     IsPoseRole = Qt.ItemDataRole.UserRole + 95
     IsPartialRole = Qt.ItemDataRole.UserRole + 96
 
+    # Review notes indicators
+    HasNotesRole = Qt.ItemDataRole.UserRole + 97
+    UnresolvedCommentCountRole = Qt.ItemDataRole.UserRole + 98
+
     # Complete data dict
     AnimationDataRole = Qt.ItemDataRole.UserRole + 100
 
@@ -96,13 +103,24 @@ class AnimationListModel(QAbstractListModel):
         view.setModel(model)
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, db_service=None):
         super().__init__(parent)
         self._animations: List[Dict[str, Any]] = []
+        self._db_service = db_service  # Lazy init - use get_db_service()
 
         # Performance monitoring (Maya-inspired)
         self._load_time: float = 0.0
         self._data_access_count: int = 0
+
+        # Cache for animations with notes (for badge display)
+        self._animations_with_notes: set = set()
+        self._unresolved_counts: dict = {}
+
+    def _get_db_service(self):
+        """Get database service (lazy initialization)"""
+        if self._db_service is None:
+            self._db_service = get_database_service()
+        return self._db_service
 
     def set_animations(self, animations: List[Dict[str, Any]]):
         """
@@ -118,6 +136,30 @@ class AnimationListModel(QAbstractListModel):
         self.endResetModel()
 
         self._load_time = (time.time() - start_time) * 1000  # Convert to ms
+
+        # Refresh notes cache
+        self.refresh_notes_cache()
+
+    def refresh_notes_cache(self, emit_change: bool = False):
+        """
+        Refresh the cache of animations with notes/drawovers and unresolved counts.
+
+        Args:
+            emit_change: If True, emit dataChanged for all items to trigger repaint
+        """
+        try:
+            notes_db = get_notes_database()
+            self._animations_with_notes = notes_db.get_animations_with_notes()
+            self._unresolved_counts = notes_db.get_unresolved_counts()
+        except Exception:
+            self._animations_with_notes = set()
+            self._unresolved_counts = {}
+
+        if emit_change and len(self._animations) > 0:
+            # Notify view that data changed (for badge updates)
+            top_left = self.index(0, 0)
+            bottom_right = self.index(len(self._animations) - 1, 0)
+            self.dataChanged.emit(top_left, bottom_right)
 
     def append_animation(self, animation: Dict[str, Any]):
         """
@@ -179,9 +221,7 @@ class AnimationListModel(QAbstractListModel):
         Returns:
             True if refreshed, False if not found
         """
-        from ..services.database_service import get_database_service
-
-        db_service = get_database_service()
+        db_service = self._get_db_service()
         updated_data = db_service.get_animation_by_uuid(uuid)
 
         if updated_data:
@@ -290,10 +330,24 @@ class AnimationListModel(QAbstractListModel):
             return animation.get('json_file_path')
 
         elif role == AnimationRole.PreviewPathRole:
-            return animation.get('preview_path')
+            # Resolve preview path (checks library and archive folders)
+            stored_path = animation.get('preview_path')
+            if stored_path and Path(stored_path).exists():
+                return stored_path
+            # Try to resolve actual path for archived versions
+            db_service = self._get_db_service()
+            resolved = db_service.animations.resolve_preview_file(animation)
+            return str(resolved) if resolved else stored_path
 
         elif role == AnimationRole.ThumbnailPathRole:
-            return animation.get('thumbnail_path')
+            # Resolve thumbnail path (checks library and archive folders)
+            stored_path = animation.get('thumbnail_path')
+            if stored_path and Path(stored_path).exists():
+                return stored_path
+            # Try to resolve actual path for archived versions
+            db_service = self._get_db_service()
+            resolved = db_service.animations.resolve_thumbnail_file(animation)
+            return str(resolved) if resolved else stored_path
 
         elif role == AnimationRole.FileSizeMBRole:
             return animation.get('file_size_mb')
@@ -355,6 +409,14 @@ class AnimationListModel(QAbstractListModel):
 
         elif role == AnimationRole.IsPartialRole:
             return animation.get('is_partial', 0)
+
+        elif role == AnimationRole.HasNotesRole:
+            uuid = animation.get('uuid')
+            return uuid in self._animations_with_notes if uuid else False
+
+        elif role == AnimationRole.UnresolvedCommentCountRole:
+            uuid = animation.get('uuid')
+            return self._unresolved_counts.get(uuid, 0) if uuid else 0
 
         elif role == AnimationRole.AnimationDataRole:
             return animation

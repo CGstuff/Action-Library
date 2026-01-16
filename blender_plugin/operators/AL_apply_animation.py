@@ -18,6 +18,31 @@ from ..preferences.AL_preferences import get_library_path
 # Initialize logger
 logger = get_logger()
 
+
+def get_quaternion_at_frame(action, bone_name, frame):
+    """
+    Read all 4 quaternion components from fcurves at a given frame.
+
+    Args:
+        action: Blender action to read from
+        bone_name: Name of the bone
+        frame: Frame number to evaluate at
+
+    Returns:
+        mathutils.Quaternion with the rotation at that frame
+    """
+    from mathutils import Quaternion
+
+    quat_path = f'pose.bones["{bone_name}"].rotation_quaternion'
+    components = [1.0, 0.0, 0.0, 0.0]  # Default quaternion (identity): W=1, X=0, Y=0, Z=0
+
+    for i in range(4):
+        fcurve = find_action_fcurve(action, quat_path, index=i)
+        if fcurve:
+            components[i] = fcurve.evaluate(frame)
+
+    return Quaternion(components)
+
 class ANIMLIB_OT_apply_animation(Operator):
     """Apply selected Action to current armature"""
     bl_idname = "animlib.apply_animation"
@@ -73,26 +98,66 @@ class ANIMLIB_OT_apply_animation(Operator):
             
             # Load animation metadata from JSON
             library_dir = Path(library_path)
-            
-            # Look for animation in new unified structure
-            # First try library folder (root level)
-            animation_folder = library_dir / "library" / self.animation_id
-            json_file = animation_folder / f"{self.animation_id}.json"
-            
-            # If not found in library, search in animations subfolders  
-            if not json_file.exists():
-                animations_dir = library_dir / "animations"
-                if animations_dir.exists():
-                    # Search for the animation ID in any subfolder
-                    for root_path in animations_dir.rglob(self.animation_id):
-                        if root_path.is_dir():
-                            potential_json = root_path / f"{self.animation_id}.json"
-                            if potential_json.exists():
-                                json_file = potential_json
-                                animation_folder = root_path
-                                break
+            json_file = None
+            animation_folder = None
 
-            if not json_file.exists():
+            # Search library folder (hot storage) for animation by UUID
+            # Check library/actions/, library/poses/, and library/ (legacy)
+            library_folder = library_dir / "library"
+            search_folders = []
+            if library_folder.exists():
+                # New structure: library/actions/ and library/poses/
+                actions_folder = library_folder / "actions"
+                poses_folder = library_folder / "poses"
+                if actions_folder.exists():
+                    search_folders.append(actions_folder)
+                if poses_folder.exists():
+                    search_folders.append(poses_folder)
+                # Legacy: direct children of library/
+                search_folders.append(library_folder)
+
+            for search_folder in search_folders:
+                for folder in search_folder.iterdir():
+                    if folder.is_dir() and folder.name not in ('actions', 'poses'):
+                        for potential_json in folder.glob("*.json"):
+                            try:
+                                with open(potential_json, 'r') as f:
+                                    data = json.load(f)
+                                if data.get('id') == self.animation_id:
+                                    json_file = potential_json
+                                    animation_folder = folder
+                                    break
+                            except (json.JSONDecodeError, IOError):
+                                continue
+                    if json_file:
+                        break
+                if json_file:
+                    break
+
+            # Also check _versions folder (cold storage) for old versions
+            if not json_file:
+                versions_folder = library_dir / "_versions"
+                if versions_folder.exists():
+                    for anim_folder in versions_folder.iterdir():
+                        if anim_folder.is_dir():
+                            for version_folder in anim_folder.iterdir():
+                                if version_folder.is_dir():
+                                    for potential_json in version_folder.glob("*.json"):
+                                        try:
+                                            with open(potential_json, 'r') as f:
+                                                data = json.load(f)
+                                            if data.get('id') == self.animation_id:
+                                                json_file = potential_json
+                                                animation_folder = version_folder
+                                                break
+                                        except (json.JSONDecodeError, IOError):
+                                            continue
+                                if json_file:
+                                    break
+                        if json_file:
+                            break
+
+            if not json_file:
                 self.report({'ERROR'}, f"Action metadata not found: {self.animation_id}")
                 return {'CANCELLED'}
             
@@ -704,6 +769,7 @@ class ANIMLIB_OT_apply_animation(Operator):
             metadata: Dict with uuid, version_group_id, version, version_label, name, rig_type
         """
         action["animlib_imported"] = True
+        action["animlib_app_version"] = "1.3.0"  # For one-time v1.2→v1.3 migration detection
         action["animlib_uuid"] = metadata.get('uuid', '')
         action["animlib_version_group_id"] = metadata.get('version_group_id', metadata.get('uuid', ''))
         action["animlib_version"] = metadata.get('version', 1)
@@ -761,30 +827,35 @@ class ANIMLIB_OT_apply_animation(Operator):
                 logger.debug(f"INSERT mode: Filtering to selected bones: {bones_to_apply}")
 
             # ========== ROOT MOTION CONTINUITY LOGIC ==========
-            # Calculate root bone offset if feature is enabled
-            root_offsets = [0.0, 0.0, 0.0]  # X, Y, Z offsets
+            # Calculate root bone offsets for location and rotation if feature is enabled
+            root_loc_offsets = [0.0, 0.0, 0.0]  # Location X, Y, Z offsets
+            root_rot_euler_offsets = [0.0, 0.0, 0.0]  # Euler rotation X, Y, Z offsets
+            delta_quat = None  # Quaternion delta for proper quaternion composition
             root_bone_name = scene.animlib_root_bone_name
             enable_root_continuity = scene.animlib_enable_root_motion_continuity
+            enable_rotation_continuity = scene.animlib_root_motion_rotation
 
             if enable_root_continuity and root_bone_name:
                 logger.debug(f"Root motion continuity enabled for bone: {root_bone_name}")
 
-                # Get axis settings
-                apply_axes = [
-                    scene.animlib_root_motion_x,
-                    scene.animlib_root_motion_y,
-                    scene.animlib_root_motion_z
-                ]
-
-                # Build the data path for the root bone location
-                root_location_path = f'pose.bones["{root_bone_name}"].location'
-
                 # Get the frame just before insertion point for sampling previous animation end
                 previous_frame = current_frame - 1
 
-                # Calculate offset for each enabled axis
+                # Get location axis settings
+                loc_axes = [
+                    scene.animlib_root_motion_loc_x,
+                    scene.animlib_root_motion_loc_y,
+                    scene.animlib_root_motion_loc_z
+                ]
+
+                # Build the data paths for the root bone
+                root_location_path = f'pose.bones["{root_bone_name}"].location'
+                root_euler_path = f'pose.bones["{root_bone_name}"].rotation_euler'
+                root_quat_path = f'pose.bones["{root_bone_name}"].rotation_quaternion'
+
+                # Calculate LOCATION offsets for each enabled axis (addition works for location)
                 for axis_index in range(3):  # 0=X, 1=Y, 2=Z
-                    if not apply_axes[axis_index]:
+                    if not loc_axes[axis_index]:
                         continue  # Skip disabled axes
 
                     axis_name = ['X', 'Y', 'Z'][axis_index]
@@ -795,7 +866,7 @@ class ANIMLIB_OT_apply_animation(Operator):
                         previous_value = existing_fcurve.evaluate(previous_frame)
                     else:
                         previous_value = 0.0
-                        logger.debug(f"No existing {axis_name} fcurve for root bone, using 0.0")
+                        logger.debug(f"No existing location {axis_name} fcurve for root bone, using 0.0")
 
                     # Get source animation's start position for this axis
                     source_fcurve = find_action_fcurve(source_action, root_location_path, index=axis_index)
@@ -803,12 +874,54 @@ class ANIMLIB_OT_apply_animation(Operator):
                         source_start_value = source_fcurve.evaluate(frame_start)
                     else:
                         source_start_value = 0.0
-                        logger.debug(f"No source {axis_name} fcurve for root bone, using 0.0")
+                        logger.debug(f"No source location {axis_name} fcurve for root bone, using 0.0")
 
                     # Calculate offset to align source start with previous end
-                    root_offsets[axis_index] = previous_value - source_start_value
+                    root_loc_offsets[axis_index] = previous_value - source_start_value
 
-                    logger.info(f"Root motion {axis_name} offset: {root_offsets[axis_index]:.3f} (prev: {previous_value:.3f}, src: {source_start_value:.3f})")
+                    logger.info(f"Root location {axis_name} offset: {root_loc_offsets[axis_index]:.3f} (prev: {previous_value:.3f}, src: {source_start_value:.3f})")
+
+                # Calculate ROTATION offsets if rotation continuity is enabled
+                if enable_rotation_continuity:
+                    # Check if source uses quaternion or euler rotation
+                    has_quat_fcurves = any(find_action_fcurve(source_action, root_quat_path, i) for i in range(4))
+                    has_euler_fcurves = any(find_action_fcurve(source_action, root_euler_path, i) for i in range(3))
+
+                    if has_quat_fcurves:
+                        # QUATERNION: Use proper quaternion multiplication
+                        # delta = prev @ src.inverted() so that delta @ src = prev
+                        prev_quat = get_quaternion_at_frame(existing_action, root_bone_name, previous_frame)
+                        src_quat = get_quaternion_at_frame(source_action, root_bone_name, frame_start)
+                        delta_quat = prev_quat @ src_quat.inverted()
+
+                        logger.info(f"Root quaternion delta computed: {delta_quat}")
+                        logger.debug(f"  prev_quat at frame {previous_frame}: {prev_quat}")
+                        logger.debug(f"  src_quat at frame {frame_start}: {src_quat}")
+
+                    elif has_euler_fcurves:
+                        # EULER: Simple addition works for euler angles
+                        for axis_index in range(3):  # 0=X, 1=Y, 2=Z
+                            axis_name = ['X', 'Y', 'Z'][axis_index]
+
+                            # Get previous animation's end rotation for this axis
+                            existing_fcurve = find_action_fcurve(existing_action, root_euler_path, index=axis_index)
+                            if existing_fcurve:
+                                previous_value = existing_fcurve.evaluate(previous_frame)
+                            else:
+                                previous_value = 0.0
+
+                            # Get source animation's start rotation for this axis
+                            source_fcurve = find_action_fcurve(source_action, root_euler_path, index=axis_index)
+                            if source_fcurve:
+                                source_start_value = source_fcurve.evaluate(frame_start)
+                            else:
+                                source_start_value = 0.0
+
+                            # Calculate offset
+                            root_rot_euler_offsets[axis_index] = previous_value - source_start_value
+
+                            if root_rot_euler_offsets[axis_index] != 0.0:
+                                logger.info(f"Root euler {axis_name} offset: {root_rot_euler_offsets[axis_index]:.3f}")
 
             # ========== END ROOT MOTION LOGIC ==========
 
@@ -832,20 +945,33 @@ class ANIMLIB_OT_apply_animation(Operator):
                     if active_slot and hasattr(existing_fcurve, 'action_slot'):
                         existing_fcurve.action_slot = active_slot
 
-                # ========== CHECK IF THIS IS ROOT BONE LOCATION FCURVE ==========
+                # ========== CHECK IF THIS IS ROOT BONE LOCATION OR ROTATION FCURVE ==========
                 # Determine if we need to apply root motion offset to this fcurve
-                apply_root_offset = False
+                apply_loc_offset = False
+                apply_euler_offset = False
+                apply_quat_delta = False
                 root_offset_value = 0.0
 
                 if enable_root_continuity and root_bone_name:
                     bone_name = extract_bone_name_from_data_path(source_fcurve.data_path)
-                    if bone_name == root_bone_name and '.location' in source_fcurve.data_path:
-                        # This is a root bone location fcurve
+                    if bone_name == root_bone_name:
                         axis_index = source_fcurve.array_index
-                        if axis_index < 3 and root_offsets[axis_index] != 0.0:
-                            apply_root_offset = True
-                            root_offset_value = root_offsets[axis_index]
-                            logger.debug(f"Applying root offset {root_offset_value:.3f} to {bone_name}.location[{axis_index}]")
+                        if '.location' in source_fcurve.data_path:
+                            # This is a root bone location fcurve - use addition
+                            if axis_index < 3 and root_loc_offsets[axis_index] != 0.0:
+                                apply_loc_offset = True
+                                root_offset_value = root_loc_offsets[axis_index]
+                                logger.debug(f"Applying location offset {root_offset_value:.3f} to {bone_name}.location[{axis_index}]")
+                        elif '.rotation_euler' in source_fcurve.data_path:
+                            # This is a root bone euler rotation fcurve - use addition
+                            if axis_index < 3 and root_rot_euler_offsets[axis_index] != 0.0:
+                                apply_euler_offset = True
+                                root_offset_value = root_rot_euler_offsets[axis_index]
+                                logger.debug(f"Applying euler offset {root_offset_value:.3f} to {bone_name}.rotation_euler[{axis_index}]")
+                        elif '.rotation_quaternion' in source_fcurve.data_path and delta_quat is not None:
+                            # This is a root bone quaternion fcurve - use quaternion multiplication
+                            apply_quat_delta = True
+                            logger.debug(f"Will apply quaternion delta to {bone_name}.rotation_quaternion[{axis_index}]")
 
                 # Copy keyframes with frame offset and optional reversal
                 for keyframe in source_fcurve.keyframe_points:
@@ -856,10 +982,21 @@ class ANIMLIB_OT_apply_animation(Operator):
                     else:
                         new_frame = keyframe.co.x + frame_offset
 
-                    # Apply root motion offset if applicable
+                    # Determine the value to insert
                     value = keyframe.co.y
-                    if apply_root_offset:
+
+                    if apply_loc_offset or apply_euler_offset:
+                        # Location and Euler: simple addition works
                         value += root_offset_value
+                    elif apply_quat_delta:
+                        # Quaternion: use proper quaternion multiplication
+                        # Read the full quaternion at this keyframe's time from source
+                        keyframe_time = keyframe.co.x
+                        original_quat = get_quaternion_at_frame(source_action, root_bone_name, keyframe_time)
+                        # Apply the delta rotation: new_quat = delta @ original
+                        new_quat = delta_quat @ original_quat
+                        # Extract the component for this fcurve (array_index: 0=W, 1=X, 2=Y, 3=Z)
+                        value = new_quat[source_fcurve.array_index]
 
                     existing_fcurve.keyframe_points.insert(new_frame, value)
                     copied_count += 1

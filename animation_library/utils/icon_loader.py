@@ -53,6 +53,22 @@ class IconLoader:
         "action_badge": "action.svg",  # Badge for action cards
         "pose_badge": "pose.svg",  # Badge for pose cards
 
+        # Drawing tools
+        "pen": "pen.svg",
+        "line": "line.svg",
+        "arrow_draw": "arrow_draw.svg",
+        "rectangle": "rectangle.svg",
+        "circle": "circle.svg",
+        "eraser": "eraser.svg",
+        "undo": "undo.svg",
+        "redo": "redo.svg",
+        "clear": "clear.svg",
+
+        # Review notes
+        "approve": "approve.svg",
+        "comment": "comment.svg",
+        "info": "info.svg",
+
         # Folder presets
         "folder_default": "folder_presets/default.svg",
         "folder_body": "folder_presets/body.svg",

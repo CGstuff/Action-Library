@@ -5,21 +5,29 @@ Pattern: Facade pattern with backwards-compatible API
 Delegates to focused repository modules in services/database/
 """
 
+import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
 from contextlib import contextmanager
 
 from ..config import Config
 
+logger = logging.getLogger(__name__)
+
 # Import from modular database package
 from .database import (
     DatabaseConnection,
     SchemaManager,
-    migrate_legacy_database,
+    SCHEMA_VERSION,
+    VERSION_FEATURES,
+    backup_database,
+    get_backups,
+    delete_backup,
     AnimationRepository,
     FolderRepository,
     ArchiveRepository,
     TrashRepository,
+    ReviewNotesRepository,
     LibraryScanner,
 )
 
@@ -46,6 +54,7 @@ class DatabaseService:
         db.animations.get_by_uuid(uuid)
         db.folders.get_all()
         db.archive.get_count()
+        db.review_notes.get_notes_for_animation(uuid)
     """
 
     # Schema version (re-exported for compatibility)
@@ -58,13 +67,6 @@ class DatabaseService:
         Args:
             db_path: Path to database file (defaults to Config.get_database_path())
         """
-        # Check for legacy database migration first
-        if db_path is None:
-            migrate_legacy_database(
-                Config.get_database_path(),
-                Config.get_legacy_database_path()
-            )
-
         self.db_path = db_path or Config.get_database_path()
 
         # Initialize connection manager
@@ -79,6 +81,7 @@ class DatabaseService:
         self.folders = FolderRepository(self._connection)
         self.archive = ArchiveRepository(self._connection)
         self.trash = TrashRepository(self._connection)
+        self.review_notes = ReviewNotesRepository(self._connection)
 
         # Initialize library scanner
         self._scanner = LibraryScanner(self._connection, self.animations, self.folders)
@@ -164,12 +167,221 @@ class DatabaseService:
         return self.animations.get_all(folder_id)
 
     def update_animation(self, uuid: str, updates: Dict[str, Any]) -> bool:
-        """Update animation metadata."""
-        return self.animations.update(uuid, updates)
+        """Update animation metadata.
+
+        Also syncs tags to JSON file if tags are being updated,
+        which is important for version inheritance in Blender.
+        """
+        success = self.animations.update(uuid, updates)
+        if success and 'tags' in updates:
+            # Sync tags to JSON file
+            self._update_animation_json_tags(uuid, updates['tags'])
+        return success
+
+    def _update_animation_json_tags(self, animation_uuid: str, tags) -> bool:
+        """Update animation's JSON file with current tags.
+
+        This keeps the JSON file in sync with the database, which is important
+        for version inheritance when creating new versions in Blender.
+        """
+        import json
+
+        try:
+            # Get animation to find JSON file path
+            animation = self.animations.get_by_uuid(animation_uuid)
+            if not animation:
+                return False
+
+            json_path = animation.get('json_file_path')
+            if not json_path:
+                return False
+
+            json_file = Path(json_path)
+            if not json_file.exists():
+                return False
+
+            # Read existing JSON
+            with open(json_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # Update tags
+            if isinstance(tags, list):
+                data['tags'] = tags
+            elif isinstance(tags, str):
+                try:
+                    data['tags'] = json.loads(tags)
+                except json.JSONDecodeError:
+                    data['tags'] = [t.strip() for t in tags.split(',') if t.strip()]
+
+            # Write back
+            with open(json_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+
+            return True
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid JSON in {json_file}: {e}")
+            return False
+        except IOError as e:
+            logger.warning(f"Could not update tags in {json_file}: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to sync tags to JSON: {e}")
+            return False
+
+    def rename_animation(self, uuid: str, new_name: str,
+                         naming_fields: dict = None,
+                         naming_template: str = None) -> bool:
+        """
+        Rename animation - updates folder, files, and database.
+
+        This method:
+        1. Renames the folder on disk (if base name changes)
+        2. Renames all files inside (.blend, .json, .webm, .png)
+        3. Updates database with new name and file paths
+
+        Args:
+            uuid: Animation UUID
+            new_name: New animation name
+            naming_fields: Optional naming fields dict
+            naming_template: Optional naming template string
+
+        Returns:
+            True if successful
+        """
+        import re
+        import json
+        import time
+
+        animation = self.get_animation_by_uuid(uuid)
+        if not animation:
+            return False
+
+        old_name = animation['name']
+        is_pose = animation.get('is_pose', 0)
+
+        # Get current folder from blend_file_path
+        old_blend_path = animation.get('blend_file_path', '')
+        old_blend = Path(old_blend_path) if old_blend_path else None
+
+        if not old_blend or not old_blend.exists():
+            # Files don't exist - just update DB name and fields
+            updates = {'name': new_name}
+            if naming_fields:
+                updates['naming_fields'] = json.dumps(naming_fields)
+            if naming_template:
+                updates['naming_template'] = naming_template
+            return self.animations.update(uuid, updates)
+
+        old_folder = old_blend.parent
+
+        # Calculate new folder path based on base names
+        old_base = Config.get_base_name(old_name)
+        new_base = Config.get_base_name(new_name)
+
+        # Determine parent folder (actions or poses)
+        if is_pose:
+            parent = Config.get_poses_folder()
+        else:
+            parent = Config.get_actions_folder()
+
+        new_folder = parent / new_base
+
+        # Sanitize filenames
+        def sanitize(name: str) -> str:
+            safe = re.sub(r'[<>:"/\\|?*]', '_', name)
+            safe = safe.strip(' .') or 'unnamed'
+            return re.sub(r'_+', '_', safe)
+
+        safe_old = sanitize(old_name)
+        safe_new = sanitize(new_name)
+
+        # Helper to rename with retry (handles file lock delays)
+        def rename_with_retry(src: Path, dst: Path, max_retries: int = 3, delay: float = 0.2):
+            for attempt in range(max_retries):
+                try:
+                    src.rename(dst)
+                    return True
+                except PermissionError:
+                    if attempt < max_retries - 1:
+                        time.sleep(delay)
+                    else:
+                        raise
+            return False
+
+        try:
+            # Handle folder rename if base name changed
+            if old_base != new_base:
+                if new_folder.exists():
+                    # Conflict - append number to avoid overwrite
+                    counter = 2
+                    while (parent / f"{new_base}_{counter}").exists():
+                        counter += 1
+                    new_folder = parent / f"{new_base}_{counter}"
+
+                # Rename folder with retry
+                rename_with_retry(old_folder, new_folder)
+            else:
+                # Base name same, folder stays the same
+                new_folder = old_folder
+
+            # Rename files inside the folder
+            new_paths = {}
+            for ext, key in [('.blend', 'blend_file_path'), ('.json', 'json_file_path'),
+                             ('.webm', 'preview_path'), ('.png', 'thumbnail_path')]:
+                old_file = new_folder / f"{safe_old}{ext}"
+                new_file = new_folder / f"{safe_new}{ext}"
+                if old_file.exists() and old_file != new_file:
+                    rename_with_retry(old_file, new_file)
+                new_paths[key] = str(new_file)
+
+            # Update JSON file content with new name
+            json_path = Path(new_paths.get('json_file_path', ''))
+            if json_path.exists():
+                try:
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        json_data = json.load(f)
+                    json_data['name'] = new_name
+                    if naming_fields:
+                        json_data['naming_fields'] = naming_fields
+                    if naming_template:
+                        json_data['naming_template'] = naming_template
+                    with open(json_path, 'w', encoding='utf-8') as f:
+                        json.dump(json_data, f, indent=2, ensure_ascii=False)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Invalid JSON in {json_path}: {e}")
+                except IOError as e:
+                    logger.warning(f"Could not update JSON content in {json_path}: {e}")
+
+            # Update database with new name and paths
+            updates = {'name': new_name, **new_paths}
+            if naming_fields:
+                updates['naming_fields'] = json.dumps(naming_fields)
+            if naming_template:
+                updates['naming_template'] = naming_template
+
+            return self.animations.update(uuid, updates)
+
+        except PermissionError as e:
+            logger.error(f"Permission denied during rename: {e}")
+            return False
+        except OSError as e:
+            logger.error(f"File operation failed during rename: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Rename animation failed: {e}")
+            return False
 
     def delete_animation(self, uuid: str) -> bool:
         """Delete animation by UUID."""
         return self.animations.delete(uuid)
+
+    def clear_all_animations(self) -> int:
+        """Clear all animations from database for rebuild.
+
+        Returns:
+            Number of animations cleared
+        """
+        return self.animations.clear_all()
 
     def search_animations(self, query: str) -> List[Dict[str, Any]]:
         """Search animations by name or description."""
@@ -180,8 +392,76 @@ class DatabaseService:
         return self.animations.get_count(folder_id)
 
     def move_animation_to_folder(self, animation_uuid: str, folder_id: int) -> bool:
-        """Move animation to a different folder and add folder name to tags."""
-        return self.animations.move_to_folder(animation_uuid, folder_id)
+        """Move animation to a different folder and add folder name to tags.
+
+        Also updates the JSON file to keep it in sync with the database,
+        which is important for version inheritance in the Blender plugin.
+        """
+        # Update database
+        success = self.animations.move_to_folder(animation_uuid, folder_id)
+        if not success:
+            return False
+
+        # Update JSON file to keep it in sync
+        self._update_animation_json_folder(animation_uuid, folder_id)
+        return True
+
+    def _update_animation_json_folder(self, animation_uuid: str, folder_id: int) -> bool:
+        """Update animation's JSON file with current folder information.
+
+        This keeps the JSON file in sync with the database, which is important
+        for version inheritance when creating new versions in Blender.
+        """
+        import json
+
+        try:
+            # Get animation to find JSON file path
+            animation = self.animations.get_by_uuid(animation_uuid)
+            if not animation:
+                return False
+
+            json_path = animation.get('json_file_path')
+            if not json_path:
+                return False
+
+            json_file = Path(json_path)
+            if not json_file.exists():
+                return False
+
+            # Get folder info for path
+            folder = self.folders.get_by_id(folder_id)
+            folder_path = folder.get('path', '') if folder else ''
+
+            # Read existing JSON
+            with open(json_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # Update folder fields
+            data['folder_id'] = folder_id
+            data['folder_path'] = folder_path
+
+            # Also update tags to include folder name (matches database behavior)
+            if folder and folder.get('name'):
+                folder_name = folder['name']
+                tags = data.get('tags', [])
+                if isinstance(tags, list) and folder_name not in tags:
+                    tags.append(folder_name)
+                    data['tags'] = tags
+
+            # Write back
+            with open(json_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+
+            return True
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid JSON in {json_file}: {e}")
+            return False
+        except IOError as e:
+            logger.warning(f"Could not update folder in {json_file}: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to sync folder to JSON: {e}")
+            return False
 
     # ==================== USER FEATURES (delegated) ====================
 
@@ -264,6 +544,50 @@ class DatabaseService:
         """Get lifecycle status for an animation."""
         return self.animations.get_status(uuid)
 
+    # ==================== REVIEW NOTES OPERATIONS (delegated) ====================
+
+    def get_review_notes(self, animation_uuid: str) -> List[Dict[str, Any]]:
+        """Get all review notes for an animation, ordered by frame."""
+        return self.review_notes.get_notes_for_animation(animation_uuid)
+
+    def add_review_note(
+        self,
+        animation_uuid: str,
+        frame: int,
+        note: str,
+        author: str = ''
+    ) -> Optional[int]:
+        """Add a new review note to an animation."""
+        return self.review_notes.add_note(animation_uuid, frame, note, author)
+
+    def update_review_note(self, note_id: int, note: str) -> bool:
+        """Update a review note's text content."""
+        return self.review_notes.update_note(note_id, note)
+
+    def update_review_note_frame(self, note_id: int, frame: int) -> bool:
+        """Update a review note's frame number."""
+        return self.review_notes.update_note_frame(note_id, frame)
+
+    def delete_review_note(self, note_id: int) -> bool:
+        """Delete a review note."""
+        return self.review_notes.delete_note(note_id)
+
+    def toggle_review_note_resolved(self, note_id: int) -> Optional[bool]:
+        """Toggle a review note's resolved status. Returns new status."""
+        return self.review_notes.toggle_resolved(note_id)
+
+    def set_review_note_resolved(self, note_id: int, resolved: bool) -> bool:
+        """Set a review note's resolved status."""
+        return self.review_notes.set_resolved(note_id, resolved)
+
+    def get_review_note_count(self, animation_uuid: str) -> int:
+        """Get count of review notes for an animation."""
+        return self.review_notes.get_note_count(animation_uuid)
+
+    def get_unresolved_review_note_count(self, animation_uuid: str) -> int:
+        """Get count of unresolved review notes for an animation."""
+        return self.review_notes.get_unresolved_count(animation_uuid)
+
     # ==================== ARCHIVE OPERATIONS (delegated) ====================
 
     def add_to_archive(self, archive_data: Dict[str, Any]) -> Optional[int]:
@@ -340,6 +664,9 @@ class DatabaseService:
         # Fix pose flags for existing animations (in case they were imported before is_pose was added)
         self.fix_pose_flags()
 
+        # Migrate existing animations to actions/poses folder structure
+        self._migrate_to_actions_poses_folders()
+
         return result
 
     def fix_pose_flags(self) -> int:
@@ -355,6 +682,217 @@ class DatabaseService:
     def update_animation_metadata_by_uuid(self, uuid: str, metadata: Dict[str, Any]) -> bool:
         """Update metadata fields for an animation by UUID."""
         return self._scanner.update_metadata_by_uuid(uuid, metadata)
+
+    # ==================== DATABASE MAINTENANCE ====================
+
+    def _migrate_to_actions_poses_folders(self) -> int:
+        """
+        Migrate existing animations from library/ root to library/actions/ or library/poses/.
+
+        This method:
+        1. Finds animations stored directly in library/{name}/ (old structure)
+        2. Moves them to library/actions/{name}/ or library/poses/{name}/
+        3. Updates database paths
+
+        Returns:
+            Number of animations migrated
+        """
+        import shutil
+
+        migrated_count = 0
+
+        try:
+            library_folder = Config.get_library_folder()
+            actions_folder = Config.get_actions_folder()
+            poses_folder = Config.get_poses_folder()
+        except ValueError:
+            # Library not configured
+            return 0
+
+        # Get all animations (latest versions only)
+        animations = self.animations.get_all(include_all_versions=False)
+
+        for anim in animations:
+            blend_path_str = anim.get('blend_file_path', '')
+            if not blend_path_str:
+                continue
+
+            blend_path = Path(blend_path_str)
+            if not blend_path.exists():
+                continue
+
+            current_folder = blend_path.parent
+
+            # Skip if already in actions/ or poses/
+            try:
+                if current_folder.parent == actions_folder:
+                    continue
+                if current_folder.parent == poses_folder:
+                    continue
+                # Also check if parent's parent is actions/poses (nested structure)
+                if current_folder.parent.parent == actions_folder:
+                    continue
+                if current_folder.parent.parent == poses_folder:
+                    continue
+            except (AttributeError, TypeError):
+                # Path doesn't have expected parent structure
+                pass
+
+            # Only migrate if directly in library/ folder
+            if current_folder.parent != library_folder:
+                continue
+
+            # Determine target based on is_pose flag
+            is_pose = anim.get('is_pose', 0)
+            target_parent = poses_folder if is_pose else actions_folder
+            target_folder = target_parent / current_folder.name
+
+            # Skip if target already exists
+            if target_folder.exists():
+                continue
+
+            try:
+                # Move the folder
+                shutil.move(str(current_folder), str(target_folder))
+
+                # Update database paths
+                self._update_animation_paths_after_move(anim['uuid'], target_folder)
+                migrated_count += 1
+                logger.info(f"Moved {current_folder.name} to {'poses' if is_pose else 'actions'}/")
+
+            except PermissionError as e:
+                logger.warning(f"Permission denied migrating {current_folder.name}: {e}")
+                continue
+            except OSError as e:
+                logger.warning(f"Failed to migrate {current_folder.name}: {e}")
+                continue
+
+        if migrated_count > 0:
+            logger.info(f"Migrated {migrated_count} animations to new folder structure")
+
+        return migrated_count
+
+    def _update_animation_paths_after_move(self, uuid: str, new_folder: Path) -> bool:
+        """
+        Update database paths after moving an animation folder.
+
+        Args:
+            uuid: Animation UUID
+            new_folder: New folder path
+
+        Returns:
+            True if successful
+        """
+        animation = self.get_animation_by_uuid(uuid)
+        if not animation:
+            return False
+
+        name = animation.get('name', '')
+        import re
+        safe_name = re.sub(r'[<>:"/\\|?*]', '_', name)
+        safe_name = safe_name.strip(' .') or 'unnamed'
+        safe_name = re.sub(r'_+', '_', safe_name)
+
+        # Build new paths
+        new_paths = {
+            'blend_file_path': str(new_folder / f"{safe_name}.blend"),
+            'json_file_path': str(new_folder / f"{safe_name}.json"),
+            'preview_path': str(new_folder / f"{safe_name}.webm"),
+            'thumbnail_path': str(new_folder / f"{safe_name}.png"),
+        }
+
+        return self.animations.update(uuid, new_paths)
+
+    def get_database_stats(self) -> Dict[str, Any]:
+        """
+        Get database statistics for status display.
+
+        Returns:
+            Dict containing schema version, record counts, file size, pending features, etc.
+        """
+        return self._schema.get_database_stats()
+
+    def run_integrity_check(self) -> Tuple[bool, str]:
+        """
+        Run database integrity check.
+
+        Returns:
+            Tuple of (is_ok, message)
+        """
+        return self._schema.run_integrity_check()
+
+    def optimize_database(self) -> Tuple[int, int]:
+        """
+        Optimize database by running VACUUM.
+
+        Returns:
+            Tuple of (size_before, size_after) in bytes
+        """
+        return self._schema.optimize_database()
+
+    def get_current_schema_version(self) -> int:
+        """Get current schema version."""
+        return self._schema.get_current_version()
+
+    def create_backup(self) -> Path:
+        """
+        Create a backup of the database.
+
+        Returns:
+            Path to the backup file
+        """
+        return backup_database(self.db_path)
+
+    def get_backups(self) -> List[Dict[str, Any]]:
+        """
+        Get list of existing backups.
+
+        Returns:
+            List of backup info dicts with 'path', 'size', 'date'
+        """
+        return get_backups(self.db_path)
+
+    def delete_backup(self, backup_path: Path) -> bool:
+        """
+        Delete a backup file.
+
+        Args:
+            backup_path: Path to the backup file
+
+        Returns:
+            True if deleted successfully
+        """
+        return delete_backup(backup_path)
+
+    def run_schema_upgrade(self) -> Tuple[bool, str]:
+        """
+        Run schema upgrade (migrations).
+
+        Creates a backup first, then runs init_database() to apply migrations.
+
+        Returns:
+            Tuple of (success, message)
+        """
+        try:
+            # Get current version before upgrade
+            before_version = self._schema.get_current_version()
+
+            # Create backup before migration
+            backup_path = self.create_backup()
+
+            # Run migrations
+            self._schema.init_database()
+
+            # Get version after upgrade
+            after_version = self._schema.get_current_version()
+
+            if after_version > before_version:
+                return True, f"Upgraded from v{before_version} to v{after_version}. Backup created at: {backup_path}"
+            else:
+                return True, f"Already at latest version (v{after_version}). Backup created at: {backup_path}"
+
+        except Exception as e:
+            return False, f"Upgrade failed: {str(e)}"
 
 
 # Singleton instance

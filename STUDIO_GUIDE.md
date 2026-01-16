@@ -2,6 +2,16 @@
 
 This guide covers deploying Action Library in a multi-artist studio environment with shared storage, custom configurations, and pipeline integration.
 
+> **⚠️ Upgrading from v1.2 or earlier?**
+>
+> Version 1.3 has a new database format that is **not backwards compatible**. All workstations must migrate:
+>
+> 1. Have artists apply their animations to Blender and save as .blend files
+> 2. Deploy v1.3 with a fresh shared storage folder
+> 3. Re-capture animations from Blender into the new library
+>
+> See the [Changelog](CHANGELOG.md) for details.
+
 > For solo artists, the default setup works out of the box. This guide is for teams needing shared infrastructure.
 
 ---
@@ -13,19 +23,25 @@ Action Library stores animations in a single directory structure. For team acces
 
 - **NAS/Server Path**: Point all workstations to a shared network path (e.g., `//server/animation_library/`)
 - **Permissions**: All artists need read/write access to the library folder
-- **Database**: The SQLite database (`.actionlibrary/database.db`) lives inside the library folder—concurrent writes from multiple users are supported via WAL mode, but for large teams (10+), consider periodic syncs rather than live shared access
+- **Database**: The SQLite database (`.meta/database.db`) lives inside the library folder—concurrent writes from multiple users are supported via WAL mode, but for large teams (10+), consider periodic syncs rather than live shared access
 
 ### Recommended Folder Structure
 ```
 /server/animation_library/
-├── library/                    # Animation files (.blend, .json, thumbnails)
-│   ├── {uuid}/
-│   │   ├── animation.blend
-│   │   ├── metadata.json
-│   │   ├── preview.webm
-│   │   └── thumbnail.png
-├── .actionlibrary/
-│   └── database.db             # SQLite database
+├── library/                    # Hot storage - latest versions
+│   └── walk_cycle/             # Human-readable folder name (base name)
+│       ├── walk_cycle_v002.blend
+│       ├── walk_cycle_v002.json
+│       ├── walk_cycle_v002.webm
+│       └── walk_cycle_v002.png
+├── _versions/                  # Cold storage - old versions
+│   └── walk_cycle/
+│       └── v001/
+│           └── walk_cycle_v001.*
+├── .meta/                      # Database and config
+│   └── database.db
+├── .deleted/                   # Soft-deleted items
+├── .trash/                     # Permanent delete staging
 └── backups/                    # .animlib export archives
 ```
 
@@ -36,6 +52,240 @@ Action Library stores animations in a single directory structure. For team acces
 
 ---
 
+## Studio Mode (v1.4)
+
+Action Library supports two operational modes:
+
+| Mode | Use Case | Features |
+|------|----------|----------|
+| **Solo Mode** | Individual artists | No restrictions, simple workflow, no login |
+| **Studio Mode** | Multi-user teams | Role-based permissions, audit trail, soft delete |
+
+### Enabling Studio Mode
+
+1. Open **Settings → Studio Mode** tab
+2. Select **Studio Mode (Multi-User)**
+3. Select your user from the dropdown (or add users first)
+4. Click **OK**
+
+### Role Hierarchy
+
+| Role | Level | Color | Typical Use |
+|------|-------|-------|-------------|
+| Artist | 1 | Gray | Animators, junior artists |
+| Lead | 2 | Blue | Animation leads, team leads |
+| Director | 2 | Orange | Creative directors |
+| Supervisor | 3 | Purple | Department supervisors |
+| Admin | 4 | Red | Pipeline TDs, IT |
+
+### Review Notes Permissions
+
+| Permission | Artist | Lead/Director | Supervisor | Admin |
+|------------|--------|---------------|------------|-------|
+| Add notes | ✓ | ✓ | ✓ | ✓ |
+| Edit own notes | ✓ | ✓ | ✓ | ✓ |
+| Delete own notes | — | ✓ | ✓ | ✓ |
+| Delete any note | — | — | ✓ | ✓ |
+| View deleted notes | — | ✓ | ✓ | ✓ |
+| Restore deleted notes | — | — | ✓ | ✓ |
+| Manage users | — | — | — | ✓ |
+
+### Soft Delete & Restore
+
+Notes are never permanently deleted:
+- Deleted notes are marked with `deleted=1` in the database
+- Original author and deletion info preserved
+- Supervisors/Admins can restore via "Show Deleted" toggle
+- Deleted notes appear with strikethrough styling
+
+### Audit Trail
+
+All note actions are logged to `note_audit_log` table:
+- Created, edited, deleted, restored events
+- Actor username and role
+- Timestamp
+- Change details (old/new values for edits)
+
+Query audit history:
+```python
+import sqlite3
+conn = sqlite3.connect('storage/.actionlibrary/notes.db')
+cursor = conn.cursor()
+
+# Get all actions on a note
+cursor.execute('''
+    SELECT action, actor, actor_role, timestamp, details
+    FROM note_audit_log WHERE note_id = ?
+    ORDER BY timestamp DESC
+''', (note_id,))
+
+# Get recent activity
+cursor.execute('''
+    SELECT * FROM note_audit_log
+    ORDER BY timestamp DESC LIMIT 50
+''')
+```
+
+### User Management
+
+Admins can manage users via **Settings → Studio Mode → Manage Users**:
+- Add new users with username, display name, role
+- Edit user roles
+- Deactivate/reactivate users
+
+Users are stored in `studio_users` table in `notes.db`.
+
+---
+
+## Customizing Studio Mode for Your Pipeline
+
+The built-in Studio Mode uses an **honor system**—users select their own identity. For production environments, studios typically extend this with real authentication.
+
+### Option 1: OS Username Auto-Detection
+
+Modify `studio_mode_tab.py` to auto-detect the logged-in user:
+
+```python
+import getpass
+
+# Instead of dropdown selection:
+current_user = getpass.getuser().lower()  # Returns "john.smith"
+
+# Look up in database
+user = self._notes_db.get_user(current_user)
+if user:
+    # User exists, use their role
+    role = user['role']
+else:
+    # Unknown user, default to artist
+    role = 'artist'
+```
+
+### Option 2: Lock Settings UI
+
+Hide the Studio Mode tab for non-admins:
+
+```python
+# In settings_dialog.py
+def _create_ui(self):
+    # ... existing code ...
+
+    # Only show Studio Mode tab to admins
+    from ..services.notes_database import get_notes_database
+    from ..services.permissions import NotePermissions
+
+    notes_db = get_notes_database()
+    current_user = getpass.getuser().lower()
+    user = notes_db.get_user(current_user)
+    role = user.get('role', 'artist') if user else 'artist'
+
+    if NotePermissions.can_manage_users(True, role):
+        self.studio_mode_tab = StudioModeTab(self.theme_manager, self)
+        self.tab_widget.addTab(self.studio_mode_tab, "Studio Mode")
+```
+
+### Option 3: Config File Deployment
+
+Pre-configure machines via config file that IT deploys:
+
+```json
+// studio_config.json (deployed by IT)
+{
+    "mode": "studio",
+    "user": "john.smith",
+    "role": "artist",
+    "locked": true
+}
+```
+
+```python
+# Load at startup, override database settings
+import json
+config_path = Path('/studio/config/studio_config.json')
+if config_path.exists():
+    config = json.loads(config_path.read_text())
+    if config.get('locked'):
+        # Use config values, disable settings UI
+        pass
+```
+
+### Option 4: LDAP/Active Directory Integration
+
+For enterprise environments, query AD for user info:
+
+```python
+import ldap3
+
+def get_user_from_ad(username):
+    server = ldap3.Server('ldap://your-domain-controller')
+    conn = ldap3.Connection(server, user='service_account', password='...')
+    conn.bind()
+
+    conn.search(
+        'dc=studio,dc=com',
+        f'(sAMAccountName={username})',
+        attributes=['cn', 'memberOf']
+    )
+
+    if conn.entries:
+        entry = conn.entries[0]
+        groups = entry.memberOf.values
+
+        # Map AD groups to roles
+        if 'CN=Animation_Supervisors' in groups:
+            return {'display_name': str(entry.cn), 'role': 'supervisor'}
+        elif 'CN=Animation_Leads' in groups:
+            return {'display_name': str(entry.cn), 'role': 'lead'}
+        else:
+            return {'display_name': str(entry.cn), 'role': 'artist'}
+
+    return None
+```
+
+### Option 5: Central Database
+
+For larger studios, replace SQLite with PostgreSQL/MySQL:
+
+1. Modify `notes_database.py` to use your database driver
+2. Point all workstations to central server
+3. User management syncs automatically
+
+### Database Schema Reference
+
+**notes.db tables:**
+
+```sql
+-- User accounts
+CREATE TABLE studio_users (
+    id INTEGER PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    display_name TEXT NOT NULL,
+    role TEXT DEFAULT 'artist',  -- artist, lead, director, supervisor, admin
+    created_at TIMESTAMP,
+    is_active INTEGER DEFAULT 1
+);
+
+-- App settings
+CREATE TABLE app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+-- Keys: 'app_mode' (solo/studio), 'current_user', 'show_deleted_notes'
+
+-- Audit log
+CREATE TABLE note_audit_log (
+    id INTEGER PRIMARY KEY,
+    note_id INTEGER NOT NULL,
+    action TEXT NOT NULL,  -- created, edited, deleted, restored
+    actor TEXT NOT NULL,
+    actor_role TEXT,
+    timestamp TIMESTAMP,
+    details TEXT  -- JSON with change details
+);
+```
+
+---
+
 ## Multi-User Workflows
 
 ### Concurrent Access
@@ -43,14 +293,14 @@ Action Library stores animations in a single directory structure. For team acces
 - Capturing new animations writes to unique UUID folders (no conflicts)
 - Folder organization changes sync on next app refresh
 
-### Permissions Model
+### Asset Permissions Model
 | Role | Browse | Apply | Capture | Delete | Manage Folders |
 |------|--------|-------|---------|--------|----------------|
 | Artist | ✓ | ✓ | ✓ | — | — |
 | Lead | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Admin | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-*Note: Action Library doesn't enforce permissions—use filesystem/NAS permissions for access control.*
+*Note: Asset permissions use filesystem/NAS access control. Review note permissions are enforced by Studio Mode.*
 
 ---
 
@@ -226,6 +476,164 @@ cursor.execute('''
     WHERE status = 'review' AND is_latest = 1
 ''')
 ```
+
+---
+
+## Studio Naming Engine (v1.3)
+
+The Studio Naming Engine provides template-based naming for animations—essential for studios with established naming conventions.
+
+### Overview
+
+Instead of free-form naming, animations are named using a **template** with placeholders:
+
+```
+{show}_{asset}_{task}_v{version:03}  →  MYPROJ_hero_walk_v001
+```
+
+Key principles:
+- **Version is immutable** - Once assigned, version numbers cannot be changed
+- **Fields are editable** - Change `hero` to `villain`, keep version
+- **Template stored with animation** - Each animation remembers its template for renaming
+
+### Configuration in Blender
+
+Configure the naming engine in **Blender Preferences → Add-ons → Animation Library → Studio Naming**:
+
+1. **Enable Studio Mode** - Toggle on to activate template naming
+2. **Naming Template** - Define your pattern:
+   - `{show}_{shot}_{asset}_v{version:03}` → `PROJ_0100_hero_v001`
+   - `{asset}_{task}_v{version:04}` → `hero_walk_v0001`
+   - `{seq}_{shot}_{variant}_v{version:03}` → `010_0020_A_v001`
+
+3. **Context Mode** - How to auto-fill fields:
+   - **Manual** - Enter all fields by hand in the capture panel
+   - **Scene Name** - Extract from Blender's scene name via regex
+   - **Folder Path** - Extract from .blend file path via regex
+
+### Context Extraction Examples
+
+**Scene Name Mode:**
+```
+Scene name: MYPROJ_ep01_0100
+Pattern:    (?P<show>\w+)_(?P<seq>\w+)_(?P<shot>\w+)
+Extracts:   show=MYPROJ, seq=ep01, shot=0100
+```
+
+**Folder Path Mode:**
+```
+File path: /projects/MYPROJ/episodes/ep01/shots/0100/anim/hero_walk.blend
+Pattern:   /(?P<show>\w+)/episodes/(?P<seq>\w+)/shots/(?P<shot>\w+)/
+Extracts:  show=MYPROJ, seq=ep01, shot=0100
+```
+
+### Capture Workflow
+
+When capturing with Studio Mode enabled:
+
+1. Open capture panel in Blender
+2. Enable "Studio Naming" checkbox
+3. Fill in required fields (or let context extraction fill them)
+4. See live preview of generated name
+5. Click "Capture Action"
+
+Animation is saved with:
+- Generated name (`MYPROJ_hero_v001`)
+- `naming_fields` JSON (`{"show":"MYPROJ","asset":"hero"}`)
+- `naming_template` string
+
+### Renaming in Desktop App
+
+Click **Rename** button in metadata panel:
+
+- **With naming fields**: Shows field-based editor with read-only version
+  ```
+  Show:    [MYPROJ    ]
+  Asset:   [hero      ]
+  Version: v001 (read-only)
+  Preview: MYPROJ_hero_v001
+  ```
+
+- **Without naming fields**: Shows simplified editor
+  ```
+  Base Name: [hero_walk]
+  Version:   v001 (read-only)
+  Preview:   hero_walk_v001
+  ```
+
+### Renaming Across Lineage
+
+When renaming, you can apply to:
+- **Single version** - Only this animation changes
+- **All versions in lineage** - All versions get new fields, each keeps its own version number
+
+Example:
+```
+Before:                    After (rename to NEWPROJ):
+MYPROJ_hero_v001          NEWPROJ_hero_v001
+MYPROJ_hero_v002     →    NEWPROJ_hero_v002
+MYPROJ_hero_v003          NEWPROJ_hero_v003
+```
+
+### Pipeline Integration
+
+Query animations by naming fields:
+```python
+import json
+cursor.execute('SELECT uuid, name, naming_fields FROM animations WHERE naming_template IS NOT NULL')
+for row in cursor.fetchall():
+    fields = json.loads(row['naming_fields'])
+    if fields.get('show') == 'MYPROJ':
+        print(f"Found: {row['name']}")
+```
+
+---
+
+## Version Comparison (v1.3)
+
+Compare animation versions side-by-side in the Lineage dialog.
+
+### How to Compare
+
+1. Open **View Lineage** from metadata panel
+2. Click **Compare** button
+3. Select exactly 2 versions (click rows to select)
+4. Click **Compare Selected**
+
+### Comparison Features
+
+- **Side-by-side layout** - Both versions visible at once
+- **Synchronized playback** - Play/pause affects both videos
+- **Shared progress slider** - Scrub both videos to same frame
+- **Exit compare** - Return to normal lineage view
+
+### Use Cases
+
+- Compare before/after a director's note
+- Review animation changes between iterations
+- Quality check before promoting a version to latest
+
+---
+
+## Version Notes (v1.3)
+
+Add notes to versions for documentation and review tracking.
+
+### Adding Notes
+
+1. Open **View Lineage** from metadata panel
+2. Select a version
+3. Type in the **Notes** field below the preview
+4. Click **Save Notes**
+
+### Note Ideas
+
+- Document what changed in this version
+- Record director feedback
+- Note approval status or blockers
+- Reference related shots or dependencies
+
+Notes are stored in the animation's `description` field and persist with the animation metadata.
 
 ---
 

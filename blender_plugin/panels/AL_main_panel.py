@@ -3,8 +3,9 @@ from bpy.types import Panel, UIList
 from ..utils.queue_client import animation_queue_client
 from ..utils.utils import get_action_keyframe_range, get_action_keyframe_count
 from ..utils import icon_loader
-from ..preferences.AL_preferences import get_library_path
+from ..preferences.AL_preferences import get_library_path, is_experimental_enabled
 from ..operators import ANIMLIB_OT_update_preview
+from ..utils.naming_engine import get_naming_engine, FieldValidator
 
 
 class ANIMLIB_UL_slots(UIList):
@@ -71,23 +72,31 @@ class ANIMLIB_UL_slots(UIList):
 
 
 class ANIMLIB_PT_main_panel(Panel):
-    """Main Animation Library panel"""
+    """Main Animation Library panel - Header, status, and launch"""
     bl_label = "Animation Library"
     bl_idname = "ANIMLIB_PT_main_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = 'Animation'
-    
+
+    def draw_header(self, context):
+        """Draw connection status indicator in header"""
+        layout = self.layout
+        from ..utils.socket_server import is_server_running, get_connected_clients_count
+
+        # Connection status indicator
+        row = layout.row(align=True)
+        if is_server_running() and get_connected_clients_count() > 0:
+            row.label(text="", icon='CHECKMARK')  # Connected
+        else:
+            row.label(text="", icon='X')  # Not connected
+
     def draw(self, context):
         layout = self.layout
         scene = context.scene
 
         # Library status section
         library_path = get_library_path()
-
-        # Header with library status
-        header_row = layout.row(align=True)
-        header_row.label(text="Animation Library", icon='ANIM')
 
         # Status indicator
         status_box = layout.box()
@@ -105,7 +114,7 @@ class ANIMLIB_PT_main_panel(Panel):
             op = status_box.operator("preferences.addon_show", text="Open Preferences")
             op.module = __name__.split('.')[0]
 
-        # 1. Desktop App Launch Button - Prominent!
+        # Desktop App Launch Button - Prominent!
         layout.separator()
         launch_box = layout.box()
         launch_row = launch_box.row()
@@ -124,15 +133,29 @@ class ANIMLIB_PT_main_panel(Panel):
         op = settings_row.operator("preferences.addon_show", text="Configure Launch Settings", icon='PREFERENCES')
         op.module = __name__.split('.')[0]
 
-        # 2. Collapsible Action Details Section
+
+class ANIMLIB_PT_capture(Panel):
+    """Capture sub-panel - Animation and Pose capture"""
+    bl_label = "Capture"
+    bl_idname = "ANIMLIB_PT_capture"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'Animation'
+    bl_parent_id = "ANIMLIB_PT_main_panel"
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        library_path = get_library_path()
+
         armature = context.active_object
         has_animation = (armature and
                         armature.type == 'ARMATURE' and
                         armature.animation_data and
                         armature.animation_data.action)
 
+        # Capture Action Section
         if has_animation:
-            layout.separator()
             action_details_box = layout.box()
 
             # Collapsible header - show armature name so user knows which rig will be captured
@@ -175,9 +198,180 @@ class ANIMLIB_PT_main_panel(Panel):
                 if scene.animlib_use_action_name:
                     form_grid.label(text=f"Will use: {action.name}", icon='INFO')
 
+                # Rig Type field (moved from Active Rig section)
+                detected_rig_type, confidence = animation_queue_client.detect_rig_type(armature)
+                type_row = form_grid.row(align=True)
+                type_col = type_row.column()
+                type_col.enabled = not scene.animlib_use_detected_rig_type
+                type_col.prop(scene, "animlib_rig_type", text="Rig Type")
+                type_row.prop(scene, "animlib_use_detected_rig_type", text="", icon='ARMATURE_DATA')
+
+                if scene.animlib_use_detected_rig_type:
+                    if detected_rig_type != 'unknown':
+                        form_grid.label(text=f"Detected: {detected_rig_type.title()}", icon='INFO')
+                    else:
+                        form_grid.label(text="Detected: Unknown", icon='INFO')
+
                 form_grid.prop(scene, "animlib_description", icon='TEXT')
                 form_grid.prop(scene, "animlib_tags", icon='BOOKMARKS')
                 form_grid.prop(scene, "animlib_author", icon='USER')
+
+                # Studio Naming Section
+                if library_path:
+                    try:
+                        naming_engine = get_naming_engine(library_path)
+                        if naming_engine.is_studio_mode_enabled:
+                            action_details_box.separator()
+                            naming_box = action_details_box.box()
+
+                            # Header with toggle
+                            naming_header = naming_box.row()
+                            naming_header.prop(scene, "animlib_use_studio_naming", text="Studio Naming", icon='FILE_TEXT')
+
+                            if scene.animlib_use_studio_naming:
+                                # Show template fields based on what's configured
+                                naming_form = naming_box.column(align=True)
+                                required_fields = naming_engine.get_required_fields()
+
+                                # Map field names to scene properties (expanded list)
+                                field_props = {
+                                    # Core fields
+                                    'show': 'animlib_naming_show',
+                                    'seq': 'animlib_naming_seq',
+                                    'sequence': 'animlib_naming_seq',
+                                    'shot': 'animlib_naming_shot',
+                                    'asset': 'animlib_naming_asset',
+                                    'task': 'animlib_naming_task',
+                                    'variant': 'animlib_naming_variant',
+                                    # Common aliases
+                                    'showname': 'animlib_naming_showname',
+                                    'project': 'animlib_naming_project',
+                                    'character': 'animlib_naming_character',
+                                    'char': 'animlib_naming_character',
+                                    'episode': 'animlib_naming_episode',
+                                    'ep': 'animlib_naming_episode',
+                                    'name': 'animlib_naming_asset',
+                                    'anim': 'animlib_naming_asset',
+                                    'animation': 'animlib_naming_asset',
+                                    # Pipeline fields
+                                    'assettype': 'animlib_naming_asset',
+                                    'dept': 'animlib_naming_task',
+                                    'department': 'animlib_naming_task',
+                                }
+
+                                # Track which custom fields we've used for unmapped fields
+                                custom_field_index = 0
+                                custom_fields = ['animlib_naming_custom1', 'animlib_naming_custom2', 'animlib_naming_custom3']
+                                unmapped_to_custom = {}
+
+                                # Fields that can use action name
+                                asset_field_names = {'asset', 'name', 'anim', 'animation', 'assettype'}
+
+                                # Get action name if toggle is enabled
+                                action_name_for_asset = ""
+                                if scene.animlib_asset_use_action_name:
+                                    armature = context.active_object
+                                    if armature and armature.type == 'ARMATURE' and armature.animation_data and armature.animation_data.action:
+                                        action_name_for_asset = armature.animation_data.action.name
+
+                                # First pass: collect field data for validation
+                                field_data = {}
+                                for field_name in required_fields:
+                                    prop_name = field_props.get(field_name.lower())
+                                    if prop_name and hasattr(scene, prop_name):
+                                        # Use action name for asset fields if toggle is enabled
+                                        if field_name.lower() in asset_field_names and scene.animlib_asset_use_action_name and action_name_for_asset:
+                                            field_data[field_name] = action_name_for_asset
+                                        else:
+                                            field_data[field_name] = getattr(scene, prop_name, '')
+                                    elif field_name in unmapped_to_custom:
+                                        custom_prop = unmapped_to_custom[field_name]
+                                        field_data[field_name] = getattr(scene, custom_prop, '')
+                                    elif custom_field_index < len(custom_fields):
+                                        custom_prop = custom_fields[custom_field_index]
+                                        unmapped_to_custom[field_name] = custom_prop
+                                        field_data[field_name] = getattr(scene, custom_prop, '')
+                                        custom_field_index += 1
+
+                                # Also get context-extracted values
+                                context_fields = naming_engine.extract_context()
+                                for k, v in context_fields.items():
+                                    if k not in field_data or not field_data[k]:
+                                        field_data[k] = v
+
+                                # Validate all fields
+                                validation_results = FieldValidator.validate_all_fields(field_data, required_fields)
+
+                                # Reset custom field index for display
+                                custom_field_index = 0
+
+                                # Second pass: display fields with validation indicators
+                                for field_name in required_fields:
+                                    prop_name = field_props.get(field_name.lower())
+                                    is_valid, error_msg = validation_results.get(field_name, (True, ''))
+                                    is_asset_field = field_name.lower() in asset_field_names
+
+                                    # Create row with field + validation indicator
+                                    field_row = naming_form.row(align=True)
+
+                                    if prop_name and hasattr(scene, prop_name):
+                                        # For asset fields, show toggle for "Use Action Name"
+                                        if is_asset_field:
+                                            sub = field_row.row(align=True)
+                                            sub.enabled = not scene.animlib_asset_use_action_name
+                                            sub.prop(scene, prop_name, text=field_name.title())
+                                            field_row.prop(scene, "animlib_asset_use_action_name", text="", icon='ACTION', toggle=True)
+                                        else:
+                                            field_row.prop(scene, prop_name, text=field_name.title())
+                                    elif field_name in unmapped_to_custom:
+                                        custom_prop = unmapped_to_custom[field_name]
+                                        field_row.prop(scene, custom_prop, text=field_name.title())
+                                    elif custom_field_index < len(custom_fields):
+                                        custom_prop = custom_fields[custom_field_index]
+                                        unmapped_to_custom[field_name] = custom_prop
+                                        field_row.prop(scene, custom_prop, text=field_name.title())
+                                        custom_field_index += 1
+                                    else:
+                                        naming_form.label(text=f"{field_name}: (no slot available)", icon='ERROR')
+                                        continue
+
+                                    # Add validation indicator
+                                    if is_valid:
+                                        field_row.label(text="", icon='CHECKMARK')
+                                    else:
+                                        field_row.label(text="", icon='ERROR')
+
+                                # Live Preview Box - More prominent
+                                naming_box.separator()
+                                preview_box = naming_box.box()
+                                preview_header = preview_box.row()
+                                preview_header.label(text="Live Preview", icon='SYNTAX_ON')
+
+                                try:
+                                    version = scene.animlib_version_next_number if scene.animlib_is_versioning else 1
+                                    preview_name = naming_engine.generate_name(field_data, version)
+
+                                    # Show the generated name prominently
+                                    name_row = preview_box.row()
+                                    name_row.scale_y = 1.2
+                                    name_row.label(text=preview_name, icon='FILE_TEXT')
+
+                                    # Show validation status
+                                    all_valid = all(v[0] for v in validation_results.values())
+                                    if all_valid:
+                                        status_row = preview_box.row()
+                                        status_row.label(text="Ready to capture", icon='CHECKMARK')
+                                except ValueError as e:
+                                    # Missing fields
+                                    missing = [f for f, (valid, _) in validation_results.items() if not valid]
+                                    error_row = preview_box.row()
+                                    error_row.alert = True
+                                    error_row.label(text=f"Fill required: {', '.join(missing)}", icon='ERROR')
+                                except Exception:
+                                    error_row = preview_box.row()
+                                    error_row.label(text="(fill required fields)", icon='ERROR')
+                    except Exception:
+                        pass  # Naming engine not available, skip section
 
                 # Capture button
                 if library_path:
@@ -218,9 +412,16 @@ class ANIMLIB_PT_main_panel(Panel):
                         capture_row.scale_y = 1.5
                         if scene.animlib_is_versioning:
                             version_label = f"v{scene.animlib_version_next_number:03d}"
-                            capture_row.operator("animlib.capture_animation", text=f"Capture as {version_label}", icon='REC')
+                            capture_row.operator("animlib.capture_animation", text=f"Capture as {version_label}", icon='ACTION')
                         else:
-                            capture_row.operator("animlib.capture_animation", text="Capture Action", icon='REC')
+                            capture_row.operator("animlib.capture_animation", text="Capture Action", icon='ACTION')
+
+                        # Capture Selected button (for capturing selected keyframes only)
+                        from ..operators.AL_capture_selected import has_selected_keyframes
+                        capture_sel_row = action_details_box.row()
+                        capture_sel_row.scale_y = 1.2
+                        capture_sel_row.enabled = has_selected_keyframes(action)
+                        capture_sel_row.operator("animlib.capture_selected", text="Capture Selected", icon='KEYFRAME_HLT')
                     else:
                         # Show status message while capturing
                         status_row = action_details_box.row()
@@ -232,16 +433,16 @@ class ANIMLIB_PT_main_panel(Panel):
                         update_row = action_details_box.row()
                         update_row.scale_y = 1.3
 
-                        # Check if desktop app is running
-                        is_connected = ANIMLIB_OT_update_preview.is_server_available()
+                        # Check if action is from library
+                        has_uuid = bool(action.get("animlib_uuid", ""))
 
-                        # Button will be grayed out if desktop app not running (poll handles this)
+                        # Button will be grayed out if action not from library (poll handles this)
                         update_row.operator("animlib.update_preview", text="Update Preview", icon='FILE_REFRESH')
 
-                        # Show hint if not connected
-                        if not is_connected:
+                        # Show hint if action is not from library
+                        if not has_uuid:
                             hint_row = action_details_box.row()
-                            hint_row.label(text="Desktop app not running", icon='INFO')
+                            hint_row.label(text="Only for library animations", icon='INFO')
                     elif context.window_manager.animlib_is_updating_preview:
                         # Show status message while updating
                         status_row = action_details_box.row()
@@ -251,7 +452,7 @@ class ANIMLIB_PT_main_panel(Panel):
                     disabled_row = action_details_box.row()
                     disabled_row.label(text="Library Not Configured", icon='ERROR')
 
-        # 2.5. Pose Capture Section (shows when armature is selected, even without action)
+        # Pose Capture Section (shows when armature is selected, even without action)
         if armature and armature.type == 'ARMATURE' and library_path:
             layout.separator()
             pose_box = layout.box()
@@ -275,138 +476,78 @@ class ANIMLIB_PT_main_panel(Panel):
             if not context.window_manager.animlib_is_capturing:
                 capture_pose_row = pose_box.row()
                 capture_pose_row.scale_y = 1.5
-                capture_pose_row.operator("animlib.capture_pose", text="Capture Pose", icon='REC')
+                capture_pose_row.operator("animlib.capture_pose", text="Capture Pose", icon='ARMATURE_DATA')
             else:
                 status_row = pose_box.row()
                 status_row.scale_y = 1.5
                 status_row.label(text="Capturing...", icon='SORTTIME')
 
-        # 3. Collapsible Desktop Integration Section
-        layout.separator()
-        integration_box = layout.box()
-
-        # Collapsible header
-        header_row = integration_box.row()
-        icon = 'DOWNARROW_HLT' if scene.animlib_show_desktop_integration else 'RIGHTARROW'
-        header_row.prop(scene, "animlib_show_desktop_integration", text="Desktop Integration", icon=icon, emboss=False)
-
-        # Show content only if expanded
-        if scene.animlib_show_desktop_integration:
-            # Auto-apply status indicator
-            status_row = integration_box.row()
-            status_row.label(text="Auto-Apply: Active", icon='CHECKMARK')
-
-            # Note about options controlled by desktop app
-            options_row = integration_box.row()
-            options_row.label(text="Options set in Desktop App", icon='SETTINGS')
-
-            # Manual apply button (backup if auto-apply misses something)
-            apply_row = integration_box.row()
-            apply_row.scale_y = 1.2
-            apply_row.operator("animlib.check_apply_queue", text="Manual Apply", icon='IMPORT')
-
-            # Show selected bones info if "Selected Bones Only" is enabled in desktop app
-            if armature and armature.type == 'ARMATURE' and context.mode == 'POSE':
-                selected_bones = context.selected_pose_bones
-                if selected_bones:
-                    bone_info = integration_box.column(align=True)
-                    bone_info.label(text=f"Selected bones: {len(selected_bones)}", icon='BONE_DATA')
-                    if len(selected_bones) <= 2:
-                        bone_names = ", ".join([b.name for b in selected_bones])
-                        bone_info.label(text=f"  {bone_names}")
-                    else:
-                        first_bone = selected_bones[0].name
-                        bone_info.label(text=f"  {first_bone} (+{len(selected_bones)-1} more)")
-
-            # Root Motion Continuity section (INSERT mode specific - stays in Blender)
-            integration_box.separator()
-            root_motion_box = integration_box.box()
-            root_motion_box.prop(scene, "animlib_enable_root_motion_continuity", icon='ORIENTATION_GLOBAL')
-
-            # Only show bone picker and axis options if enabled
-            if scene.animlib_enable_root_motion_continuity:
-                # Bone picker UI - only shown if we have an armature
-                if armature and armature.type == 'ARMATURE':
-                    root_motion_box.prop_search(
-                        scene, "animlib_root_bone_name",
-                        armature.pose, "bones",
-                        text="Root Bone",
-                        icon='BONE_DATA'
-                    )
-
-                    # Show validation indicator
-                    if scene.animlib_root_bone_name in armature.pose.bones:
-                        info_row = root_motion_box.row()
-                        info_row.label(text=f"Using: {scene.animlib_root_bone_name}", icon='CHECKMARK')
-                    else:
-                        warning_row = root_motion_box.row()
-                        warning_row.label(text="Bone not found in rig", icon='ERROR')
-                else:
-                    root_motion_box.label(text="Select armature to choose bone", icon='INFO')
-
-                # Axis selection
-                root_motion_box.label(text="Apply to Axes:")
-                axis_row = root_motion_box.row(align=True)
-                axis_row.prop(scene, "animlib_root_motion_x", toggle=True)
-                axis_row.prop(scene, "animlib_root_motion_y", toggle=True)
-                axis_row.prop(scene, "animlib_root_motion_z", toggle=True)
-
-                # Show hint about INSERT mode
-                hint_row = root_motion_box.row()
-                hint_row.label(text="Active in INSERT mode", icon='INFO')
-
-            # Quick usage tips
-            integration_box.separator()
-            tips_column = integration_box.column(align=True)
-            tips_column.label(text="Usage:", icon='INFO')
-            tips_column.label(text="  1. Select armature in Blender")
-            tips_column.label(text="  2. Double-click animation in app")
-            tips_column.label(text="  3. Animation auto-applies!")
-
-        # Current rig info section
-        armature = context.active_object
-        if armature and armature.type == 'ARMATURE':
+        # Show message if no armature selected
+        if not armature or armature.type != 'ARMATURE':
             layout.separator()
-            detected_rig_type, confidence = animation_queue_client.detect_rig_type(armature)
+            no_rig_box = layout.box()
+            no_rig_box.label(text="Select an armature to capture", icon='INFO')
 
-            rig_box = layout.box()
-            # Header with rig icon
-            rig_header = rig_box.row(align=True)
-            rig_header.label(text="Active Rig", icon='ARMATURE_DATA')
 
-            # Rig details in a clean grid
-            rig_grid = rig_box.column(align=True)
+class ANIMLIB_PT_extra(Panel):
+    """Extra sub-panel - Root Motion and Slot Management"""
+    bl_label = "Extra"
+    bl_idname = "ANIMLIB_PT_extra"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'Animation'
+    bl_parent_id = "ANIMLIB_PT_main_panel"
+    bl_options = {'DEFAULT_CLOSED'}  # Collapsed by default
 
-            # Rig type override row (similar to action name)
-            type_row = rig_grid.row(align=True)
-            type_col = type_row.column()
-            type_col.enabled = not scene.animlib_use_detected_rig_type
-            type_col.prop(scene, "animlib_rig_type", text="Type")
-            type_row.prop(scene, "animlib_use_detected_rig_type", text="", icon='ARMATURE_DATA')
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
 
-            # Show detected type as reference
-            detected_row = rig_grid.row(align=True)
-            if detected_rig_type != 'unknown':
-                detected_row.label(text=f"Detected: {detected_rig_type.title()}", icon='CHECKMARK')
-            else:
-                detected_row.label(text="Detected: Unknown", icon='QUESTION')
+        armature = context.active_object
+        has_armature = armature and armature.type == 'ARMATURE'
 
-            # Bone count
-            bone_row = rig_grid.row(align=True)
-            bone_row.label(text=f"{len(armature.data.bones)} Bones", icon='BONE_DATA')
+        # Root Motion Continuity section
+        root_motion_box = layout.box()
+        root_motion_box.label(text="Root Motion", icon='ORIENTATION_GLOBAL')
+        root_motion_box.prop(scene, "animlib_enable_root_motion_continuity")
 
-            # Confidence indicator (only if not unknown)
-            if detected_rig_type != 'unknown':
-                conf_row = rig_grid.row(align=True)
-                if confidence > 0.8:
-                    conf_row.label(text=f"High Confidence ({confidence:.1f})", icon='CHECKMARK')
-                elif confidence > 0.5:
-                    conf_row.label(text=f"Medium Confidence ({confidence:.1f})", icon='REMOVE')
+        # Only show bone picker and axis options if enabled
+        if scene.animlib_enable_root_motion_continuity:
+            # Bone picker UI - only shown if we have an armature
+            if has_armature:
+                root_motion_box.prop_search(
+                    scene, "animlib_root_bone_name",
+                    armature.pose, "bones",
+                    text="Root Bone",
+                    icon='BONE_DATA'
+                )
+
+                # Show validation indicator
+                if scene.animlib_root_bone_name in armature.pose.bones:
+                    info_row = root_motion_box.row()
+                    info_row.label(text=f"Using: {scene.animlib_root_bone_name}", icon='CHECKMARK')
                 else:
-                    conf_row.label(text=f"Low Confidence ({confidence:.1f})", icon='ERROR')
+                    warning_row = root_motion_box.row()
+                    warning_row.label(text="Bone not found in rig", icon='ERROR')
+            else:
+                root_motion_box.label(text="Select armature to choose bone", icon='INFO')
 
-        # Slot Management Section (only show if action has slots)
-        if armature and armature.animation_data and armature.animation_data.action:
+            # Location axes
+            root_motion_box.label(text="Location:")
+            loc_row = root_motion_box.row(align=True)
+            loc_row.prop(scene, "animlib_root_motion_loc_x", toggle=True)
+            loc_row.prop(scene, "animlib_root_motion_loc_y", toggle=True)
+            loc_row.prop(scene, "animlib_root_motion_loc_z", toggle=True)
+
+            # Rotation continuity (single toggle - handles both Euler and Quaternion)
+            root_motion_box.prop(scene, "animlib_root_motion_rotation")
+
+            # Show hint about INSERT mode
+            hint_row = root_motion_box.row()
+            hint_row.label(text="Active in INSERT mode", icon='INFO')
+
+        # Slot Management Section (experimental - only show if enabled in preferences)
+        if is_experimental_enabled() and has_armature and armature.animation_data and armature.animation_data.action:
             action = armature.animation_data.action
             if hasattr(action, 'slots') and len(action.slots) > 0:
                 layout.separator()
@@ -454,3 +595,22 @@ class ANIMLIB_PT_main_panel(Panel):
                     merge_row.enabled = merge_enabled
                     merge_row.scale_y = 1.3
                     merge_row.operator("animlib.merge_slots", text="Merge Selected Slots", icon='UGLYPACKAGE')
+
+
+# Panel registration list
+classes = [
+    ANIMLIB_UL_slots,
+    ANIMLIB_PT_main_panel,
+    ANIMLIB_PT_capture,
+    ANIMLIB_PT_extra,
+]
+
+
+def register():
+    for cls in classes:
+        bpy.utils.register_class(cls)
+
+
+def unregister():
+    for cls in reversed(classes):
+        bpy.utils.unregister_class(cls)

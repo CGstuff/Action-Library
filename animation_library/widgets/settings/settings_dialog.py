@@ -13,6 +13,8 @@ from .storage_locations_tab import StorageLocationsTab
 from .blender_integration_tab import BlenderIntegrationTab
 from .theme_tab import ThemeTab
 from .library_tab import LibraryTab
+from .maintenance_tab import MaintenanceTab
+from .studio_mode_tab import StudioModeTab
 
 
 class SettingsDialog(QDialog):
@@ -72,6 +74,14 @@ class SettingsDialog(QDialog):
         self.library_tab = LibraryTab(self.theme_manager, self)
         self.tab_widget.addTab(self.library_tab, "Backup")
 
+        # Database maintenance tab
+        self.maintenance_tab = MaintenanceTab(self.theme_manager, self)
+        self.tab_widget.addTab(self.maintenance_tab, "Maintenance")
+
+        # Studio Mode tab
+        self.studio_mode_tab = StudioModeTab(self.theme_manager, self)
+        self.tab_widget.addTab(self.studio_mode_tab, "Studio Mode")
+
         layout.addWidget(self.tab_widget)
 
         # Button box
@@ -96,6 +106,7 @@ class SettingsDialog(QDialog):
         """Handle Apply button - save settings without closing dialog"""
         self.blender_tab.save_settings()
         self.theme_tab.save_settings()
+        self.studio_mode_tab.save_settings()
 
     def accept(self):
         """Handle OK button - save and close"""

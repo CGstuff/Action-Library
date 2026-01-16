@@ -66,26 +66,34 @@ class ArchiveService:
 
             # Get paths
             archive_folder = get_archive_folder()
-            library_folder = get_library_folder()
-            if not archive_folder or not library_folder:
+            if not archive_folder:
                 return False, "Library path not configured"
 
-            # Source folder (library/{uuid}/)
-            source_folder = library_folder / uuid
+            # Source folder - derive from stored file paths
+            blend_path = animation.get('blend_file_path')
+            json_path = animation.get('json_file_path')
+            source_path = blend_path or json_path
+            if not source_path:
+                self._db.delete_animation(uuid)
+                return True, "Animation removed (no file paths stored)"
+
+            source_folder = Path(source_path).parent
             if not source_folder.exists():
                 # Files already gone - just remove from database
                 self._db.delete_animation(uuid)
                 return True, "Animation removed (files were already missing)"
 
-            # Destination folder (.archive/{uuid}/)
+            # Destination folder (.deleted/{uuid}/)
             dest_folder = archive_folder / uuid
 
             # Handle existing archive item with same UUID
             if dest_folder.exists():
                 try:
                     shutil.rmtree(dest_folder)
-                except Exception:
-                    pass  # Will be overwritten
+                except PermissionError as e:
+                    logger.warning(f"Permission denied removing existing archive folder {dest_folder}: {e}")
+                except OSError as e:
+                    logger.warning(f"Could not remove existing archive folder {dest_folder}: {e}")
 
             # Get folder info for restoration
             folder_id = animation.get('folder_id')
@@ -105,7 +113,7 @@ class ArchiveService:
 
             # Update thumbnail path to new location
             thumbnail_path = None
-            new_thumb = dest_folder / f"{uuid}.png"
+            new_thumb = dest_folder / "thumbnail.png"
             if new_thumb.exists():
                 thumbnail_path = str(new_thumb)
 
@@ -129,8 +137,10 @@ class ArchiveService:
                 # Rollback - remove copied files
                 try:
                     shutil.rmtree(dest_folder)
-                except Exception:
-                    pass
+                except PermissionError as e:
+                    logger.warning(f"Rollback failed - permission denied removing {dest_folder}: {e}")
+                except OSError as e:
+                    logger.warning(f"Rollback failed - could not remove {dest_folder}: {e}")
                 return False, "Failed to add to archive database"
 
             # Remove from animations table first (so it's gone from UI)
@@ -162,6 +172,8 @@ class ArchiveService:
             Tuple of (success, message)
         """
         try:
+            import re
+
             # Get archive item
             archive_item = self._db.get_archive_item(uuid)
             if not archive_item:
@@ -172,15 +184,25 @@ class ArchiveService:
             if not library_folder:
                 return False, "Library path not configured"
 
-            # Source folder (.archive/{uuid}/)
+            # Source folder (.deleted/{uuid}/)
             source_folder = Path(archive_item['archive_folder_path'])
             if not source_folder.exists():
                 # Files gone - just clean up database
                 self._db.delete_from_archive(uuid)
                 return False, "Archive files not found (already deleted?)"
 
-            # Destination folder (library/{uuid}/)
-            dest_folder = library_folder / uuid
+            # Destination folder - use animation base name (human-readable)
+            animation_name = archive_item.get('name', 'unnamed')
+
+            # Get base name (strip version suffix) for folder
+            base_name = re.sub(r'_v\d{2,4}$', '', animation_name)
+            safe_base_name = re.sub(r'[<>:"/\\|?*]', '_', base_name)
+            safe_base_name = safe_base_name.strip(' .') or 'unnamed'
+            safe_base_name = re.sub(r'_+', '_', safe_base_name)
+
+            # Folder name: {base_name}/ (human-readable, no UUID)
+            dest_folder = library_folder / safe_base_name
+
             if dest_folder.exists():
                 # Check if it's already in the database
                 existing = self._db.get_animation_by_uuid(uuid)
@@ -211,17 +233,28 @@ class ArchiveService:
             # Move files back to library
             shutil.move(str(source_folder), str(dest_folder))
 
-            # Load animation data from JSON if available
-            json_file = dest_folder / f"{uuid}.json"
-            animation_data = None
+            # Sanitize full animation name (with version) for filenames
+            safe_anim_name = re.sub(r'[<>:"/\\|?*]', '_', animation_name)
+            safe_anim_name = safe_anim_name.strip(' .') or 'unnamed'
+            safe_anim_name = re.sub(r'_+', '_', safe_anim_name)
 
-            if json_file.exists():
+            # Load animation data from JSON if available
+            # Try name-based file first, then any .json file in folder
+            json_file = dest_folder / f"{safe_anim_name}.json"
+            if not json_file.exists():
+                json_files = list(dest_folder.glob("*.json"))
+                json_file = json_files[0] if json_files else None
+
+            animation_data = None
+            if json_file and json_file.exists():
                 import json
                 try:
                     with open(json_file, 'r', encoding='utf-8') as f:
                         animation_data = json.load(f)
-                except Exception:
-                    pass
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Invalid JSON in {json_file}: {e}")
+                except IOError as e:
+                    logger.warning(f"Could not read {json_file}: {e}")
 
             if not animation_data:
                 # Reconstruct minimal data from archive record
@@ -239,11 +272,11 @@ class ArchiveService:
             animation_data['uuid'] = uuid
             animation_data['folder_id'] = folder_id
 
-            # Update file paths
-            animation_data['blend_file_path'] = str(dest_folder / f"{uuid}.blend")
-            animation_data['json_file_path'] = str(json_file) if json_file.exists() else None
-            animation_data['thumbnail_path'] = str(dest_folder / f"{uuid}.png")
-            animation_data['preview_path'] = str(dest_folder / f"{uuid}.webm")
+            # Update file paths - files use animation name with version: walk_cycle_v001.blend
+            animation_data['blend_file_path'] = str(dest_folder / f"{safe_anim_name}.blend")
+            animation_data['json_file_path'] = str(json_file) if json_file and json_file.exists() else None
+            animation_data['thumbnail_path'] = str(dest_folder / f"{safe_anim_name}.png")
+            animation_data['preview_path'] = str(dest_folder / f"{safe_anim_name}.webm")
 
             # Add back to animations table
             result = self._db.add_animation(animation_data)
@@ -283,7 +316,7 @@ class ArchiveService:
             if not trash_folder:
                 return False, "Library path not configured"
 
-            # Source folder (.archive/{uuid}/)
+            # Source folder (.deleted/{uuid}/)
             source_folder = Path(archive_item['archive_folder_path'])
             if not source_folder.exists():
                 # Files gone - just clean up database
@@ -297,15 +330,17 @@ class ArchiveService:
             if dest_folder.exists():
                 try:
                     shutil.rmtree(dest_folder)
-                except Exception:
-                    pass
+                except PermissionError as e:
+                    logger.warning(f"Permission denied removing existing trash folder {dest_folder}: {e}")
+                except OSError as e:
+                    logger.warning(f"Could not remove existing trash folder {dest_folder}: {e}")
 
             # Move files to trash
             shutil.move(str(source_folder), str(dest_folder))
 
             # Update thumbnail path to new location
             thumbnail_path = None
-            new_thumb = dest_folder / f"{uuid}.png"
+            new_thumb = dest_folder / "thumbnail.png"
             if new_thumb.exists():
                 thumbnail_path = str(new_thumb)
 

@@ -10,7 +10,7 @@ Provides UI for:
 
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QLineEdit, QVBoxLayout, QHBoxLayout,
-    QGroupBox, QFileDialog, QMessageBox
+    QGroupBox, QFileDialog, QMessageBox, QSpinBox
 )
 from PyQt6.QtCore import Qt
 
@@ -28,6 +28,7 @@ class BlenderIntegrationTab(QWidget):
         # Load settings from config
         self.settings = Config.load_blender_settings()
         self.blender_path = self.settings.get('blender_exe_path', '')
+        self.socket_port = self.settings.get('socket_port', 9876)
 
         # Initialize addon installer
         self.addon_installer = AddonInstallerService()
@@ -52,6 +53,9 @@ class BlenderIntegrationTab(QWidget):
 
         # Addon installation section
         layout.addWidget(self._create_addon_installation_section())
+
+        # Socket communication section
+        layout.addWidget(self._create_socket_section())
 
         layout.addStretch()
 
@@ -110,7 +114,7 @@ class BlenderIntegrationTab(QWidget):
 
         note_label = QLabel(
             "Note: After installation, restart Blender and enable the addon in:\n"
-            "Edit > Preferences > Add-ons > Search for 'Animation Library'"
+            "Edit > Preferences > Add-ons > Search for 'Action Library'"
         )
         note_label.setWordWrap(True)
         current_theme = self.theme_manager.get_current_theme()
@@ -124,6 +128,41 @@ class BlenderIntegrationTab(QWidget):
         addon_layout.addWidget(note_label)
 
         return addon_group
+
+    def _create_socket_section(self):
+        """Create socket communication settings section"""
+        socket_group = QGroupBox("Socket Communication")
+        socket_layout = QVBoxLayout(socket_group)
+
+        # Port setting
+        port_layout = QHBoxLayout()
+        port_label = QLabel("Port:")
+        port_label.setFixedWidth(80)
+        port_layout.addWidget(port_label)
+
+        self.socket_port_input = QSpinBox()
+        self.socket_port_input.setRange(1024, 65535)
+        self.socket_port_input.setValue(self.socket_port)
+        self.socket_port_input.setFixedWidth(100)
+        port_layout.addWidget(self.socket_port_input)
+
+        port_layout.addStretch()
+        socket_layout.addLayout(port_layout)
+
+        # Info label
+        info_label = QLabel("Must match the port configured in Blender addon preferences.")
+        info_label.setWordWrap(True)
+        current_theme = self.theme_manager.get_current_theme()
+        if current_theme:
+            palette = current_theme.palette
+            info_label.setStyleSheet(
+                f"font-style: italic; color: {palette.text_secondary}; opacity: 0.6;"
+            )
+        else:
+            info_label.setStyleSheet("font-style: italic; opacity: 0.6;")
+        socket_layout.addWidget(info_label)
+
+        return socket_group
 
     def browse_blender_exe(self):
         """Browse for Blender executable"""
@@ -198,6 +237,7 @@ class BlenderIntegrationTab(QWidget):
         """Save all settings to config"""
         settings = {
             'blender_exe_path': self.blender_path_input.text().strip(),
+            'socket_port': self.socket_port_input.value(),
         }
 
         Config.save_blender_settings(settings)

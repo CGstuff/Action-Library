@@ -2,12 +2,14 @@ import bpy
 import os
 import shutil
 import subprocess
+import json
 from bpy.types import Operator
 from ..utils.queue_client import animation_queue_client
 from ..utils.utils import (get_action_keyframe_range, get_active_armature,
                    has_animation_data, safe_report_error,
                    DEFAULT_ANIMATION_NAME,)
 from ..utils.logger import get_logger
+from ..utils.naming_engine import get_naming_engine, BlenderNamingEngine
 
 # Initialize logger
 logger = get_logger()
@@ -121,15 +123,39 @@ class ANIMLIB_OT_capture_animation(Operator):
                 action = self._context_data['action']
                 is_library_action = action.get("animlib_imported", False)
 
+                # ONE-TIME v1.2→v1.3 migration: detect legacy actions
+                # Legacy v1.2 actions have animlib_imported but NO animlib_app_version
+                if is_library_action and not action.get("animlib_app_version"):
+                    logger.info("[MIGRATION] Legacy v1.2 action detected - treating as fresh animation")
+                    self._clear_library_metadata(action)
+                    is_library_action = False  # Force fresh capture
+
                 # If already in versioning mode (user already chose), skip dialog
                 if scene.animlib_is_versioning:
                     logger.debug("Already in versioning mode, skipping dialog")
                     self._state = 'DETERMINE_NAME'
                     return {'RUNNING_MODAL'}
 
-                # If action came from library, show version choice dialog
+                # If action came from library, validate metadata is still current
                 if is_library_action:
+                    source_uuid = action.get("animlib_uuid", "")
                     source_name = action.get("animlib_name", "Unknown")
+
+                    # Validate that the UUID still exists with the same name
+                    # If animation was renamed in desktop app, metadata is stale
+                    if source_uuid and source_name:
+                        is_valid = self._validate_library_metadata(source_uuid, source_name)
+
+                        if not is_valid:
+                            # Library animation was renamed or deleted - clear metadata
+                            self._clear_library_metadata(action)
+                            logger.info(f"Cleared stale library metadata for action (was: {source_name})")
+
+                            # Treat as new animation - skip version dialog
+                            self._state = 'DETERMINE_NAME'
+                            return {'RUNNING_MODAL'}
+
+                    # Metadata is valid - show version choice dialog
                     source_version = action.get("animlib_version", 1)
                     source_version_label = action.get("animlib_version_label", "v001")
                     source_version_group_id = action.get("animlib_version_group_id", "")
@@ -181,6 +207,11 @@ class ANIMLIB_OT_capture_animation(Operator):
                 # Determine animation name
                 action = self._context_data['action']
 
+                # Check for studio naming mode
+                from ..preferences import get_library_path
+                library_path = get_library_path()
+                naming_engine = get_naming_engine(library_path)
+
                 if is_versioning and version_source_name:
                     # Creating a new version - strip any existing version suffix first
                     base_name = self._strip_version_suffix(version_source_name)
@@ -191,6 +222,36 @@ class ANIMLIB_OT_capture_animation(Operator):
                     self._context_data['version_label'] = version_label
                     self._context_data['version_group_id'] = scene.animlib_version_source_group_id
                     logger.info(f"Creating new version: {animation_name} (base: {base_name})")
+                elif scene.animlib_use_studio_naming and naming_engine.is_studio_mode_enabled:
+                    # Studio naming mode - use template-based naming
+                    try:
+                        # Collect field data from scene properties (pass naming_engine for custom field mapping)
+                        field_data = self._collect_naming_fields(scene, naming_engine)
+
+                        # Extract context if not manual mode
+                        context_fields = naming_engine.extract_context()
+                        # Merge context with manual overrides (manual takes precedence)
+                        for key, value in context_fields.items():
+                            if key not in field_data or not field_data[key]:
+                                field_data[key] = value
+
+                        # Get version number
+                        version = 1  # New animation starts at v001
+
+                        # Generate name from template
+                        animation_name = naming_engine.generate_name(field_data, version)
+
+                        # Store naming data for save
+                        self._context_data['naming_fields'] = field_data
+                        self._context_data['naming_template'] = naming_engine._settings.get('naming_template', '')
+                        self._context_data['is_versioning'] = False
+
+                        logger.info(f"Studio naming: {animation_name} (fields: {field_data})")
+                    except ValueError as e:
+                        # Missing required fields - fall back to simple name
+                        logger.warning(f"Studio naming failed: {e}, falling back to action name")
+                        animation_name = scene.animlib_animation_name
+                        self._context_data['is_versioning'] = False
                 elif scene.animlib_use_action_name and action.name:
                     animation_name = action.name
                     self._context_data['is_versioning'] = False
@@ -199,6 +260,40 @@ class ANIMLIB_OT_capture_animation(Operator):
                     self._context_data['is_versioning'] = False
 
                 self._context_data['animation_name'] = animation_name
+                self._state = 'CHECK_COLLISION'
+                return {'RUNNING_MODAL'}
+
+            elif self._state == 'CHECK_COLLISION':
+                # Check if folder with same base name already exists (collision detection)
+                animation_name = self._context_data['animation_name']
+                is_versioning = self._context_data.get('is_versioning', False)
+
+                # Skip collision check if we're already creating a version
+                if is_versioning:
+                    self._state = 'SAVE_ACTION'
+                    return {'RUNNING_MODAL'}
+
+                # Get base name and check if folder exists
+                from pathlib import Path
+                from ..preferences import get_library_path
+                library_path = get_library_path()
+                if library_path:
+                    import re
+                    base_name = self._strip_version_suffix(animation_name)
+                    safe_base_name = re.sub(r'[<>:"/\\|?*]', '_', base_name)
+                    safe_base_name = safe_base_name.strip(' .')
+                    safe_base_name = re.sub(r'_+', '_', safe_base_name) or 'unnamed'
+
+                    library_dir = Path(library_path)
+                    existing_folder = library_dir / "library" / "actions" / safe_base_name
+
+                    if existing_folder.exists() and any(existing_folder.iterdir()):
+                        # Folder exists with files - COLLISION! Stop and ask user to rename.
+                        logger.error(f"Collision: folder '{safe_base_name}' already exists")
+                        self.report({'ERROR'}, f"Animation '{base_name}' already exists! Please choose a different name, or use 'New Version' to add a version.")
+                        self.cleanup(context)
+                        return {'CANCELLED'}
+
                 self._state = 'SAVE_ACTION'
                 return {'RUNNING_MODAL'}
 
@@ -219,8 +314,16 @@ class ANIMLIB_OT_capture_animation(Operator):
                         'is_latest': 1  # New versions are always latest
                     }
 
+                # Build naming info for studio mode
+                naming_info = None
+                if self._context_data.get('naming_fields'):
+                    naming_info = {
+                        'naming_fields': self._context_data.get('naming_fields'),
+                        'naming_template': self._context_data.get('naming_template', '')
+                    }
+
                 blend_file_path, json_file_path, saved_metadata = self.save_action_to_library(
-                    action, animation_name, rig_type, scene, version_info
+                    action, animation_name, rig_type, scene, version_info, naming_info
                 )
 
                 if not blend_file_path or not json_file_path:
@@ -321,6 +424,166 @@ class ANIMLIB_OT_capture_animation(Operator):
         pattern = r'_v\d{1,4}$'
         return re.sub(pattern, '', name)
 
+    def _validate_library_metadata(self, uuid: str, expected_name: str) -> bool:
+        """
+        Check if UUID exists in library with the expected name.
+
+        This validates that the action's library metadata is still current.
+        If the animation was renamed in the desktop app, the metadata is stale.
+
+        Args:
+            uuid: The animation UUID from action metadata
+            expected_name: The name stored in action metadata
+
+        Returns:
+            True if UUID found with matching name, False otherwise
+        """
+        from pathlib import Path
+        import json
+        from ..preferences import get_library_path
+
+        library_path = get_library_path()
+        if not library_path:
+            return False
+
+        library_dir = Path(library_path)
+
+        # Search for JSON file with this UUID in library folders
+        for subfolder in ['library/actions', 'library/poses', 'library']:
+            search_dir = library_dir / subfolder
+            if not search_dir.exists():
+                continue
+
+            for anim_folder in search_dir.iterdir():
+                if not anim_folder.is_dir():
+                    continue
+
+                for json_file in anim_folder.glob("*.json"):
+                    try:
+                        with open(json_file, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+
+                        if data.get('id') == uuid or data.get('uuid') == uuid:
+                            # Found UUID - check if name matches
+                            library_name = data.get('name', '')
+                            return library_name == expected_name
+                    except Exception:
+                        continue
+
+        # UUID not found in library
+        return False
+
+    def _clear_library_metadata(self, action):
+        """
+        Clear all library-related metadata from action.
+
+        This is called when the library animation was renamed or deleted,
+        making the action's metadata stale. Clearing it allows the action
+        to be captured as a new animation.
+
+        Args:
+            action: Blender action to clear metadata from
+        """
+        props_to_clear = [
+            "animlib_imported",
+            "animlib_uuid",
+            "animlib_name",
+            "animlib_version",
+            "animlib_version_label",
+            "animlib_version_group_id",
+            "animlib_rig_type"
+        ]
+
+        for prop in props_to_clear:
+            if prop in action:
+                del action[prop]
+
+    def _collect_naming_fields(self, scene, naming_engine=None) -> dict:
+        """
+        Collect naming field values from scene properties.
+
+        Args:
+            scene: Blender scene
+            naming_engine: Optional naming engine to get required fields from template
+
+        Returns:
+            Dict of field_name -> value
+        """
+        fields = {}
+
+        # Map of field names to scene properties (expanded list)
+        field_props = {
+            # Core fields
+            'show': 'animlib_naming_show',
+            'seq': 'animlib_naming_seq',
+            'sequence': 'animlib_naming_seq',
+            'shot': 'animlib_naming_shot',
+            'asset': 'animlib_naming_asset',
+            'task': 'animlib_naming_task',
+            'variant': 'animlib_naming_variant',
+            # Common aliases
+            'showname': 'animlib_naming_showname',
+            'project': 'animlib_naming_project',
+            'character': 'animlib_naming_character',
+            'char': 'animlib_naming_character',
+            'episode': 'animlib_naming_episode',
+            'ep': 'animlib_naming_episode',
+            'name': 'animlib_naming_asset',
+            'anim': 'animlib_naming_asset',
+            'animation': 'animlib_naming_asset',
+        }
+
+        # Fields that map to asset (can use action name)
+        asset_field_names = {'asset', 'name', 'anim', 'animation', 'assettype'}
+
+        # Check if we should use action name for asset fields
+        use_action_name = getattr(scene, 'animlib_asset_use_action_name', False)
+        action_name = ""
+        if use_action_name and self._context_data:
+            armature = self._context_data.get('armature')
+            if armature and armature.animation_data and armature.animation_data.action:
+                action_name = armature.animation_data.action.name
+
+        # Custom field slots for unmapped template fields
+        custom_fields = ['animlib_naming_custom1', 'animlib_naming_custom2', 'animlib_naming_custom3']
+
+        # If we have a naming engine, use its required fields to properly map custom slots
+        if naming_engine:
+            required_fields = naming_engine.get_required_fields()
+            custom_field_index = 0
+
+            for field_name in required_fields:
+                field_lower = field_name.lower()
+                prop_name = field_props.get(field_lower)
+
+                if prop_name and hasattr(scene, prop_name):
+                    # Use action name for asset fields if toggle is enabled
+                    if field_lower in asset_field_names and use_action_name and action_name:
+                        fields[field_name] = action_name.strip()
+                    else:
+                        value = getattr(scene, prop_name, '')
+                        if value:
+                            fields[field_name] = value.strip()
+                elif custom_field_index < len(custom_fields):
+                    # This field uses a custom slot
+                    custom_prop = custom_fields[custom_field_index]
+                    value = getattr(scene, custom_prop, '')
+                    if value:
+                        fields[field_name] = value.strip()
+                    custom_field_index += 1
+        else:
+            # No naming engine, collect all standard fields
+            for field_name, prop_name in field_props.items():
+                # Use action name for asset fields if toggle is enabled
+                if field_name.lower() in asset_field_names and use_action_name and action_name:
+                    fields[field_name] = action_name.strip()
+                else:
+                    value = getattr(scene, prop_name, '')
+                    if value:
+                        fields[field_name] = value.strip()
+
+        return fields
+
     def _update_action_library_metadata(self, action, metadata: dict):
         """
         Update the action's library metadata after saving.
@@ -336,6 +599,7 @@ class ANIMLIB_OT_capture_animation(Operator):
         try:
             # Update all library tracking properties
             action["animlib_imported"] = True
+            action["animlib_app_version"] = "1.3.0"  # For one-time v1.2→v1.3 migration detection
             action["animlib_uuid"] = metadata.get('id', '')
             action["animlib_version_group_id"] = metadata.get('version_group_id', metadata.get('id', ''))
             action["animlib_version"] = metadata.get('version', 1)
@@ -349,7 +613,88 @@ class ANIMLIB_OT_capture_animation(Operator):
         except Exception as e:
             logger.error(f"Error updating action library metadata: {e}")
 
-    def save_action_to_library(self, action, animation_name, rig_type, scene, version_info=None):
+    def _get_source_animation_metadata(self, version_group_id: str) -> dict:
+        """
+        Get metadata from source animation for version inheritance.
+
+        When creating a new version, we need to inherit folder_id, folder_path,
+        and tags from the source animation. This searches for the source
+        animation's JSON file and reads its metadata.
+
+        Args:
+            version_group_id: The version group UUID to search for
+
+        Returns:
+            dict with 'folder_id', 'folder_path', and 'tags' from source
+        """
+        from pathlib import Path
+        import json
+        from ..preferences import get_library_path
+
+        result = {'folder_id': None, 'folder_path': None, 'tags': []}
+
+        library_path = get_library_path()
+        if not library_path or not version_group_id:
+            return result
+
+        library_dir = Path(library_path)
+
+        # Search for animations in the version group
+        # Check both hot storage (library/) and cold storage (_versions/)
+        search_locations = [
+            library_dir / "library" / "actions",
+            library_dir / "library" / "poses",
+            library_dir / "library",
+            library_dir / "_versions",
+        ]
+
+        for search_dir in search_locations:
+            if not search_dir.exists():
+                continue
+
+            # Walk through all subdirectories
+            for json_file in search_dir.rglob("*.json"):
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+
+                    # Check if this animation belongs to the same version group
+                    file_version_group = data.get('version_group_id')
+                    file_uuid = data.get('id') or data.get('uuid')
+
+                    # Match if version_group_id matches OR if UUID matches (for original v001)
+                    if file_version_group == version_group_id or file_uuid == version_group_id:
+                        # Found a member of this version group
+                        # Get folder_id if present
+                        if data.get('folder_id') is not None:
+                            result['folder_id'] = data['folder_id']
+                            logger.debug(f"Found source folder_id: {result['folder_id']}")
+
+                        # Get folder_path if present (more portable than folder_id)
+                        if data.get('folder_path'):
+                            result['folder_path'] = data['folder_path']
+                            logger.debug(f"Found source folder_path: {result['folder_path']}")
+
+                        # Get tags if present
+                        source_tags = data.get('tags', [])
+                        if source_tags:
+                            if isinstance(source_tags, list):
+                                result['tags'] = source_tags
+                            elif isinstance(source_tags, str):
+                                result['tags'] = [t.strip() for t in source_tags.split(',') if t.strip()]
+                            logger.debug(f"Found source tags: {result['tags']}")
+
+                        # If we found folder info and tags, we can stop
+                        if (result['folder_id'] is not None or result['folder_path']) and result['tags']:
+                            return result
+
+                except Exception as e:
+                    logger.debug(f"Error reading {json_file}: {e}")
+                    continue
+
+        return result
+
+    def save_action_to_library(self, action, animation_name, rig_type, scene, version_info=None, naming_info=None):
         """Save action to library .blend file and create JSON metadata
 
         Args:
@@ -358,6 +703,7 @@ class ANIMLIB_OT_capture_animation(Operator):
             rig_type: Detected or custom rig type
             scene: Blender scene
             version_info: Optional dict with version, version_label, version_group_id, is_latest
+            naming_info: Optional dict with naming_fields, naming_template (studio naming)
         """
         try:
             import tempfile
@@ -376,19 +722,76 @@ class ANIMLIB_OT_capture_animation(Operator):
                 return None, None
             
             library_dir = Path(library_path)
-            
-            # Create unique animation ID and folder
+
+            # Create unique animation ID
             animation_id = str(uuid.uuid4())
-            
-            # Create animation folder in library directory (root level)
-            animation_folder = library_dir / "library" / animation_id
+
+            # Get base name without version suffix for folder name
+            base_name = self._strip_version_suffix(animation_name)
+            # Sanitize for filesystem
+            import re
+            safe_base_name = re.sub(r'[<>:"/\\|?*]', '_', base_name)
+            safe_base_name = safe_base_name.strip(' .')
+            safe_base_name = re.sub(r'_+', '_', safe_base_name) or 'unnamed'
+
+            # Sanitize animation name for filename (includes version)
+            safe_anim_name = re.sub(r'[<>:"/\\|?*]', '_', animation_name)
+            safe_anim_name = safe_anim_name.strip(' .')
+            safe_anim_name = re.sub(r'_+', '_', safe_anim_name) or 'unnamed'
+
+            # Create animation folder: library/actions/{base_name}/
+            animation_folder = library_dir / "library" / "actions" / safe_base_name
             animation_folder.mkdir(parents=True, exist_ok=True)
-            
-            # All files go in the same folder
-            blend_path = animation_folder / f"{animation_id}.blend"
-            json_path = animation_folder / f"{animation_id}.json"
-            preview_path = animation_folder / f"{animation_id}.webm"
-            thumbnail_path = animation_folder / f"{animation_id}.png"
+
+            # HOT/COLD STORAGE: If creating a new version, move ALL existing files to _versions/
+            if version_info and version_info.get('version_group_id'):
+                # Group files by their version (detected from filename pattern)
+                version_files = {}  # version_label -> list of files
+
+                for f in list(animation_folder.iterdir()):
+                    if f.is_file():
+                        # Try to detect version from filename (e.g., name_v002.blend -> v002)
+                        match = re.search(r'_v(\d{3,4})\.\w+$', f.name)
+                        if match:
+                            version_label = f"v{match.group(1)}"
+                        else:
+                            # No version suffix - assume v001
+                            version_label = "v001"
+
+                        if version_label not in version_files:
+                            version_files[version_label] = []
+                        version_files[version_label].append(f)
+
+                # Move each version's files to cold storage
+                for version_label, files in version_files.items():
+                    cold_folder = library_dir / "_versions" / safe_base_name / version_label
+                    cold_folder.mkdir(parents=True, exist_ok=True)
+
+                    for f in files:
+                        dest = cold_folder / f.name
+                        try:
+                            shutil.move(str(f), str(dest))
+                            logger.info(f"Moved to cold storage: {f.name} -> {version_label}/")
+
+                            # Update JSON files to set is_latest = 0 (no longer latest)
+                            if f.suffix == '.json':
+                                try:
+                                    with open(dest, 'r', encoding='utf-8') as jf:
+                                        json_data = json.load(jf)
+                                    json_data['is_latest'] = 0
+                                    with open(dest, 'w', encoding='utf-8') as jf:
+                                        json.dump(json_data, jf, indent=2)
+                                    logger.info(f"Updated {dest.name}: is_latest = 0")
+                                except Exception as je:
+                                    logger.warning(f"Failed to update is_latest in {dest.name}: {je}")
+                        except Exception as e:
+                            logger.warning(f"Failed to move {f.name}: {e}")
+
+            # Files use animation name (with version) for clarity: walk_cycle_v001.blend
+            blend_path = animation_folder / f"{safe_anim_name}.blend"
+            json_path = animation_folder / f"{safe_anim_name}.json"
+            preview_path = animation_folder / f"{safe_anim_name}.webm"
+            thumbnail_path = animation_folder / f"{safe_anim_name}.png"
 
             # Create minimal blend file with just the action
             temp_fd, temp_path = tempfile.mkstemp(suffix='.blend')
@@ -417,8 +820,28 @@ class ANIMLIB_OT_capture_animation(Operator):
             # Create preview video in the same folder (using keyframe range)
             self.create_animation_preview(armature, scene, str(preview_path), keyframe_start, keyframe_end)
             bone_names = [bone.name for bone in armature.data.bones]
-            tags = [tag.strip() for tag in scene.animlib_tags.split(',') if tag.strip()]
-            
+
+            # Get tags from UI input
+            ui_tags = [tag.strip() for tag in scene.animlib_tags.split(',') if tag.strip()]
+
+            # Inherit folder_id, folder_path and tags from source animation when versioning
+            inherited_folder_id = None
+            inherited_folder_path = None
+            inherited_tags = []
+
+            if version_info and version_info.get('version_group_id'):
+                source_metadata = self._get_source_animation_metadata(version_info['version_group_id'])
+                inherited_folder_id = source_metadata.get('folder_id')
+                inherited_folder_path = source_metadata.get('folder_path')
+                inherited_tags = source_metadata.get('tags', [])
+                logger.info(f"Inherited from source: folder_id={inherited_folder_id}, folder_path={inherited_folder_path}, tags={inherited_tags}")
+
+            # Merge tags: inherited + UI (deduplicated, preserving order)
+            tags = inherited_tags.copy()
+            for tag in ui_tags:
+                if tag not in tags:
+                    tags.append(tag)
+
             # Create JSON metadata
             # Determine version_group_id - use provided one or default to animation_id
             # Important: use `or` to handle empty strings, not just None
@@ -434,6 +857,7 @@ class ANIMLIB_OT_capture_animation(Operator):
 
             metadata = {
                 'id': animation_id,
+                'app_version': '1.3.0',  # For one-time v1.2→v1.3 migration detection
                 'name': animation_name,
                 'description': scene.animlib_description,
                 'author': scene.animlib_author,
@@ -458,7 +882,13 @@ class ANIMLIB_OT_capture_animation(Operator):
                 'version': version_info.get('version', 1) if version_info else 1,
                 'version_label': version_info.get('version_label', 'v001') if version_info else 'v001',
                 'version_group_id': final_version_group_id,
-                'is_latest': version_info.get('is_latest', 1) if version_info else 1
+                'is_latest': version_info.get('is_latest', 1) if version_info else 1,
+                # Folder inheritance for versioning
+                'folder_id': inherited_folder_id,
+                'folder_path': inherited_folder_path,
+                # Studio naming fields (v9)
+                'naming_fields': json.dumps(naming_info.get('naming_fields', {})) if naming_info else None,
+                'naming_template': naming_info.get('naming_template', '') if naming_info else None
             }
             
             # Save JSON metadata
@@ -479,7 +909,7 @@ class ANIMLIB_OT_capture_animation(Operator):
             from ..preferences import get_preview_settings
             prefs = get_preview_settings()
 
-            # Store current settings
+            # Store ALL current settings
             original_filepath = scene.render.filepath
             original_format = scene.render.image_settings.file_format
             original_color_mode = scene.render.image_settings.color_mode
@@ -490,23 +920,28 @@ class ANIMLIB_OT_capture_animation(Operator):
             original_film_transparent = scene.render.film_transparent
             viewport_settings = None
 
+            # Store media_type if available (Blender 4.5+/5.0)
+            original_media_type = None
+            if hasattr(scene.render.image_settings, 'media_type'):
+                original_media_type = scene.render.image_settings.media_type
+
             try:
                 # Set to first frame
                 scene.frame_set(first_frame)
 
-                # Configure render settings for single frame
-                scene.render.filepath = thumbnail_path
+                # Temporarily switch to PNG image format
+                # IMPORTANT: In Blender 4.5+/5.0, must set media_type to 'IMAGE' first
+                if hasattr(scene.render.image_settings, 'media_type'):
+                    scene.render.image_settings.media_type = 'IMAGE'
                 scene.render.image_settings.file_format = 'PNG'
-                scene.render.image_settings.color_mode = 'RGBA'  # Enable alpha channel
+                scene.render.image_settings.color_mode = 'RGBA'
+                scene.render.filepath = thumbnail_path
                 scene.render.resolution_x = prefs['resolution_x']
                 scene.render.resolution_y = prefs['resolution_y']
                 scene.render.resolution_percentage = 100
-
-                # Enable transparency for thumbnail (background will be composited in desktop app)
                 scene.render.film_transparent = True
 
                 # Configure viewport for clean preview with transparent background
-                # Uses the user's current viewport angle (no preset override)
                 viewport_settings = self.setup_viewport_for_preview(scene, prefs, transparent_bg=True)
 
                 # Render single frame
@@ -518,8 +953,11 @@ class ANIMLIB_OT_capture_animation(Operator):
                 # Always restore viewport settings
                 self.restore_viewport_settings(viewport_settings)
 
-                # Restore original settings
+                # Restore ALL original settings
                 scene.render.filepath = original_filepath
+                # Restore media_type first (Blender 4.5+/5.0), then file_format
+                if original_media_type and hasattr(scene.render.image_settings, 'media_type'):
+                    scene.render.image_settings.media_type = original_media_type
                 scene.render.image_settings.file_format = original_format
                 scene.render.image_settings.color_mode = original_color_mode
                 scene.frame_set(original_frame)
@@ -555,6 +993,11 @@ class ANIMLIB_OT_capture_animation(Operator):
             original_film_transparent = scene.render.film_transparent
             viewport_settings = None
 
+            # Store media_type if available (Blender 4.5+/5.0)
+            original_media_type = None
+            if hasattr(scene.render.image_settings, 'media_type'):
+                original_media_type = scene.render.image_settings.media_type
+
             try:
                 # Store original timeline (we'll restore it completely)
                 # DON'T modify scene timeline - use internal frame range for rendering only
@@ -564,8 +1007,13 @@ class ANIMLIB_OT_capture_animation(Operator):
                 # We render to PNG frames and combine with FFmpeg externally
                 use_ffmpeg_direct = False
 
+                # Check if media_type exists (Blender 4.5+/5.0)
+                has_media_type = hasattr(scene.render.image_settings, 'media_type')
+
                 try:
                     # Try Blender 4.x direct FFMPEG approach
+                    if has_media_type:
+                        scene.render.image_settings.media_type = 'VIDEO'
                     scene.render.image_settings.file_format = 'FFMPEG'
                     scene.render.ffmpeg.format = 'WEBM'
                     scene.render.ffmpeg.codec = 'WEBM'
@@ -574,8 +1022,10 @@ class ANIMLIB_OT_capture_animation(Operator):
                     scene.render.filepath = str(preview_path).replace('.webm', '')
                     use_ffmpeg_direct = True
                     logger.debug("Using direct FFMPEG video output (Blender 4.x)")
-                except TypeError:
+                except (TypeError, AttributeError):
                     # Blender 5.0+ - render to PNG frames, combine later
+                    if has_media_type:
+                        scene.render.image_settings.media_type = 'IMAGE'
                     scene.render.image_settings.file_format = 'PNG'
                     # Use #### for frame number padding (Blender convention)
                     scene.render.filepath = str(preview_path).replace('.webm', '_frame_####')
@@ -664,6 +1114,9 @@ class ANIMLIB_OT_capture_animation(Operator):
 
                 # Always restore original render settings, even if error occurs
                 scene.render.filepath = original_filepath
+                # Restore media_type first (Blender 4.5+/5.0), then file_format
+                if original_media_type and hasattr(scene.render.image_settings, 'media_type'):
+                    scene.render.image_settings.media_type = original_media_type
                 scene.render.image_settings.file_format = original_format
                 scene.frame_start = original_frame_start
                 scene.frame_end = original_frame_end
@@ -778,17 +1231,18 @@ class ANIMLIB_OT_capture_animation(Operator):
                                 space.shading.background_type = 'VIEWPORT'
                                 space.shading.background_color = (0.0, 0.0, 0.0)  # RGB only (no alpha)
 
-                            # Configure lighting based on preferences
-                            if prefs.get('use_lighting', True):
-                                if prefs.get('quality', 'MEDIUM') == 'LOW':
-                                    space.shading.light = 'FLAT'
-                                else:
-                                    space.shading.light = 'STUDIO'
-                                    space.shading.studio_light = 'forest.exr'
-                                    space.shading.studiolight_intensity = 1.0
-                            else:
-                                space.shading.light = 'FLAT'
-                            
+                            # Use STUDIO lighting for quality previews
+                            space.shading.light = 'STUDIO'
+                            # Try studio lights in order of preference
+                            for light in ['studio.sl', 'rim.sl', 'outdoor.sl', 'Default']:
+                                try:
+                                    space.shading.studio_light = light
+                                    logger.debug(f"Using studio light: {light}")
+                                    break
+                                except TypeError:
+                                    continue
+                            space.shading.studiolight_intensity = 1.0
+
                             return viewport_settings
                     break
             
@@ -861,8 +1315,11 @@ class ANIMLIB_OT_capture_animation(Operator):
                 logger.debug(f"Found bundled FFmpeg: {bundled_ffmpeg}")
                 return bundled_ffmpeg
 
-            # Not found anywhere
-            logger.warning("FFmpeg not found in system PATH or bundled directory")
+            # Not found anywhere - provide helpful message
+            logger.warning("FFmpeg not found. Video previews will not be generated.")
+            logger.warning("To fix: Install FFmpeg and add to system PATH, or place ffmpeg.exe in:")
+            logger.warning(f"  {os.path.dirname(bundled_ffmpeg)}")
+            logger.warning("Download FFmpeg from: https://www.gyan.dev/ffmpeg/builds/")
             return None
 
         except Exception as e:

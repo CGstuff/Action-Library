@@ -41,26 +41,31 @@ class AnimationView(QListView):
     """
 
     # Signals
-    animation_double_clicked = pyqtSignal(str, bool, bool)  # animation_uuid, mirror, use_slots
+    # animation_uuid, mirror, use_slots, insert_at_playhead
+    animation_double_clicked = pyqtSignal(str, bool, bool, bool)
     animation_context_menu = pyqtSignal(str, QPoint)  # animation_uuid, position
     hover_started = pyqtSignal(str, QPoint)  # animation_uuid, position
     hover_ended = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, db_service=None, event_bus=None,
+                 thumbnail_loader=None, theme_manager=None):
         super().__init__(parent)
 
-        # Event bus
-        self._event_bus = get_event_bus()
-
-        # Database service
-        self._db_service = get_database_service()
+        # Services (injectable for testing)
+        self._event_bus = event_bus or get_event_bus()
+        self._db_service = db_service or get_database_service()
 
         # View mode
         self._view_mode = Config.DEFAULT_VIEW_MODE
         self._card_size = Config.DEFAULT_CARD_SIZE
 
-        # Delegate
-        self._delegate = AnimationCardDelegate(self, view_mode=self._view_mode)
+        # Delegate (pass through DI services)
+        self._delegate = AnimationCardDelegate(
+            self, view_mode=self._view_mode,
+            db_service=self._db_service,
+            thumbnail_loader=thumbnail_loader,
+            theme_manager=theme_manager
+        )
         self.setItemDelegate(self._delegate)
 
         # Hover tracking
@@ -80,7 +85,7 @@ class AnimationView(QListView):
         self._blend_factor = 0.0
         self._blend_mirror = False
         self._blend_pose_name = ""
-        self._blend_sensitivity = 200  # Pixels for full 0-1 range
+        self._blend_sensitivity = Config.BLEND_SENSITIVITY_PIXELS
 
         # Setup view
         self._setup_view()
@@ -497,7 +502,13 @@ class AnimationView(QListView):
                 self._show_hover_video_popup()
 
     def _on_double_clicked(self, index: QModelIndex):
-        """Handle double click and track last viewed"""
+        """Handle double click and track last viewed
+
+        Modifier keys:
+        - Ctrl = mirror animation/pose
+        - Shift = use action slots (actions only)
+        - Alt = insert at playhead instead of new action (actions only)
+        """
         from PyQt6.QtWidgets import QApplication
         from PyQt6.QtCore import Qt
 
@@ -509,12 +520,13 @@ class AnimationView(QListView):
             # Update last viewed (double-click is a strong viewing signal)
             self._db_service.update_last_viewed(uuid)
 
-            # Check modifiers: Ctrl = mirror, Shift = use_slots (actions only)
+            # Check modifiers
             modifiers = QApplication.keyboardModifiers()
             mirror = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
             use_slots = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+            insert_at_playhead = bool(modifiers & Qt.KeyboardModifier.AltModifier)
 
-            self.animation_double_clicked.emit(uuid, mirror, use_slots)
+            self.animation_double_clicked.emit(uuid, mirror, use_slots, insert_at_playhead)
 
             # Update event bus
             self._event_bus.set_selected_animation(uuid)

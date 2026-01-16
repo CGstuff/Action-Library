@@ -3,12 +3,20 @@ Queue-based client for Animation Library v2
 
 Replaces network_client.py with file-based queue communication
 Maintains rig detection functionality for compatibility checking
+
+Uses the protocol package from library/.schema/protocol/ for constants.
 """
 
 import tempfile
 from pathlib import Path
 import json
 from .logger import get_logger
+from .protocol_loader import get_constant
+
+# Get protocol constants (with fallbacks if protocol not available)
+QUEUE_DIR_NAME = get_constant('QUEUE_DIR_NAME', '.queue')
+FALLBACK_QUEUE_DIR = get_constant('FALLBACK_QUEUE_DIR', 'animation_library_queue')
+QUEUE_FILE_PATTERN = get_constant('QUEUE_FILE_PATTERN', 'apply_*.json')
 
 # Initialize logger
 logger = get_logger()
@@ -79,10 +87,10 @@ class AnimationLibraryQueueClient:
 
         if library_path:
             # Use .queue folder inside library (shared between Blender and desktop app)
-            self.queue_dir = Path(library_path) / ".queue"
+            self.queue_dir = Path(library_path) / QUEUE_DIR_NAME
         else:
             # Fallback to system temp if no library configured
-            self.queue_dir = Path(tempfile.gettempdir()) / "animation_library_queue"
+            self.queue_dir = Path(tempfile.gettempdir()) / FALLBACK_QUEUE_DIR
 
         self.queue_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"AnimationLibraryQueueClient initialized. Queue directory: {self.queue_dir}")
@@ -104,7 +112,7 @@ class AnimationLibraryQueueClient:
         library_path = get_library_path()
 
         if library_path:
-            current_queue_dir = Path(library_path) / ".queue"
+            current_queue_dir = Path(library_path) / QUEUE_DIR_NAME
             if current_queue_dir != self.queue_dir:
                 self.queue_dir = current_queue_dir
                 self.queue_dir.mkdir(parents=True, exist_ok=True)
@@ -113,7 +121,7 @@ class AnimationLibraryQueueClient:
             return []
 
         try:
-            pending_files = list(self.queue_dir.glob("apply_*.json"))
+            pending_files = list(self.queue_dir.glob(QUEUE_FILE_PATTERN))
             # Sort by modification time (newest first)
             pending_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
             logger.debug(f"Found {len(pending_files)} pending requests")

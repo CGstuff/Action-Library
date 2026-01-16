@@ -42,6 +42,11 @@ datas = [
     (str(PROJECT_ROOT / 'blender_plugin'), 'blender_plugin'),
 ]
 
+# Include ffmpeg binary if present (for video preview generation)
+ffmpeg_path = PROJECT_ROOT / 'blender_plugin' / 'bin' / 'ffmpeg.exe'
+if ffmpeg_path.exists():
+    datas.append((str(ffmpeg_path), 'blender_plugin/bin'))
+
 # Hidden imports that PyInstaller might miss
 hiddenimports = [
     # PyQt6 modules

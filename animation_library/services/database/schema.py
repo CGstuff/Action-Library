@@ -8,13 +8,27 @@ import sqlite3
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any, List, Tuple
 
 from .connection import DatabaseConnection
 
 
 # Current schema version
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 11
+
+# Feature descriptions for each version upgrade
+VERSION_FEATURES: Dict[int, List[str]] = {
+    2: ["Favorites", "Recently Viewed", "Custom Order", "Lock animations"],
+    3: ["Trash system"],
+    4: ["Two-stage deletion (Archive + Trash)"],
+    5: ["Version history", "Version labels"],
+    6: ["Lifecycle status (WIP, Review, Approved)"],
+    7: ["Pose detection and badges"],
+    8: ["Partial pose support"],
+    9: ["Studio naming engine (naming_fields, naming_template)"],
+    10: ["Frame-specific review notes for dailies"],
+    11: ["Human-readable folder structure"],
+}
 
 
 class SchemaManager:
@@ -79,6 +93,12 @@ class SchemaManager:
                     self._migrate_to_v7(cursor)
                 if current_version < 8:
                     self._migrate_to_v8(cursor)
+                if current_version < 9:
+                    self._migrate_to_v9(cursor)
+                if current_version < 10:
+                    self._migrate_to_v10(cursor)
+                if current_version < 11:
+                    self._migrate_to_v11(cursor)
                 cursor.execute(
                     'INSERT OR REPLACE INTO schema_version (version) VALUES (?)',
                     (SCHEMA_VERSION,)
@@ -161,6 +181,10 @@ class SchemaManager:
                 -- Partial pose flag (v8) - 1 if pose was captured with selected bones only
                 is_partial INTEGER DEFAULT 0,
 
+                -- Studio Naming Engine (v9)
+                naming_fields TEXT,       -- JSON: {"show":"PROJ","shot":"010",...}
+                naming_template TEXT,     -- Template used: "{show}_{asset}_v{version:03}"
+
                 -- Timestamps
                 created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 modified_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -231,6 +255,22 @@ class SchemaManager:
         ''')
 
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_trash_uuid ON trash(uuid)')
+
+        # Review notes table (v10) - frame-specific notes for dailies review
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS review_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                animation_uuid TEXT NOT NULL,
+                frame INTEGER NOT NULL,
+                note TEXT NOT NULL,
+                author TEXT DEFAULT '',
+                created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved INTEGER DEFAULT 0,
+                FOREIGN KEY (animation_uuid) REFERENCES animations(uuid) ON DELETE CASCADE
+            )
+        ''')
+
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_review_notes_animation ON review_notes(animation_uuid)')
 
         # Create root folder if it doesn't exist
         cursor.execute('SELECT id FROM folders WHERE parent_id IS NULL LIMIT 1')
@@ -423,6 +463,263 @@ class SchemaManager:
             if "duplicate column name" not in str(e).lower():
                 raise
 
+    def _migrate_to_v9(self, cursor: sqlite3.Cursor):
+        """Migrate database from v8 to v9 - add studio naming engine columns."""
+        columns_to_add = [
+            ('naming_fields', 'TEXT'),       # JSON: {"show":"PROJ","shot":"010",...}
+            ('naming_template', 'TEXT'),     # Template used: "{show}_{asset}_v{version:03}"
+        ]
+
+        for column_name, column_type in columns_to_add:
+            try:
+                cursor.execute(f'ALTER TABLE animations ADD COLUMN {column_name} {column_type}')
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+
+    def _migrate_to_v10(self, cursor: sqlite3.Cursor):
+        """Migrate database from v9 to v10 - add review_notes table for dailies."""
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS review_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                animation_uuid TEXT NOT NULL,
+                frame INTEGER NOT NULL,
+                note TEXT NOT NULL,
+                author TEXT DEFAULT '',
+                created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved INTEGER DEFAULT 0,
+                FOREIGN KEY (animation_uuid) REFERENCES animations(uuid) ON DELETE CASCADE
+            )
+        ''')
+
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_review_notes_animation ON review_notes(animation_uuid)')
+
+    def _migrate_to_v11(self, cursor: sqlite3.Cursor):
+        """Migrate database from v10 to v11 - human-readable folder structure.
+
+        Note: This is a breaking change. Users with old UUID-based libraries
+        need to export their animations before upgrading.
+        """
+        # No schema changes needed - just version bump
+        pass
+
+    def get_database_stats(self) -> Dict[str, Any]:
+        """
+        Get database statistics for status display.
+
+        Returns:
+            Dict containing schema version, record counts, file size, etc.
+        """
+        conn = self._conn.get_connection()
+        cursor = conn.cursor()
+
+        # Schema version
+        cursor.execute('SELECT MAX(version) FROM schema_version')
+        result = cursor.fetchone()
+        schema_version = result[0] if result and result[0] is not None else 0
+
+        # Record counts - handle tables that may not exist in old schemas
+        animation_count = 0
+        folder_count = 0
+        archive_count = 0
+        trash_count = 0
+
+        try:
+            cursor.execute('SELECT COUNT(*) FROM animations')
+            animation_count = cursor.fetchone()[0]
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('SELECT COUNT(*) FROM folders')
+            folder_count = cursor.fetchone()[0]
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('SELECT COUNT(*) FROM archive')
+            archive_count = cursor.fetchone()[0]
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute('SELECT COUNT(*) FROM trash')
+            trash_count = cursor.fetchone()[0]
+        except sqlite3.OperationalError:
+            pass
+
+        # Database file size
+        db_path = self._conn.db_path
+        db_size_bytes = db_path.stat().st_size if db_path.exists() else 0
+
+        # Get pending features (what will be added by upgrade)
+        pending_features = []
+        for version in range(schema_version + 1, SCHEMA_VERSION + 1):
+            if version in VERSION_FEATURES:
+                pending_features.extend(VERSION_FEATURES[version])
+
+        return {
+            'schema_version': schema_version,
+            'latest_version': SCHEMA_VERSION,
+            'is_up_to_date': schema_version >= SCHEMA_VERSION,
+            'needs_upgrade': schema_version < SCHEMA_VERSION,
+            'animation_count': animation_count,
+            'folder_count': folder_count,
+            'archive_count': archive_count,
+            'trash_count': trash_count,
+            'db_size_bytes': db_size_bytes,
+            'db_size_mb': round(db_size_bytes / (1024 * 1024), 2),
+            'db_path': str(db_path),
+            'pending_features': pending_features,
+        }
+
+    def run_integrity_check(self) -> Tuple[bool, str]:
+        """
+        Run database integrity check.
+
+        Returns:
+            Tuple of (is_ok, message)
+        """
+        conn = self._conn.get_connection()
+        cursor = conn.cursor()
+
+        results = []
+
+        # Run PRAGMA integrity_check
+        cursor.execute('PRAGMA integrity_check')
+        integrity_result = cursor.fetchall()
+        integrity_ok = len(integrity_result) == 1 and integrity_result[0][0] == 'ok'
+
+        if integrity_ok:
+            results.append("Integrity check: OK")
+        else:
+            results.append(f"Integrity check: FAILED - {integrity_result}")
+
+        # Run PRAGMA foreign_key_check
+        cursor.execute('PRAGMA foreign_key_check')
+        fk_result = cursor.fetchall()
+        fk_ok = len(fk_result) == 0
+
+        if fk_ok:
+            results.append("Foreign key check: OK")
+        else:
+            results.append(f"Foreign key check: FAILED - {len(fk_result)} violations")
+
+        is_ok = integrity_ok and fk_ok
+        message = "\n".join(results)
+
+        return is_ok, message
+
+    def optimize_database(self) -> Tuple[int, int]:
+        """
+        Optimize database by running VACUUM.
+
+        Returns:
+            Tuple of (size_before, size_after) in bytes
+        """
+        db_path = self._conn.db_path
+        size_before = db_path.stat().st_size if db_path.exists() else 0
+
+        # Close all connections and run VACUUM
+        conn = self._conn.get_connection()
+        conn.execute('VACUUM')
+
+        size_after = db_path.stat().st_size if db_path.exists() else 0
+
+        return size_before, size_after
+
+    def get_current_version(self) -> int:
+        """Get current schema version."""
+        conn = self._conn.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute('SELECT MAX(version) FROM schema_version')
+            result = cursor.fetchone()
+            return result[0] if result and result[0] is not None else 0
+        except sqlite3.OperationalError:
+            return 0
+
+
+def backup_database(db_path: Path, backup_dir: Optional[Path] = None) -> Path:
+    """
+    Create a backup of the database using SQLite backup API.
+
+    Args:
+        db_path: Path to the database file
+        backup_dir: Directory for backups (defaults to db_path.parent / 'backups')
+
+    Returns:
+        Path to the backup file
+    """
+    if backup_dir is None:
+        backup_dir = db_path.parent / 'backups'
+
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = backup_dir / f"database_backup_{timestamp}.db"
+
+    # Checkpoint WAL to ensure all data is in main file
+    source = sqlite3.connect(str(db_path))
+    source.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    # Use SQLite backup API for atomic, consistent snapshot
+    dest = sqlite3.connect(str(backup_path))
+    source.backup(dest)
+
+    source.close()
+    dest.close()
+
+    return backup_path
+
+
+def get_backups(db_path: Path) -> List[Dict[str, Any]]:
+    """
+    Get list of existing backups.
+
+    Args:
+        db_path: Path to the database file
+
+    Returns:
+        List of backup info dicts with 'path', 'size', 'date'
+    """
+    backup_dir = db_path.parent / 'backups'
+    if not backup_dir.exists():
+        return []
+
+    backups = []
+    for backup_file in sorted(backup_dir.glob("database_backup_*.db"), reverse=True):
+        stat = backup_file.stat()
+        backups.append({
+            'path': str(backup_file),
+            'filename': backup_file.name,
+            'size_bytes': stat.st_size,
+            'size_mb': round(stat.st_size / (1024 * 1024), 2),
+            'date': datetime.fromtimestamp(stat.st_mtime),
+        })
+
+    return backups
+
+
+def delete_backup(backup_path: Path) -> bool:
+    """
+    Delete a backup file.
+
+    Args:
+        backup_path: Path to the backup file
+
+    Returns:
+        True if deleted successfully
+    """
+    try:
+        if backup_path.exists():
+            backup_path.unlink()
+            return True
+        return False
+    except Exception:
+        return False
+
 
 def migrate_legacy_database(new_db_path: Path, legacy_db_path: Optional[Path]):
     """
@@ -457,4 +754,12 @@ def migrate_legacy_database(new_db_path: Path, legacy_db_path: Optional[Path]):
             pass
 
 
-__all__ = ['SchemaManager', 'SCHEMA_VERSION', 'migrate_legacy_database']
+__all__ = [
+    'SchemaManager',
+    'SCHEMA_VERSION',
+    'VERSION_FEATURES',
+    'migrate_legacy_database',
+    'backup_database',
+    'get_backups',
+    'delete_backup',
+]

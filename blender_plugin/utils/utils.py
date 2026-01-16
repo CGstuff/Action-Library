@@ -18,6 +18,134 @@ BLENDER_5_0_OR_LATER = bpy.app.version >= (5, 0, 0)
 
 
 # =============================================================================
+# Blender Version Compatibility Adapter
+# =============================================================================
+# These helpers abstract away API differences between Blender versions
+
+def select_bone(pose_bone, select: bool = True):
+    """
+    Select or deselect a pose bone, compatible with Blender 4.x and 5.0+.
+
+    In Blender 5.0+, the `select` property moved from Bone to PoseBone.
+
+    Args:
+        pose_bone: PoseBone object
+        select: True to select, False to deselect
+    """
+    if BLENDER_5_0_OR_LATER:
+        pose_bone.select = select
+    else:
+        pose_bone.bone.select = select
+
+
+def is_bone_selected(pose_bone) -> bool:
+    """
+    Check if a pose bone is selected, compatible with Blender 4.x and 5.0+.
+
+    Args:
+        pose_bone: PoseBone object
+
+    Returns:
+        True if selected
+    """
+    if BLENDER_5_0_OR_LATER:
+        return pose_bone.select
+    else:
+        return pose_bone.bone.select
+
+
+def deselect_all_bones(armature):
+    """
+    Deselect all bones on an armature, compatible with Blender 4.x and 5.0+.
+
+    Args:
+        armature: Armature object in pose mode
+    """
+    if armature and armature.pose:
+        for pose_bone in armature.pose.bones:
+            select_bone(pose_bone, False)
+
+
+# =============================================================================
+# Context Management Utilities
+# =============================================================================
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def temporary_area_type(area, new_type):
+    """
+    Context manager for safely changing an area type and restoring it.
+
+    Ensures the area type is always restored even if an exception occurs,
+    preventing Blender UI from being left in an inconsistent state.
+
+    Args:
+        area: Blender Area object
+        new_type: Target area type (e.g., 'DOPESHEET_EDITOR', 'VIEW_3D')
+
+    Yields:
+        The area object for convenience
+
+    Examples:
+        >>> with temporary_area_type(area, 'DOPESHEET_EDITOR') as a:
+        ...     # Perform operations in dopesheet context
+        ...     bpy.ops.action.copy()
+        >>> # Area type is automatically restored
+    """
+    if area is None:
+        yield area
+        return
+
+    original_type = area.type
+
+    try:
+        area.type = new_type
+        yield area
+    finally:
+        try:
+            area.type = original_type
+        except Exception as e:
+            logger.warning(f"Could not restore area type to {original_type}: {e}")
+
+
+@contextmanager
+def find_and_use_area(area_types=('VIEW_3D', 'DOPESHEET_EDITOR', 'GRAPH_EDITOR')):
+    """
+    Context manager to find a suitable area when context.area is None.
+
+    This is useful for socket/timer-based operations where bpy.context.area
+    may not be set.
+
+    Args:
+        area_types: Tuple of acceptable area types to search for
+
+    Yields:
+        Found area object, or None if no suitable area found
+
+    Examples:
+        >>> with find_and_use_area() as area:
+        ...     if area:
+        ...         with temporary_area_type(area, 'VIEW_3D'):
+        ...             bpy.ops.view3d.some_operator()
+    """
+    area = bpy.context.area
+
+    if area is None:
+        # Search for a suitable area
+        for window in bpy.context.window_manager.windows:
+            for a in window.screen.areas:
+                if a.type in area_types:
+                    area = a
+                    break
+            if area:
+                break
+
+    yield area
+
+
+# =============================================================================
 # Blender 5.0 Compatibility Helpers
 # =============================================================================
 # In Blender 5.0, the legacy action.fcurves API was removed.

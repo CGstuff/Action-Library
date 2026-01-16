@@ -237,7 +237,7 @@ class AddonInstallerService:
             logger.info(f"Installing addon to {addon_dest_path}")
             shutil.copytree(self.addon_source_path, addon_dest_path)
 
-            return True, f"Successfully installed addon to:\n{addon_dest_path}\n\nPlease restart Blender and enable the addon in:\nEdit > Preferences > Add-ons > Search for 'Animation Library'"
+            return True, f"Successfully installed addon to:\n{addon_dest_path}\n\nPlease restart Blender and enable the addon in:\nEdit > Preferences > Add-ons > Search for 'Action Library'"
 
         except Exception as e:
             logger.error(f"Error installing addon: {e}")

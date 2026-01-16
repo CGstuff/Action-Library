@@ -5,18 +5,21 @@ Pattern: QWidget with form layout
 Inspired by: Current animation_library metadata display
 """
 
+from pathlib import Path
 from typing import Optional, Dict, Any
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea,
-    QFrame, QGridLayout, QPushButton, QHBoxLayout, QMenu
+    QFrame, QGridLayout, QPushButton, QHBoxLayout, QMenu, QSplitter
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QCursor
 
 from ..themes.theme_manager import get_theme_manager
 from ..config import Config
+from ..services.database_service import get_database_service
 from .video_preview_widget import VideoPreviewWidget
 from .dialogs import VersionHistoryDialog
+from .dialogs.rename_dialog import show_rename_dialog
 
 
 class MetadataPanel(QWidget):
@@ -58,19 +61,21 @@ class MetadataPanel(QWidget):
 
     # Signals
     version_changed = pyqtSignal(str)  # Emits UUID when version changes
+    notes_changed = pyqtSignal()  # Emitted when notes may have changed (dialog closed)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, theme_manager=None, event_bus=None, db_service=None):
         super().__init__(parent)
 
         # Current animation
         self._animation: Optional[Dict[str, Any]] = None
 
-        # Theme manager
-        self._theme_manager = get_theme_manager()
+        # Services (injectable for testing)
+        self._theme_manager = theme_manager or get_theme_manager()
+        self._db_service = db_service  # Lazy init via _get_db_service()
 
         # Event bus for edit mode changes
         from ..events.event_bus import get_event_bus
-        self._event_bus = get_event_bus()
+        self._event_bus = event_bus or get_event_bus()
         self._event_bus.edit_mode_changed.connect(lambda enabled: self._update_tags_section())
 
         # Setup UI
@@ -79,6 +84,12 @@ class MetadataPanel(QWidget):
 
         # Set minimum width
         self.setMinimumWidth(300)
+
+    def _get_db_service(self):
+        """Get database service (lazy initialization)"""
+        if self._db_service is None:
+            self._db_service = get_database_service()
+        return self._db_service
 
     def _create_widgets(self):
         """Create panel widgets"""
@@ -101,6 +112,7 @@ class MetadataPanel(QWidget):
         self._file_section = self._create_section("Files")
         self._tags_section = self._create_section("Tags")
         self._version_section = self._create_version_section()
+        self._pose_actions_section = self._create_pose_actions_section()
 
     def _create_section(self, title: str) -> QWidget:
         """Create a metadata section with highlighted header"""
@@ -184,6 +196,37 @@ class MetadataPanel(QWidget):
         """)
         info_layout.addWidget(self._latest_badge)
 
+        # Comment indicator (shows when animation has unresolved review comments)
+        self._comment_widget = QWidget()
+        comment_layout = QHBoxLayout(self._comment_widget)
+        comment_layout.setContentsMargins(0, 0, 0, 0)
+        comment_layout.setSpacing(4)
+
+        # Info icon
+        from ..utils.icon_loader import IconLoader
+        from PyQt6.QtGui import QIcon
+        self._comment_icon = QLabel()
+        try:
+            icon_path = IconLoader.get("info")
+            self._comment_icon.setPixmap(QIcon(icon_path).pixmap(14, 14))
+        except Exception:
+            pass
+        self._comment_icon.setFixedSize(14, 14)
+        comment_layout.addWidget(self._comment_icon)
+
+        # Comment count text
+        self._comment_indicator = QLabel("0")
+        self._comment_indicator.setStyleSheet("""
+            QLabel {
+                color: #E91E63;
+                font-size: 11px;
+            }
+        """)
+        comment_layout.addWidget(self._comment_indicator)
+
+        self._comment_widget.hide()  # Hidden by default
+        info_layout.addWidget(self._comment_widget)
+
         # Version count label
         self._version_count_label = QLabel("")
         self._version_count_label.setStyleSheet("color: #888; font-size: 9pt;")
@@ -223,6 +266,44 @@ class MetadataPanel(QWidget):
         """)
         layout.addWidget(self._history_btn)
 
+        return section
+
+    def _create_pose_actions_section(self) -> QWidget:
+        """Create pose-specific action buttons (only shown for poses)"""
+        section = QWidget()
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(0, 8, 0, 8)
+
+        # Section title
+        title_label = QLabel("Pose Actions")
+        title_font = QFont()
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_label.setStyleSheet("""
+            QLabel {
+                background-color: rgba(128, 128, 128, 0.15);
+                padding: 4px 8px;
+                border-radius: 3px;
+            }
+        """)
+        layout.addWidget(title_label)
+
+        # Select Bones button
+        self._select_bones_btn = QPushButton("Select Bones")
+        self._select_bones_btn.setToolTip(
+            "Click: Select pose bones in Blender\n"
+            "Ctrl+Click: Mirror selection (L↔R)\n"
+            "Ctrl+Shift+Click: Add to current selection"
+        )
+        self._select_bones_btn.clicked.connect(self._on_select_bones_clicked)
+        self._select_bones_btn.setStyleSheet("""
+            QPushButton {
+                padding: 6px 12px;
+            }
+        """)
+        layout.addWidget(self._select_bones_btn)
+
+        section.hide()  # Hidden by default, shown only for poses
         return section
 
     def _update_status_badge_style(self, status: str):
@@ -268,30 +349,46 @@ class MetadataPanel(QWidget):
             """)
 
     def _create_layout(self):
-        """Create panel layout"""
+        """Create panel layout with resizable preview"""
 
         # Main layout
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(8, 8, 8, 8)
 
-        # Content layout
+        # Create vertical splitter for resizable preview
+        self._splitter = QSplitter(Qt.Orientation.Vertical)
+        self._splitter.setHandleWidth(6)
+        self._splitter.setStyleSheet("""
+            QSplitter::handle {
+                background: #3a3a3a;
+            }
+            QSplitter::handle:hover {
+                background: #3A8FB7;
+            }
+        """)
+
+        # Top: Video preview
+        self._splitter.addWidget(self._create_preview_section())
+
+        # Bottom: Info sections in scroll area
         content_layout = QVBoxLayout(self._content_widget)
         content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        # Add widgets to content (preview section first, then version info)
-        content_layout.addWidget(self._create_preview_section())
         content_layout.addWidget(self._version_section)
+        content_layout.addWidget(self._pose_actions_section)
         content_layout.addWidget(self._technical_section)
         content_layout.addWidget(self._description_label)
         content_layout.addWidget(self._rig_section)
         content_layout.addWidget(self._file_section)
         content_layout.addWidget(self._tags_section)
 
-        # Set content in scroll area
         self._scroll_area.setWidget(self._content_widget)
+        self._splitter.addWidget(self._scroll_area)
 
-        # Add scroll area to main layout
-        main_layout.addWidget(self._scroll_area)
+        # Set initial sizes (preview takes ~40% of space)
+        self._splitter.setSizes([300, 400])
+
+        # Add splitter to main layout
+        main_layout.addWidget(self._splitter)
 
     def set_animation(self, animation: Dict[str, Any]):
         """
@@ -302,9 +399,15 @@ class MetadataPanel(QWidget):
         """
         self._animation = animation
 
-        # Load video preview
+        # Load video preview - resolve path for archived versions
         preview_path = animation.get('preview_path', '')
         if preview_path:
+            # Check if stored path exists, otherwise resolve to archive location
+            if not Path(preview_path).exists():
+                db_service = self._get_db_service()
+                resolved = db_service.animations.resolve_preview_file(animation)
+                if resolved:
+                    preview_path = str(resolved)
             self._video_preview.load_video(preview_path)
         else:
             self._video_preview.clear()
@@ -332,6 +435,10 @@ class MetadataPanel(QWidget):
         # Update version info
         self._update_version_section()
 
+        # Show/hide pose actions section
+        is_pose = animation.get('is_pose', 0)
+        self._pose_actions_section.setVisible(bool(is_pose))
+
     def clear(self):
         """Clear panel"""
         self._animation = None
@@ -354,6 +461,9 @@ class MetadataPanel(QWidget):
         self._history_btn.setEnabled(False)
         self._update_status_badge_style('none')  # Reset status badge
 
+        # Hide pose actions section
+        self._pose_actions_section.hide()
+
     def _update_technical_section(self):
         """Update technical information section"""
 
@@ -365,10 +475,10 @@ class MetadataPanel(QWidget):
 
         row = 0
 
-        # Animation name
+        # Animation name with rename button
         name = self._animation.get('name')
         if name:
-            self._add_info_row(grid, row, "Name:", name)
+            self._add_name_row_with_rename(grid, row, name)
             row += 1
 
         # Frame count
@@ -579,7 +689,7 @@ class MetadataPanel(QWidget):
 
         # Update database
         from ..services.database_service import get_database_service
-        db_service = get_database_service()
+        db_service = self._get_db_service()
 
         success = db_service.update_animation(
             self._animation['uuid'],
@@ -616,6 +726,80 @@ class MetadataPanel(QWidget):
         grid.addWidget(label_widget, row, 0, Qt.AlignmentFlag.AlignTop)
         grid.addWidget(value_widget, row, 1)
 
+    def _add_name_row_with_rename(self, grid: QGridLayout, row: int, name: str):
+        """Add animation name row with rename button"""
+
+        # Label (bold)
+        label_widget = QLabel("Name:")
+        label_font = QFont()
+        label_font.setBold(True)
+        label_widget.setFont(label_font)
+
+        # Value container with name and button
+        value_container = QWidget()
+        value_layout = QHBoxLayout(value_container)
+        value_layout.setContentsMargins(0, 0, 0, 0)
+        value_layout.setSpacing(8)
+
+        # Name label
+        name_label = QLabel(name)
+        name_label.setWordWrap(True)
+        value_layout.addWidget(name_label, 1)
+
+        # Rename button
+        rename_btn = QPushButton("Rename")
+        rename_btn.setFixedWidth(60)
+        rename_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        rename_btn.setStyleSheet("""
+            QPushButton {
+                padding: 2px 8px;
+                font-size: 9pt;
+            }
+        """)
+        rename_btn.clicked.connect(self._on_rename_clicked)
+        value_layout.addWidget(rename_btn)
+
+        grid.addWidget(label_widget, row, 0, Qt.AlignmentFlag.AlignTop)
+        grid.addWidget(value_container, row, 1)
+
+    def _on_rename_clicked(self):
+        """Handle rename button click"""
+        if not self._animation:
+            return
+
+        uuid = self._animation.get('uuid')
+        if not uuid:
+            return
+
+        # Release file locks before renaming (video preview holds .webm file open)
+        self._video_preview.clear()
+
+        # Show rename dialog
+        new_name = show_rename_dialog(uuid, self._animation, self)
+
+        if new_name:
+            # Refresh animation data from database
+            from ..services.database_service import get_database_service
+            db_service = self._get_db_service()
+            updated = db_service.get_animation_by_uuid(uuid)
+
+            if updated:
+                self._animation = updated
+                self._update_technical_section()
+
+                # Reload video preview with new path
+                new_preview_path = updated.get('preview_path', '')
+                if new_preview_path:
+                    self._video_preview.load_video(new_preview_path)
+
+                # Notify via event bus
+                self._event_bus.animation_updated.emit(uuid)
+        else:
+            # Rename cancelled - reload original video
+            preview_path = self._animation.get('preview_path', '')
+            if preview_path:
+                self._video_preview.load_video(preview_path)
+
     def _clear_grid(self, grid: QGridLayout):
         """Clear all widgets from grid"""
 
@@ -630,6 +814,56 @@ class MetadataPanel(QWidget):
         grid = section.property("grid")
         if grid:
             self._clear_grid(grid)
+
+    # ==================== POSE ACTIONS ====================
+
+    def _on_select_bones_clicked(self):
+        """Handle Select Bones button click with modifiers."""
+        if not self._animation:
+            return
+
+        # Get modifier keys
+        from PyQt6.QtWidgets import QApplication, QMessageBox
+        modifiers = QApplication.keyboardModifiers()
+        mirror = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+        add_to_selection = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+
+        # Get bone names - first try animation data, then load from JSON file
+        bone_names = self._animation.get('bone_names', [])
+        if not bone_names:
+            # Load from JSON file (bone_names is stored in JSON but not database)
+            json_path = self._animation.get('json_file_path')
+            if json_path:
+                try:
+                    import json
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        json_data = json.load(f)
+                    bone_names = json_data.get('bone_names', [])
+                except Exception as e:
+                    pass
+
+        if not bone_names:
+            QMessageBox.information(self, "No Bones", "This pose has no bone data.")
+            return
+
+        # Send command to Blender via socket
+        from ..services.socket_client import get_socket_client
+        client = get_socket_client()
+
+        if not client.connect():
+            QMessageBox.warning(self, "Connection Error",
+                "Cannot connect to Blender. Make sure Blender is running with the addon enabled.")
+            return
+
+        result = client.send_command({
+            'type': 'select_bones',
+            'bone_names': bone_names,
+            'mirror': mirror,
+            'add_to_selection': add_to_selection
+        })
+
+        if result and result.get('status') == 'error':
+            QMessageBox.warning(self, "Error", result.get('message', 'Unknown error'))
 
     # ==================== VERSION SECTION ====================
 
@@ -661,6 +895,21 @@ class MetadataPanel(QWidget):
         else:
             self._latest_badge.hide()
 
+        # Update comment indicator (shows when animation has unresolved review comments)
+        uuid = self._animation.get('uuid')
+        if uuid:
+            from ..services.notes_database import get_notes_database
+            notes_db = get_notes_database()
+            unresolved_count = notes_db.get_unresolved_count(uuid)
+            if unresolved_count > 0:
+                comment_text = f"{unresolved_count} comment{'s' if unresolved_count > 1 else ''}"
+                self._comment_indicator.setText(comment_text)
+                self._comment_widget.show()
+            else:
+                self._comment_widget.hide()
+        else:
+            self._comment_widget.hide()
+
         # Update status badge
         status = self._animation.get('status', 'none')
         self._update_status_badge_style(status)
@@ -671,7 +920,7 @@ class MetadataPanel(QWidget):
 
         if group_id:
             from ..services.database_service import get_database_service
-            db_service = get_database_service()
+            db_service = self._get_db_service()
             version_count = db_service.get_version_count(group_id)
 
             if version_count > 1:
@@ -724,7 +973,7 @@ class MetadataPanel(QWidget):
 
         # Update database
         from ..services.database_service import get_database_service
-        db_service = get_database_service()
+        db_service = self._get_db_service()
 
         if db_service.set_status(uuid, status):
             # Update local animation data
@@ -760,6 +1009,10 @@ class MetadataPanel(QWidget):
 
         dialog.exec()
 
+        # After dialog closes, refresh notes (comments may have been resolved/deleted)
+        self._update_version_section()  # Update metadata panel indicator
+        self.notes_changed.emit()  # Notify parent to refresh card badges
+
     def _on_version_selected(self, uuid: str):
         """Handle version selection from history dialog"""
         # Emit signal for parent to handle (e.g., load that version)
@@ -771,7 +1024,7 @@ class MetadataPanel(QWidget):
         if self._animation and self._animation.get('uuid') == uuid:
             # Refresh animation data from database
             from ..services.database_service import get_database_service
-            db_service = get_database_service()
+            db_service = self._get_db_service()
             updated = db_service.get_animation_by_uuid(uuid)
             if updated:
                 self._animation = updated

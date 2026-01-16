@@ -17,7 +17,7 @@ class Config:
 
     # Application metadata
     APP_NAME: Final[str] = "Action Library"
-    APP_VERSION: Final[str] = "1.2.0"
+    APP_VERSION: Final[str] = "1.3.0"
     APP_AUTHOR: Final[str] = "CGstuff"
 
     # Paths
@@ -29,9 +29,7 @@ class Config:
 
     # Database configuration
     DATABASE_VERSION: Final[int] = 1
-    DB_FOLDER_NAME: Final[str] = ".actionlibrary"  # Hidden folder at library root
-    DEFAULT_DB_NAME: Final[str] = "database.db"  # Version-agnostic name
-    LEGACY_DB_NAME: Final[str] = "animation_library_v2.db"  # Old name for migration
+    DEFAULT_DB_NAME: Final[str] = "database.db"
 
     # Performance settings (Hybrid plan + Maya-inspired)
     PIXMAP_CACHE_SIZE_KB: Final[int] = 512 * 1024  # 512 MB
@@ -93,10 +91,15 @@ class Config:
     # Database schema
     DB_SCHEMA_VERSION: Final[int] = 1
 
-    # Archive and Trash settings (two-stage deletion)
-    ARCHIVE_FOLDER_NAME: Final[str] = ".archive"  # First stage: soft delete, no expiry
-    TRASH_FOLDER_NAME: Final[str] = ".trash"      # Second stage: staging for hard delete
-    ALLOW_HARD_DELETE: bool = False               # Setting toggle for permanent deletion
+    # Storage structure (human-readable folders)
+    LIBRARY_FOLDER_NAME: Final[str] = "library"     # Hot storage for latest versions
+    ACTIONS_FOLDER_NAME: Final[str] = "actions"     # For animations (multi-frame)
+    POSES_FOLDER_NAME: Final[str] = "poses"         # For poses (single-frame)
+    VERSIONS_FOLDER_NAME: Final[str] = "_versions"  # Cold storage for old versions
+    META_FOLDER_NAME: Final[str] = ".meta"          # Databases and config
+    DELETED_FOLDER_NAME: Final[str] = ".deleted"    # Soft-deleted items
+    TRASH_FOLDER_NAME: Final[str] = ".trash"        # Staging for permanent deletion
+    ALLOW_HARD_DELETE: bool = False                 # Setting toggle for permanent deletion
 
     @classmethod
     def get_user_data_dir(cls) -> Path:
@@ -108,32 +111,142 @@ class Config:
 
     @classmethod
     def get_database_folder(cls) -> Path:
-        """Get the hidden .actionlibrary folder path"""
+        """Get the database folder path (.meta folder at library root)."""
         library_path = cls.load_library_path()
         if library_path and library_path.exists():
-            db_folder = library_path / cls.DB_FOLDER_NAME
-            db_folder.mkdir(parents=True, exist_ok=True)
-            return db_folder
+            meta_folder = library_path / cls.META_FOLDER_NAME
+            meta_folder.mkdir(parents=True, exist_ok=True)
+            return meta_folder
         else:
             # Fallback to user data dir if no library configured
-            db_folder = cls.get_user_data_dir() / cls.DB_FOLDER_NAME
+            db_folder = cls.get_user_data_dir() / cls.META_FOLDER_NAME
             db_folder.mkdir(parents=True, exist_ok=True)
             return db_folder
+
+    @classmethod
+    def get_meta_folder(cls) -> Path:
+        """Get the .meta folder path (alias for get_database_folder)."""
+        return cls.get_database_folder()
+
+    @classmethod
+    def get_library_folder(cls) -> Path:
+        """Get the library/ folder path (hot storage for latest versions)."""
+        library_path = cls.load_library_path()
+        if library_path and library_path.exists():
+            lib_folder = library_path / cls.LIBRARY_FOLDER_NAME
+            lib_folder.mkdir(parents=True, exist_ok=True)
+            return lib_folder
+        raise ValueError("Library path not configured")
+
+    @classmethod
+    def get_actions_folder(cls) -> Path:
+        """Get the library/actions/ folder path (for multi-frame animations)."""
+        lib_folder = cls.get_library_folder()
+        actions_folder = lib_folder / cls.ACTIONS_FOLDER_NAME
+        actions_folder.mkdir(parents=True, exist_ok=True)
+        return actions_folder
+
+    @classmethod
+    def get_poses_folder(cls) -> Path:
+        """Get the library/poses/ folder path (for single-frame poses)."""
+        lib_folder = cls.get_library_folder()
+        poses_folder = lib_folder / cls.POSES_FOLDER_NAME
+        poses_folder.mkdir(parents=True, exist_ok=True)
+        return poses_folder
+
+    @classmethod
+    def get_versions_folder(cls) -> Path:
+        """Get the _versions/ folder path (cold storage for old versions)."""
+        library_path = cls.load_library_path()
+        if library_path and library_path.exists():
+            versions_folder = library_path / cls.VERSIONS_FOLDER_NAME
+            versions_folder.mkdir(parents=True, exist_ok=True)
+            return versions_folder
+        raise ValueError("Library path not configured")
+
+    @classmethod
+    def get_deleted_folder(cls) -> Path:
+        """Get the soft-deleted items folder path (.deleted folder)."""
+        library_path = cls.load_library_path()
+        if library_path and library_path.exists():
+            deleted_folder = library_path / cls.DELETED_FOLDER_NAME
+            deleted_folder.mkdir(parents=True, exist_ok=True)
+            return deleted_folder
+        raise ValueError("Library path not configured")
+
+    @classmethod
+    def sanitize_folder_name(cls, name: str) -> str:
+        """
+        Sanitize animation name for use as folder name.
+
+        Args:
+            name: Animation name (may include version like 'walk_cycle_v001')
+
+        Returns:
+            Safe folder name string
+        """
+        import re
+        # Replace invalid characters with underscore
+        safe = re.sub(r'[<>:"/\\|?*]', '_', name)
+        # Remove leading/trailing spaces and dots
+        safe = safe.strip(' .')
+        # Collapse multiple underscores
+        safe = re.sub(r'_+', '_', safe)
+        return safe or 'unnamed'
+
+    @classmethod
+    def get_base_name(cls, animation_name: str) -> str:
+        """
+        Extract base name without version suffix.
+
+        Args:
+            animation_name: Full name like 'walk_cycle_v001' or 'PROJ_hero_walk_v003'
+
+        Returns:
+            Base name like 'walk_cycle' or 'PROJ_hero_walk'
+        """
+        import re
+        # Remove _v### or _v#### suffix
+        base = re.sub(r'_v\d{2,4}$', '', animation_name)
+        return cls.sanitize_folder_name(base)
+
+    @classmethod
+    def get_animation_library_path(cls, animation_name: str, is_pose: bool = False) -> Path:
+        """
+        Get path to animation in library (hot storage - latest version).
+
+        Args:
+            animation_name: Animation name (with or without version)
+            is_pose: If True, use poses folder; if False, use actions folder
+
+        Returns:
+            Path to library/actions/{base_name}/ or library/poses/{base_name}/
+        """
+        base_name = cls.get_base_name(animation_name)
+        if is_pose:
+            return cls.get_poses_folder() / base_name
+        else:
+            return cls.get_actions_folder() / base_name
+
+    @classmethod
+    def get_animation_version_path(cls, animation_name: str, version_label: str) -> Path:
+        """
+        Get path to animation version in cold storage.
+
+        Args:
+            animation_name: Animation name
+            version_label: Version like 'v001'
+
+        Returns:
+            Path to _versions/{base_name}/{version_label}/
+        """
+        base_name = cls.get_base_name(animation_name)
+        return cls.get_versions_folder() / base_name / version_label
 
     @classmethod
     def get_database_path(cls) -> Path:
-        """Get full path to database file (in hidden .actionlibrary folder)"""
+        """Get full path to database file (in .meta folder)"""
         return cls.get_database_folder() / cls.DEFAULT_DB_NAME
-
-    @classmethod
-    def get_legacy_database_path(cls) -> Optional[Path]:
-        """Get path to legacy database if it exists (for migration)"""
-        library_path = cls.load_library_path()
-        if library_path and library_path.exists():
-            legacy_path = library_path / cls.LEGACY_DB_NAME
-            if legacy_path.exists():
-                return legacy_path
-        return None
 
     @classmethod
     def get_cache_dir(cls) -> Path:
@@ -168,7 +281,12 @@ class Config:
     BLENDER_CONFIG_FILE: Final[str] = "blender_settings.json"
     DEFAULT_ADDON_FOLDER_NAME: Final[str] = "animation_library_addon"
     QUEUE_POLL_INTERVAL_MS: Final[int] = 500  # Blender poll frequency
+    QUEUE_CHECK_INTERVAL_MS: Final[int] = 5000  # UI queue check frequency
+    QUEUE_NOTIFICATION_DELAY_MS: Final[int] = 200  # Delay before processing notifications
     QUEUE_MAX_AGE_SECONDS: Final[int] = 300  # Auto-cleanup old requests
+
+    # Pose Blending Settings
+    BLEND_SENSITIVITY_PIXELS: Final[int] = 200  # Horizontal pixels for 0-1 range
 
     @classmethod
     def get_blender_settings_file(cls) -> Path:
@@ -201,7 +319,8 @@ class Config:
             'blender_exe_path': '',
             'launch_mode': 'PRODUCTION',
             'script_path': '',
-            'python_exe': 'python'
+            'python_exe': 'python',
+            'socket_port': 9876
         }
 
     @classmethod
@@ -351,6 +470,92 @@ class Config:
         'needs_work': {'color': '#F44336', 'label': 'Needs Work'},
         'final': {'color': '#9C27B0', 'label': 'Final'},
     }
+
+    # ==================== REVIEW NOTES ====================
+    # Time format for displaying frame timestamps in review notes
+    TIME_FORMAT_FRAME: Final[str] = 'frame'       # Display as "f125"
+    TIME_FORMAT_TIMECODE: Final[str] = 'timecode'  # Display as "00:05:04"
+    DEFAULT_TIME_FORMAT: Final[str] = TIME_FORMAT_FRAME
+
+    # Review note marker colors
+    REVIEW_MARKER_UNRESOLVED: Final[str] = '#FF9800'  # Orange
+    REVIEW_MARKER_RESOLVED: Final[str] = '#4CAF50'    # Green (dimmed in UI)
+
+    @classmethod
+    def get_time_format(cls) -> str:
+        """Get the current time format preference."""
+        settings_file = cls.get_settings_file()
+        if settings_file.exists():
+            try:
+                import json
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    return settings.get('review_notes_time_format', cls.DEFAULT_TIME_FORMAT)
+            except Exception:
+                pass
+        return cls.DEFAULT_TIME_FORMAT
+
+    @classmethod
+    def set_time_format(cls, time_format: str) -> bool:
+        """Set the time format preference."""
+        if time_format not in (cls.TIME_FORMAT_FRAME, cls.TIME_FORMAT_TIMECODE):
+            return False
+        try:
+            import json
+            settings_file = cls.get_settings_file()
+            settings_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Load existing settings
+            settings = {}
+            if settings_file.exists():
+                try:
+                    with open(settings_file, 'r', encoding='utf-8') as f:
+                        settings = json.load(f)
+                except Exception:
+                    pass
+
+            # Update setting
+            settings['review_notes_time_format'] = time_format
+
+            # Save back
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2)
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def format_frame_timestamp(cls, frame: int, fps: int = 24, time_format: str = None) -> str:
+        """
+        Format a frame number as a timestamp string.
+
+        Args:
+            frame: Frame number
+            fps: Frames per second (for timecode conversion)
+            time_format: 'frame' or 'timecode' (uses preference if None)
+
+        Returns:
+            Formatted string like "f125" or "00:05:04"
+        """
+        if time_format is None:
+            time_format = cls.get_time_format()
+
+        if time_format == cls.TIME_FORMAT_TIMECODE:
+            # Convert frame to timecode (HH:MM:SS:FF or MM:SS)
+            total_seconds = frame / fps if fps > 0 else 0
+            minutes = int(total_seconds // 60)
+            seconds = int(total_seconds % 60)
+            frames = frame % fps if fps > 0 else 0
+
+            if minutes >= 60:
+                hours = minutes // 60
+                minutes = minutes % 60
+                return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                return f"{minutes:02d}:{seconds:02d}"
+        else:
+            # Frame format
+            return f"f{frame}"
 
 
 # Export for convenient imports

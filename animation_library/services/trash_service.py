@@ -72,7 +72,7 @@ class TrashService:
                 self._db.delete_from_trash(uuid)
                 return False, "Trash files not found"
 
-            # Destination folder (.archive/{uuid}/)
+            # Destination folder (.deleted/{uuid}/)
             dest_folder = archive_folder / uuid
 
             # Handle existing archive item with same UUID

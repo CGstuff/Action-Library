@@ -5,11 +5,14 @@ Handles animation CRUD, search, and filtering.
 """
 
 import json
+import re
 from datetime import datetime
+from pathlib import Path
 from typing import List, Dict, Optional, Any
 
 from .connection import DatabaseConnection
 from .helpers import deserialize_animation, serialize_tags, row_to_dict
+from ...config import Config
 
 
 class AnimationRepository:
@@ -59,8 +62,9 @@ class AnimationRepository:
                         file_size_mb, tags, author, use_custom_thumbnail_gradient,
                         thumbnail_gradient_top, thumbnail_gradient_bottom,
                         created_date, modified_date,
-                        version, version_label, version_group_id, is_latest, status, is_pose, is_partial
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        version, version_label, version_group_id, is_latest, status, is_pose, is_partial,
+                        naming_fields, naming_template
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     uuid,
                     animation_data.get('name'),
@@ -96,7 +100,10 @@ class AnimationRepository:
                     # Pose flag (v7) - 0 for actions, 1 for poses
                     animation_data.get('is_pose', 0),
                     # Partial pose flag (v8) - 1 if captured with selected bones only
-                    animation_data.get('is_partial', 0)
+                    animation_data.get('is_partial', 0),
+                    # Studio naming fields (v9)
+                    animation_data.get('naming_fields'),
+                    animation_data.get('naming_template')
                 ))
 
                 return cursor.lastrowid
@@ -224,6 +231,23 @@ class AnimationRepository:
                 return cursor.rowcount > 0
         except Exception:
             return False
+
+    def clear_all(self) -> int:
+        """
+        Delete all animations from database for rebuild.
+
+        Returns:
+            Number of animations deleted
+        """
+        try:
+            with self._conn.transaction() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT COUNT(*) FROM animations')
+                count = cursor.fetchone()[0]
+                cursor.execute('DELETE FROM animations')
+                return count
+        except Exception:
+            return 0
 
     def get_count(self, folder_id: Optional[int] = None) -> int:
         """
@@ -864,6 +888,305 @@ class AnimationRepository:
             return updated
         except Exception:
             return 0
+
+    # ==================== PATH GENERATION & RESOLUTION ====================
+
+    def get_animation_folder(self, animation: Dict[str, Any], for_version: str = None) -> Optional[Path]:
+        """
+        Get the folder path for an animation.
+
+        For latest version: library/{base_name}/
+        For old versions: _versions/{base_name}/{version_label}/
+
+        Args:
+            animation: Animation dict with 'name', 'is_latest', 'version_label' keys
+            for_version: If specified, override and use this version in cold storage.
+
+        Returns:
+            Path to animation folder, or None if paths can't be determined
+        """
+        # First try to derive from stored paths (most reliable)
+        blend_path = animation.get('blend_file_path')
+        if blend_path:
+            path = Path(blend_path)
+            if path.exists():
+                return path.parent
+
+        # Generate expected folder path using base name
+        name = animation.get('name', 'unnamed')
+        base_name = Config.get_base_name(name)
+
+        # Determine if this is cold storage (old version) or hot storage (latest)
+        is_latest = animation.get('is_latest', 1)
+        version_label = for_version or animation.get('version_label', 'v001')
+
+        try:
+            if is_latest == 0 or for_version:
+                # Cold storage: _versions/{base_name}/{version_label}/
+                versions_folder = Config.get_versions_folder()
+                cold_path = versions_folder / base_name / version_label
+                if cold_path.exists():
+                    return cold_path
+                # Fallback to hot storage if cold doesn't exist
+                library_folder = Config.get_library_folder()
+                return library_folder / base_name
+            else:
+                # Hot storage: library/{base_name}/
+                library_folder = Config.get_library_folder()
+                return library_folder / base_name
+        except ValueError:
+            # Library not configured
+            return None
+
+    def resolve_blend_file(self, animation: Dict[str, Any]) -> Optional[Path]:
+        """
+        Resolve the blend file path for an animation.
+        Checks both hot storage (library/) and cold storage (_versions/).
+
+        Args:
+            animation: Animation dict
+
+        Returns:
+            Path to blend file, or None if not found
+        """
+        name = animation.get('name', '')
+        safe_name = re.sub(r'[<>:"/\\|?*]', '_', name)
+        safe_name = safe_name.strip(' .') or 'unnamed'
+
+        # Try the stored path first (primary source)
+        stored_path = animation.get('blend_file_path')
+        if stored_path:
+            path = Path(stored_path)
+            if path.exists():
+                return path
+
+        # Try hot storage: library/{base_name}/
+        folder = self.get_animation_folder(animation)
+        if folder and folder.exists():
+            path = folder / f"{safe_name}.blend"
+            if path.exists():
+                return path
+
+        # Try cold storage: _versions/{base_name}/{version_label}/
+        base_name = Config.get_base_name(name)
+        version_label = animation.get('version_label', 'v001')
+        try:
+            versions_folder = Config.get_versions_folder()
+            cold_path = versions_folder / base_name / version_label / f"{safe_name}.blend"
+            if cold_path.exists():
+                return cold_path
+        except ValueError:
+            pass
+
+        return None
+
+    def resolve_json_file(self, animation: Dict[str, Any]) -> Optional[Path]:
+        """
+        Resolve the JSON metadata file path for an animation.
+        Checks both hot storage (library/) and cold storage (_versions/).
+
+        Args:
+            animation: Animation dict
+
+        Returns:
+            Path to JSON file, or None if not found
+        """
+        name = animation.get('name', '')
+        safe_name = re.sub(r'[<>:"/\\|?*]', '_', name)
+        safe_name = safe_name.strip(' .') or 'unnamed'
+
+        # Try the stored path first (primary source)
+        stored_path = animation.get('json_file_path')
+        if stored_path:
+            path = Path(stored_path)
+            if path.exists():
+                return path
+
+        # Try hot storage: library/{base_name}/
+        folder = self.get_animation_folder(animation)
+        if folder and folder.exists():
+            path = folder / f"{safe_name}.json"
+            if path.exists():
+                return path
+
+        # Try cold storage: _versions/{base_name}/{version_label}/
+        base_name = Config.get_base_name(name)
+        version_label = animation.get('version_label', 'v001')
+        try:
+            versions_folder = Config.get_versions_folder()
+            cold_path = versions_folder / base_name / version_label / f"{safe_name}.json"
+            if cold_path.exists():
+                return cold_path
+        except ValueError:
+            pass
+
+        return None
+
+    def resolve_preview_file(self, animation: Dict[str, Any]) -> Optional[Path]:
+        """
+        Resolve the preview video file path for an animation.
+        Checks both hot storage (library/) and cold storage (_versions/).
+
+        Args:
+            animation: Animation dict
+
+        Returns:
+            Path to preview file, or None if not found
+        """
+        name = animation.get('name', '')
+        safe_name = re.sub(r'[<>:"/\\|?*]', '_', name)
+        safe_name = safe_name.strip(' .') or 'unnamed'
+
+        # Try the stored path first (primary source)
+        stored_path = animation.get('preview_path')
+        if stored_path:
+            path = Path(stored_path)
+            if path.exists():
+                return path
+
+        # Try hot storage: library/{base_name}/
+        folder = self.get_animation_folder(animation)
+        if folder and folder.exists():
+            for ext in ['.webm', '.mp4']:
+                path = folder / f"{safe_name}{ext}"
+                if path.exists():
+                    return path
+
+        # Try cold storage: _versions/{base_name}/{version_label}/
+        base_name = Config.get_base_name(name)
+        version_label = animation.get('version_label', 'v001')
+        try:
+            versions_folder = Config.get_versions_folder()
+            cold_folder = versions_folder / base_name / version_label
+
+            if cold_folder.exists():
+                # Try multiple filename patterns
+                for ext in ['.webm', '.mp4']:
+                    patterns_to_try = [
+                        f"{safe_name}{ext}",                      # Full name with version
+                        f"{base_name}_{version_label}{ext}",      # base_v001.webm
+                        f"{base_name}{ext}",                      # base.webm (no version)
+                    ]
+                    for pattern in patterns_to_try:
+                        cold_path = cold_folder / pattern
+                        if cold_path.exists():
+                            return cold_path
+
+                # Last resort: find ANY video file in the folder
+                for ext in ['.webm', '.mp4']:
+                    video_files = list(cold_folder.glob(f"*{ext}"))
+                    if video_files:
+                        return video_files[0]
+        except ValueError:
+            pass
+
+        return None
+
+    def resolve_thumbnail_file(self, animation: Dict[str, Any]) -> Optional[Path]:
+        """
+        Resolve the thumbnail file path for an animation.
+        Checks both hot storage (library/) and cold storage (_versions/).
+
+        Args:
+            animation: Animation dict
+
+        Returns:
+            Path to thumbnail file, or None if not found
+        """
+        name = animation.get('name', '')
+        safe_name = re.sub(r'[<>:"/\\|?*]', '_', name)
+        safe_name = safe_name.strip(' .') or 'unnamed'
+        version_label = animation.get('version_label', 'v001')
+
+        # Try the stored path first (primary source)
+        stored_path = animation.get('thumbnail_path')
+        if stored_path:
+            path = Path(stored_path)
+            if path.exists():
+                return path
+
+        # Try hot storage: library/{base_name}/
+        folder = self.get_animation_folder(animation)
+        if folder and folder.exists():
+            path = folder / f"{safe_name}.png"
+            if path.exists():
+                return path
+
+        # Try cold storage: _versions/{base_name}/{version_label}/
+        base_name = Config.get_base_name(name)
+        try:
+            versions_folder = Config.get_versions_folder()
+            cold_folder = versions_folder / base_name / version_label
+
+            if cold_folder.exists():
+                # Try multiple filename patterns
+                patterns_to_try = [
+                    f"{safe_name}.png",                           # Full name with version
+                    f"{base_name}_{version_label}.png",           # base_v001.png
+                    f"{base_name}.png",                           # base.png (no version)
+                ]
+
+                for pattern in patterns_to_try:
+                    cold_path = cold_folder / pattern
+                    if cold_path.exists():
+                        return cold_path
+
+                # Last resort: find ANY .png file in the folder
+                png_files = list(cold_folder.glob("*.png"))
+                if png_files:
+                    return png_files[0]
+        except ValueError:
+            pass
+
+        return None
+
+    def generate_file_paths(self, animation_name: str,
+                            version_label: str = None,
+                            is_latest: bool = True,
+                            is_pose: bool = False) -> Dict[str, str]:
+        """
+        Generate file paths for a new animation using human-readable structure.
+
+        Args:
+            animation_name: Animation name (may include version suffix like 'walk_cycle_v001')
+            version_label: Version label like 'v001' (for cold storage)
+            is_latest: If True, generate paths for hot storage
+            is_pose: If True, use poses folder; if False, use actions folder
+
+        Returns:
+            Dict with keys: folder, blend_file_path, json_file_path,
+                           preview_path, thumbnail_path
+        """
+        # Get base name (strip version suffix) for folder
+        base_name = Config.get_base_name(animation_name)
+
+        # Sanitize animation name for filename (includes version)
+        safe_name = re.sub(r'[<>:"/\\|?*]', '_', animation_name)
+        safe_name = safe_name.strip(' .') or 'unnamed'
+        safe_name = re.sub(r'_+', '_', safe_name)
+
+        if is_latest:
+            # Hot storage: library/actions/{base_name}/ or library/poses/{base_name}/
+            if is_pose:
+                parent_folder = Config.get_poses_folder()
+            else:
+                parent_folder = Config.get_actions_folder()
+            folder = parent_folder / base_name
+        else:
+            # Cold storage: _versions/{base_name}/{version_label}/
+            versions_folder = Config.get_versions_folder()
+            folder = versions_folder / base_name / (version_label or 'v001')
+
+        folder.mkdir(parents=True, exist_ok=True)
+
+        # Files use full animation name (with version): walk_cycle_v001.blend
+        return {
+            'folder': str(folder),
+            'blend_file_path': str(folder / f"{safe_name}.blend"),
+            'json_file_path': str(folder / f"{safe_name}.json"),
+            'preview_path': str(folder / f"{safe_name}.webm"),
+            'thumbnail_path': str(folder / f"{safe_name}.png"),
+        }
 
 
 __all__ = ['AnimationRepository']

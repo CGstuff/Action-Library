@@ -41,24 +41,28 @@ def get_library_folder(ensure_exists: bool = False) -> Optional[Path]:
     return folder
 
 
-def get_archive_folder(ensure_exists: bool = True) -> Optional[Path]:
+def get_deleted_folder(ensure_exists: bool = True) -> Optional[Path]:
     """
-    Get .archive folder path
+    Get soft-deleted items folder path (.deleted folder).
 
     Args:
         ensure_exists: If True, create folder if it doesn't exist (default: True)
 
     Returns:
-        Path to .archive folder or None if library not configured
+        Path to deleted items folder or None if library not configured
     """
     library_path = get_library_path()
     if not library_path:
         return None
 
-    archive_folder = library_path / Config.ARCHIVE_FOLDER_NAME
+    deleted_folder = library_path / Config.DELETED_FOLDER_NAME
     if ensure_exists:
-        archive_folder.mkdir(parents=True, exist_ok=True)
-    return archive_folder
+        deleted_folder.mkdir(parents=True, exist_ok=True)
+    return deleted_folder
+
+
+# Alias for backward compatibility
+get_archive_folder = get_deleted_folder
 
 
 def get_trash_folder(ensure_exists: bool = True) -> Optional[Path]:
@@ -104,7 +108,8 @@ def get_queue_folder(ensure_exists: bool = True) -> Optional[Path]:
 __all__ = [
     'get_library_path',
     'get_library_folder',
-    'get_archive_folder',
+    'get_deleted_folder',
+    'get_archive_folder',  # Alias for backward compatibility
     'get_trash_folder',
     'get_queue_folder',
 ]

@@ -9,6 +9,32 @@ from .color_presets import GRADIENT_PRESETS, get_preset_by_name, get_preset_grad
 from .dialog_helper import DialogHelper
 from .layout_utils import clear_layout, clear_grid, add_grid_row, set_layout_margins, set_layout_spacing
 
+# String utilities
+from .string_utils import (
+    sanitize_filename,
+    sanitize_for_path,
+    strip_version_suffix,
+    format_version_label,
+    parse_version_label,
+)
+
+# JSON utilities
+from .json_utils import (
+    safe_json_load,
+    safe_json_save,
+    safe_json_update,
+    is_valid_json_file,
+)
+
+# File utilities
+from .file_utils import (
+    transactional_move,
+    atomic_write,
+    safe_remove_tree,
+    ensure_parent_exists,
+    get_unique_path,
+)
+
 __all__ = [
     'composite_image_on_gradient_colors',
     'create_vertical_gradient',
@@ -31,4 +57,21 @@ __all__ = [
     'add_grid_row',
     'set_layout_margins',
     'set_layout_spacing',
+    # String utilities
+    'sanitize_filename',
+    'sanitize_for_path',
+    'strip_version_suffix',
+    'format_version_label',
+    'parse_version_label',
+    # JSON utilities
+    'safe_json_load',
+    'safe_json_save',
+    'safe_json_update',
+    'is_valid_json_file',
+    # File utilities
+    'transactional_move',
+    'atomic_write',
+    'safe_remove_tree',
+    'ensure_parent_exists',
+    'get_unique_path',
 ]

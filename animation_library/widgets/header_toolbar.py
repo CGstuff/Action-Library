@@ -51,7 +51,7 @@ class HeaderToolbar(QWidget):
     sort_changed = pyqtSignal(str, str)  # (sort_by, sort_order)
     help_clicked = pyqtSignal()  # Help button clicked
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, db_service=None, event_bus=None, theme_manager=None):
         super().__init__(parent)
 
         # Set header property for theme-based styling (orange gradient)
@@ -62,9 +62,10 @@ class HeaderToolbar(QWidget):
         # Fixed height like old repo
         self.setFixedHeight(50)
 
-        # Event bus and database service
-        self._event_bus = get_event_bus()
-        self._db_service = get_database_service()
+        # Services (injectable for testing)
+        self._event_bus = event_bus or get_event_bus()
+        self._db_service = db_service or get_database_service()
+        self._theme_manager = theme_manager or get_theme_manager()
 
         # State
         self._view_mode = Config.DEFAULT_VIEW_MODE
@@ -87,7 +88,7 @@ class HeaderToolbar(QWidget):
         """Create toolbar widgets"""
 
         # Get theme for icon colorization
-        theme = get_theme_manager().get_current_theme()
+        theme = self._theme_manager.get_current_theme()
         icon_color = theme.palette.header_icon_color if theme else "#1a1a1a"
 
         # Search box (match old repo: 200px wide)
@@ -315,12 +316,11 @@ class HeaderToolbar(QWidget):
         self._event_bus.delete_button_enabled.connect(self._delete_btn.setEnabled)
 
         # Theme changes - reload icons with new color
-        theme_manager = get_theme_manager()
-        theme_manager.theme_changed.connect(self._on_theme_changed)
+        self._theme_manager.theme_changed.connect(self._on_theme_changed)
 
     def _on_theme_changed(self, theme_name: str):
         """Reload all icons when theme changes"""
-        theme = get_theme_manager().get_current_theme()
+        theme = self._theme_manager.get_current_theme()
         if not theme:
             return
 
@@ -418,10 +418,8 @@ class HeaderToolbar(QWidget):
 
         # Show About dialog
         from .dialogs.about_dialog import AboutDialog
-        from ..themes.theme_manager import get_theme_manager
 
-        theme_manager = get_theme_manager()
-        dialog = AboutDialog(self, theme_manager)
+        dialog = AboutDialog(self, self._theme_manager)
         dialog.exec()
 
     def _on_console_clicked(self):
@@ -430,10 +428,8 @@ class HeaderToolbar(QWidget):
 
         # Show Console/Logs dialog
         from .dialogs.log_console_dialog import LogConsoleDialog
-        from ..themes.theme_manager import get_theme_manager
 
-        theme_manager = get_theme_manager()
-        dialog = LogConsoleDialog(self, theme_manager)
+        dialog = LogConsoleDialog(self, self._theme_manager)
         dialog.exec()
 
     def _on_rig_type_filter_changed(self, index: int):

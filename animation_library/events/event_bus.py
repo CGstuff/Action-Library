@@ -68,6 +68,12 @@ class EventBus(QObject):
     # Tag events
     tags_updated = pyqtSignal(str, list)  # animation_id, tags
 
+    # Review notes events (frame-specific notes for dailies)
+    review_note_added = pyqtSignal(str, int)  # animation_uuid, note_id
+    review_note_updated = pyqtSignal(str, int)  # animation_uuid, note_id
+    review_note_deleted = pyqtSignal(str, int)  # animation_uuid, note_id
+    review_note_resolved = pyqtSignal(str, int, bool)  # animation_uuid, note_id, resolved
+
     # Button state events
     apply_button_enabled = pyqtSignal(bool)
     delete_button_enabled = pyqtSignal(bool)

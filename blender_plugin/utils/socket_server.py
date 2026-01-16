@@ -38,7 +38,8 @@ import threading
 import queue
 import json
 import os
-from typing import Optional, Dict, Any, Callable
+import time
+from typing import Optional, Dict, Any, Callable, Set
 from ..utils.logger import get_logger
 
 logger = get_logger()
@@ -48,6 +49,11 @@ DEFAULT_HOST = '127.0.0.1'
 DEFAULT_PORT = 9876
 SOCKET_TIMEOUT = 2.0  # Seconds
 BUFFER_SIZE = 4096
+QUEUE_TIME_BUDGET_MS = 16  # Max time per timer tick for light commands
+MAX_HEAVY_COMMANDS_PER_TICK = 1  # Heavy commands are file I/O bound
+
+# Heavy command types that should be limited per tick (file I/O operations)
+HEAVY_COMMAND_TYPES: Set[str] = {'apply_animation', 'apply_pose', 'blend_pose_end'}
 
 # Global state
 _server_socket: Optional[socket.socket] = None
@@ -76,8 +82,22 @@ def register_command_handler(command_type: str, handler: Callable):
 
 
 def get_server_port() -> int:
-    """Get server port from environment or default"""
-    return int(os.environ.get('ANIMLIB_SOCKET_PORT', DEFAULT_PORT))
+    """Get server port from preferences, environment, or default"""
+    # First check environment variable (for advanced users)
+    env_port = os.environ.get('ANIMLIB_SOCKET_PORT')
+    if env_port:
+        return int(env_port)
+
+    # Then check addon preferences
+    try:
+        addon_name = __name__.split('.')[0]
+        prefs = bpy.context.preferences.addons.get(addon_name)
+        if prefs and hasattr(prefs.preferences, 'socket_port'):
+            return prefs.preferences.socket_port
+    except:
+        pass
+
+    return DEFAULT_PORT
 
 
 def get_server_host() -> str:
@@ -88,6 +108,14 @@ def get_server_host() -> str:
 def is_server_running() -> bool:
     """Check if socket server is running"""
     return _keep_running and _server_thread is not None and _server_thread.is_alive()
+
+
+def get_connected_clients_count() -> int:
+    """Get the number of currently connected clients"""
+    if not is_server_running():
+        return 0
+    # Count active client threads
+    return sum(1 for t in _client_threads if t.is_alive())
 
 
 def start_server(host: Optional[str] = None, port: Optional[int] = None) -> bool:
@@ -299,6 +327,9 @@ def process_command_queue():
     """
     Process queued commands on main thread.
     Called by the modal operator timer.
+
+    Uses time budget for light commands and limits heavy commands
+    to prevent blocking Blender's UI.
     """
     global _timer_tick_count
     _timer_tick_count += 1
@@ -307,8 +338,14 @@ def process_command_queue():
         if not _keep_running:
             return
 
-        # Process up to 10 commands per timer tick
-        for _ in range(10):
+        start_time = time.perf_counter()
+        heavy_commands_processed = 0
+
+        # Process commands with time awareness
+        while True:
+            # Check time budget for non-heavy commands
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+
             try:
                 item = _command_queue.get_nowait()
                 command = item['command']
@@ -316,6 +353,24 @@ def process_command_queue():
                 client_socket = item['client_socket']
 
                 command_type = command.get('type', 'unknown')
+                is_heavy = command_type in HEAVY_COMMAND_TYPES
+
+                # Limit heavy commands per tick to keep UI responsive
+                if is_heavy:
+                    if heavy_commands_processed >= MAX_HEAVY_COMMANDS_PER_TICK:
+                        # Re-queue for next tick
+                        _command_queue.put(item)
+                        logger.debug(f"Deferred heavy command '{command_type}' to next tick")
+                        break
+                    heavy_commands_processed += 1
+                else:
+                    # For light commands, check time budget
+                    if elapsed_ms >= QUEUE_TIME_BUDGET_MS and not _command_queue.empty():
+                        # Re-queue for next tick
+                        _command_queue.put(item)
+                        logger.debug(f"Time budget exceeded, deferring '{command_type}'")
+                        break
+
                 logger.debug(f"Processing command: {command_type}")
 
                 # Execute command handler
@@ -384,10 +439,6 @@ def stop_server():
 
     logger.info("Stopping socket server...")
     _keep_running = False
-
-    # Unregister timer
-    if bpy.app.timers.is_registered(_process_command_queue):
-        bpy.app.timers.unregister(_process_command_queue)
 
     # Close server socket
     if _server_socket:

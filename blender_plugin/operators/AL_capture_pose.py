@@ -309,17 +309,47 @@ class ANIMLIB_OT_capture_pose(Operator):
 
             library_dir = Path(library_path)
 
-            # Create unique pose ID and folder
+            # Create unique pose ID
             pose_id = str(uuid.uuid4())
 
-            # Create pose folder in library directory
-            pose_folder = library_dir / "library" / pose_id
+            # Sanitize pose name for filesystem
+            import re
+            safe_pose_name = re.sub(r'[<>:"/\\|?*]', '_', pose_name)
+            safe_pose_name = safe_pose_name.strip(' .')
+            safe_pose_name = re.sub(r'_+', '_', safe_pose_name) or 'unnamed_pose'
+
+            # Check for collision - if folder exists, add numeric suffix
+            pose_folder = library_dir / "library" / "poses" / safe_pose_name
+            if pose_folder.exists():
+                # Check if it's a different pose by reading JSON
+                existing_pose_id = None
+                for json_file in pose_folder.glob("*.json"):
+                    try:
+                        with open(json_file, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        existing_pose_id = data.get('id')
+                        break
+                    except:
+                        continue
+
+                if existing_pose_id and existing_pose_id != pose_id:
+                    # Different pose with same name - add numeric suffix
+                    suffix = 2
+                    while True:
+                        new_folder = library_dir / "library" / "poses" / f"{safe_pose_name}_{suffix}"
+                        if not new_folder.exists():
+                            pose_folder = new_folder
+                            safe_pose_name = f"{safe_pose_name}_{suffix}"
+                            logger.info(f"Pose name collision, using: {safe_pose_name}")
+                            break
+                        suffix += 1
+
             pose_folder.mkdir(parents=True, exist_ok=True)
 
-            # All files go in the same folder
-            blend_path = pose_folder / f"{pose_id}.blend"
-            json_path = pose_folder / f"{pose_id}.json"
-            thumbnail_path = pose_folder / f"{pose_id}.png"
+            # All files use the pose name (not UUID) for human-readability
+            blend_path = pose_folder / f"{safe_pose_name}.blend"
+            json_path = pose_folder / f"{safe_pose_name}.json"
+            thumbnail_path = pose_folder / f"{safe_pose_name}.png"
 
             # Create minimal blend file with just the action
             temp_fd, temp_path = tempfile.mkstemp(suffix='.blend')
@@ -344,6 +374,7 @@ class ANIMLIB_OT_capture_pose(Operator):
             # Create JSON metadata
             metadata = {
                 'id': pose_id,
+                'app_version': '1.3.0',  # For one-time v1.2→v1.3 migration detection
                 'name': pose_name,
                 'description': scene.animlib_description,
                 'author': scene.animlib_author,
@@ -475,16 +506,10 @@ class ANIMLIB_OT_capture_pose(Operator):
                             space.shading.background_type = 'VIEWPORT'
                             space.shading.background_color = (0.0, 0.0, 0.0)
 
-                            # Configure lighting
-                            if prefs.get('use_lighting', True):
-                                if prefs.get('quality', 'MEDIUM') == 'LOW':
-                                    space.shading.light = 'FLAT'
-                                else:
-                                    space.shading.light = 'STUDIO'
-                                    space.shading.studio_light = 'forest.exr'
-                                    space.shading.studiolight_intensity = 1.0
-                            else:
-                                space.shading.light = 'FLAT'
+                            # Use STUDIO lighting for quality previews
+                            space.shading.light = 'STUDIO'
+                            space.shading.studio_light = 'forest.exr'
+                            space.shading.studiolight_intensity = 1.0
 
                             return viewport_settings
                     break

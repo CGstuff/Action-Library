@@ -1,10 +1,40 @@
-# Action Library
+<p align="center">
+  <img src="assets/Icon.png" alt="Action Library" width="128" height="128">
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![PyQt6](https://img.shields.io/badge/PyQt-6.5+-green.svg)](https://pypi.org/project/PyQt6/)
+<h1 align="center">Action Library</h1>
 
-A high-performance animation library manager for Blender with modern Qt6 architecture.
+<p align="center">
+  <strong>A high-performance animation library manager for Blender</strong>
+</p>
+
+<p align="center">
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="Python 3.9+"></a>
+  <a href="https://pypi.org/project/PyQt6/"><img src="https://img.shields.io/badge/PyQt-6.5+-green.svg" alt="PyQt6"></a>
+  <a href="https://www.blender.org/"><img src="https://img.shields.io/badge/Blender-4.5--5.0+-orange.svg" alt="Blender 4.5-5.0+"></a>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> •
+  <a href="#installation">Installation</a> •
+  <a href="GETTING_STARTED.md">Getting Started</a> •
+  <a href="STUDIO_GUIDE.md">Studio Guide</a> •
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
+
+---
+
+> **⚠️ Upgrading from v1.2 or earlier?**
+>
+> Version 1.3 includes a database overhaul that is **not backwards compatible**.
+>
+> **Before updating:** Apply your animations to Blender and save them as .blend files.
+> **After installing v1.3:** Start fresh and re-capture your animations from Blender.
+>
+> See the [Changelog](CHANGELOG.md) for details. We apologize for the inconvenience—this change was necessary for long-term stability.
+
+---
 
 ## Background
 
@@ -14,53 +44,23 @@ During production, I repeatedly hit limitations in Blender when managing animati
 
 Action Library is the result: a Blender-native, pipeline-oriented animation manager designed for scalability and long-form production. Open-sourced so others working on serious Blender projects can build on the same foundation.
 
-<!--
-## Screenshots
-Add screenshots here:
-![Main Window](screenshots/main.png)
-![Theme Editor](screenshots/theme-editor.png)
--->
-
 ## Features
 
-### Core
-- **High Performance** - Handles 4000+ animations with <2s startup and 60 FPS scrolling
-- **Modern UI** - Grid and list views, customizable themes, smooth animations
-- **Smart Organization** - Folders, tags, favorites, and powerful search/filtering
-- **Blender Integration** - One-click animation loading with built-in addon installer (Blender 4.5 - 5.0+)
-- **Library Backup** - Export/import with .animlib archives, preserves all metadata
-- **Setup Wizard** - Guided first-run configuration for new users
-- **Portable** - Single-folder distribution, no installation required
+- **High Performance** - Handles 1000+ animations with smooth scrolling
+- **Actions & Poses** - Store multi-frame animations and single-frame poses
+- **Pose Blending** - Right-click drag to blend between poses in real-time
+- **Version Control** - Track iterations with lineage system (v001 → v002 → v003)
+- **Instant Apply** - Real-time socket connection to Blender, no polling delays
+- **Smart Organization** - Folders, tags, favorites, search, and filtering
+- **Studio Naming** - Template-based naming for pipeline integration
+- **Dailies & Review** - Version comparison, timestamped review notes, drawover annotations
+- **Selective Capture** - Capture specific frame ranges or selected bones only
+- **Lifecycle Status** - WIP → Review → Approved workflow (optional)
+- **Modern UI** - Grid/list views, 4 themes + custom theme editor
+- **Keyboard Shortcuts** - J/K/L playback, Ctrl/Alt/Shift modifiers for apply modes
+- **Portable** - Single folder, no installation required
 
-### Pose Support (v1.2)
-- **Pose Capture & Apply** - Save and reuse bone poses as building blocks
-  - Capture current pose with one click
-  - Apply poses instantly to armatures
-  - Auto-keyframe when Blender's auto-key is enabled
-  - Poses are simple and disposable (no versioning overhead)
-- **Pose Blending** - Blend between poses in real-time
-  - Right-click hold + drag on any pose to blend (0-100%)
-  - Ctrl modifier for mirrored blending
-  - Left-click to cancel, release to apply
-- **Instant Application** - Real-time socket connection to Blender
-  - Actions and poses apply instantly via TCP socket bridge
-  - No file-based polling delays
-- **Smart Organization** - Home, Actions, Poses, Recent, Favorites folders
-  - Filter by type: Actions-only or Poses-only views
-- **Keyboard Shortcuts** - Fast workflow for power users
-  - Double-click to apply, Ctrl+double-click for mirrored
-  - Shift+double-click for action slots
-  - Press H or click ? for shortcuts help overlay
-
-### Pipeline Features (v1.1)
-- **Lineage System** - Track animation versions with automatic iteration detection
-  - Apply animation → Edit in Blender → Capture as v002, v003, etc.
-  - Cold storage: only latest version visible, older versions accessible via View Lineage
-  - Promote any version to latest, compare version history
-- **Lifecycle Status** - Pipeline-ready approval workflow
-  - Statuses: None (default), WIP, In Review, Approved, Needs Work, Final
-  - Color-coded badges on cards and metadata panel
-  - Solo artists can ignore (defaults to no badge); studios enable for review tracking
+See the [Changelog](CHANGELOG.md) for detailed version history.
 
 ## Installation
 
@@ -117,10 +117,13 @@ The portable build will be created in `dist/ActionLibrary/`.
 
 Built with:
 - **PyQt6** - Modern Qt6 bindings for Python
-- **Model/View Pattern** - Efficient handling of large datasets
+- **Model/View Pattern** - Virtual scrolling, renders only visible items
 - **Async Loading** - Background thumbnail loading via thread pool
 - **Event Bus** - Decoupled component communication
-- **SQLite** - Fast local database with WAL mode
+- **SQLite + WAL** - Fast local database with concurrent access
+- **Dependency Injection** - Testable, modular services
+
+**Performance**: Tested with 1000+ animations. First launch caches thumbnails; subsequent launches are near-instant.
 
 For detailed architecture information, see [ARCHITECTURE.md](ARCHITECTURE.md).
 

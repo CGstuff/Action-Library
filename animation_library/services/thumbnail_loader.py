@@ -289,6 +289,25 @@ class ThumbnailLoader(QObject):
         """Clear QPixmapCache"""
         QPixmapCache.clear()
 
+    def invalidate_animation(self, animation_uuid: str):
+        """
+        Invalidate cached thumbnails for a specific animation.
+
+        Since QPixmapCache doesn't support wildcard removal, this clears
+        the entire cache. The thumbnails will be reloaded on demand.
+
+        Args:
+            animation_uuid: UUID of the animation to invalidate
+        """
+        # QPixmapCache.remove() requires exact key, but we don't track
+        # which gradient combinations were used. Clear all for safety.
+        QPixmapCache.clear()
+
+        # Also remove from pending requests if any
+        keys_to_remove = [k for k in self.pending_requests if k.startswith(animation_uuid)]
+        for key in keys_to_remove:
+            self.pending_requests.discard(key)
+
     def reset_stats(self):
         """Reset performance statistics"""
         self.load_times.clear()

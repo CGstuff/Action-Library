@@ -11,8 +11,9 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QStatusBar, QDialog, QMessageBox, QMenu
 )
-from PyQt6.QtCore import Qt, QSettings
+from PyQt6.QtCore import Qt, QSettings, QTimer, QFileSystemWatcher
 from PyQt6.QtGui import QCloseEvent
+import json
 
 from ..config import Config
 from ..events.event_bus import get_event_bus
@@ -20,6 +21,7 @@ from ..services.database_service import get_database_service
 from ..services.blender_service import get_blender_service
 from ..services.archive_service import get_archive_service
 from ..services.trash_service import get_trash_service
+from ..services.thumbnail_loader import get_thumbnail_loader
 from ..themes.theme_manager import get_theme_manager
 from ..models.animation_list_model import AnimationListModel
 from ..models.animation_filter_proxy_model import AnimationFilterProxyModel
@@ -61,7 +63,9 @@ class MainWindow(QMainWindow):
         +------------------------------------------+
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, db_service=None, blender_service=None,
+                 archive_service=None, trash_service=None, event_bus=None,
+                 thumbnail_loader=None, theme_manager=None):
         super().__init__(parent)
 
         # Check if first run and show setup wizard
@@ -72,15 +76,17 @@ class MainWindow(QMainWindow):
                 # User cancelled setup
                 sys.exit(0)
 
-        # Services and event bus
-        self._event_bus = get_event_bus()
-        self._db_service = get_database_service()
-        self._blender_service = get_blender_service()
-        self._archive_service = get_archive_service()
-        self._trash_service = get_trash_service()
+        # Services and event bus (injectable for testing)
+        self._event_bus = event_bus or get_event_bus()
+        self._db_service = db_service or get_database_service()
+        self._blender_service = blender_service or get_blender_service()
+        self._archive_service = archive_service or get_archive_service()
+        self._trash_service = trash_service or get_trash_service()
+        self._thumbnail_loader = thumbnail_loader or get_thumbnail_loader()
+        self._theme_manager = theme_manager or get_theme_manager()
 
-        # Models
-        self._animation_model = AnimationListModel()
+        # Models (pass db_service for DI)
+        self._animation_model = AnimationListModel(db_service=self._db_service)
         self._proxy_model = AnimationFilterProxyModel()
         self._proxy_model.setSourceModel(self._animation_model)
 
@@ -92,6 +98,7 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._load_settings()
         self._load_animations()
+        self._setup_queue_watcher()
 
     def _setup_window(self):
         """Configure window properties"""
@@ -257,6 +264,9 @@ class MainWindow(QMainWindow):
         # Apply panel -> apply animation with options
         self._apply_panel.apply_clicked.connect(self._on_apply_with_options)
 
+        # Metadata panel notes changed -> refresh notes badges
+        self._metadata_panel.notes_changed.connect(self._on_notes_changed)
+
         # Header toolbar refresh -> sync library with database
         self._header_toolbar.refresh_library_clicked.connect(self._on_refresh_library)
 
@@ -291,6 +301,7 @@ class MainWindow(QMainWindow):
         self._event_bus.error_occurred.connect(self._on_error)
         self._event_bus.folder_changed.connect(self._on_folder_changed)
         self._event_bus.settings_changed.connect(self._on_settings_changed)
+        self._event_bus.animation_updated.connect(self._on_animation_updated)
 
     def _load_settings(self):
         """Load window and splitter settings"""
@@ -362,10 +373,131 @@ class MainWindow(QMainWindow):
 
         self._event_bus.finish_loading("Loading animations")
 
+    def _setup_queue_watcher(self):
+        """Setup file system watcher for queue directory to detect Blender notifications"""
+        self._queue_watcher = QFileSystemWatcher(self)
+        self._queue_check_timer = QTimer(self)
+        self._queue_check_timer.timeout.connect(self._check_queue_notifications)
+
+        # Get queue directory path
+        library_path = Config.load_library_path()
+        if library_path:
+            queue_dir = Path(library_path) / ".queue"
+            queue_dir.mkdir(parents=True, exist_ok=True)
+
+            # Watch the queue directory for changes
+            self._queue_watcher.addPath(str(queue_dir))
+            self._queue_watcher.directoryChanged.connect(self._on_queue_directory_changed)
+
+            # Also start periodic check (backup in case watcher misses events)
+            self._queue_check_timer.start(Config.QUEUE_CHECK_INTERVAL_MS)
+
+    def _on_queue_directory_changed(self, path: str):
+        """Handle changes in queue directory"""
+        # Use a short delay to let file writes complete
+        QTimer.singleShot(Config.QUEUE_NOTIFICATION_DELAY_MS, self._check_queue_notifications)
+
+    def _check_queue_notifications(self):
+        """Check for and process preview update notifications from Blender"""
+        library_path = Config.load_library_path()
+        if not library_path:
+            return
+
+        queue_dir = Path(library_path) / ".queue"
+        if not queue_dir.exists():
+            return
+
+        # First, handle preview_updating_*.json files (release file locks before Blender renders)
+        for notification_file in queue_dir.glob("preview_updating_*.json"):
+            try:
+                with open(notification_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+
+                animation_id = data.get('animation_id')
+                preview_path = data.get('preview_path', '')
+
+                if animation_id:
+                    # Release the video file if it's currently loaded
+                    self._release_preview_file(animation_id, preview_path)
+
+                # Delete notification file after processing
+                notification_file.unlink()
+
+            except Exception as e:
+                print(f"Error processing preview_updating notification: {e}")
+                try:
+                    notification_file.unlink()
+                except:
+                    pass
+
+        # Find preview_updated_*.json files
+        for notification_file in queue_dir.glob("preview_updated_*.json"):
+            try:
+                with open(notification_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+
+                animation_id = data.get('animation_id')
+                animation_name = data.get('animation_name', 'Unknown')
+
+                if animation_id:
+                    # Emit animation updated event to refresh the preview
+                    self._event_bus.animation_updated.emit(animation_id)
+
+                    # Update status bar
+                    self._status_bar.showMessage(f"Preview updated: {animation_name}")
+
+                    # Refresh the currently selected animation if it matches
+                    self._refresh_animation_preview(animation_id)
+
+                # Delete notification file after processing
+                notification_file.unlink()
+
+            except Exception as e:
+                print(f"Error processing queue notification: {e}")
+                # Still try to delete the file to avoid infinite loop
+                try:
+                    notification_file.unlink()
+                except:
+                    pass
+
+    def _release_preview_file(self, animation_id: str, preview_path: str = ''):
+        """Release video file lock so Blender can update it"""
+        # Release from metadata panel if this animation is currently loaded
+        if hasattr(self._metadata_panel, '_animation'):
+            current = self._metadata_panel._animation
+            if current and current.get('uuid') == animation_id:
+                # Clear the video preview to release the file handle
+                if hasattr(self._metadata_panel, '_video_preview'):
+                    self._metadata_panel._video_preview.clear()
+                    print(f"[Animation Library] Released video file for animation: {animation_id}")
+
+        # Also stop any hover preview that might have this file
+        if hasattr(self._animation_view, '_hover_popup') and self._animation_view._hover_popup:
+            self._animation_view._hover_popup.hide_preview()
+
+    def _refresh_animation_preview(self, animation_id: str):
+        """Refresh preview for a specific animation if it's currently displayed"""
+        # Invalidate thumbnail cache for this animation so it reloads from disk
+        self._thumbnail_loader.invalidate_animation(animation_id)
+
+        # Refresh animation data in the model (triggers dataChanged)
+        self._animation_model.refresh_animation(animation_id)
+
+        # Check if this animation is currently selected in metadata panel
+        if hasattr(self._metadata_panel, '_animation'):
+            current = self._metadata_panel._animation
+            if current and current.get('uuid') == animation_id:
+                # Reload animation data from database
+                animation = self._db_service.get_animation_by_uuid(animation_id)
+                if animation:
+                    self._metadata_panel.set_animation(animation)
+
+        # Force animation view to repaint with fresh thumbnails
+        self._animation_view.viewport().update()
+
     def _show_settings(self):
         """Show settings dialog"""
-        theme_manager = get_theme_manager()
-        dialog = SettingsDialog(theme_manager, self)
+        dialog = SettingsDialog(self._theme_manager, self)
         dialog.exec()
 
     # ==================== SLOT HANDLERS ====================
@@ -439,13 +571,24 @@ class MainWindow(QMainWindow):
 
             self._status_bar.showMessage("Ready")
 
-    def _on_animation_double_clicked(self, uuid: str, mirror: bool = False, use_slots: bool = False):
+    def _on_notes_changed(self):
+        """Handle notes changed (e.g., lineage dialog closed) - refresh badges"""
+        self._animation_model.refresh_notes_cache(emit_change=True)
+
+    def _on_animation_double_clicked(
+        self,
+        uuid: str,
+        mirror: bool = False,
+        use_slots: bool = False,
+        insert_at_playhead: bool = False
+    ):
         """Handle animation double-click - Immediately apply to Blender with options
 
         Args:
             uuid: Animation/pose UUID
             mirror: If True, apply mirrored (Ctrl+double-click)
             use_slots: If True, add as slot instead of replacing (Shift+double-click, actions only)
+            insert_at_playhead: If True, insert at playhead instead of new action (Alt+double-click, actions only)
         """
 
         animation = self._animation_model.get_animation_by_uuid(uuid)
@@ -456,23 +599,29 @@ class MainWindow(QMainWindow):
         is_pose = animation.get('is_pose', 0)
 
         if is_pose:
-            # Pose: Apply instantly with optional mirror (use_slots doesn't apply to poses)
+            # Pose: Apply instantly with optional mirror (other modifiers don't apply to poses)
             blend_file_path = animation.get('blend_file_path', '')
             success = self._blender_service.queue_apply_pose(uuid, name, blend_file_path, mirror=mirror)
         else:
-            # Animation: Apply with options from apply panel, override mirror/slots if modifiers held
-            options = self._apply_panel.get_options()
+            # Animation: Apply with options from apply panel, override based on modifiers
+            # Determine apply mode: Alt = INSERT, otherwise NEW
+            apply_mode = "INSERT" if insert_at_playhead else "NEW"
+            options = self._apply_panel.get_options(apply_mode=apply_mode)
+
+            # Override mirror/slots if modifiers held
             if mirror:
                 options['mirror'] = True
             if use_slots:
                 options['use_slots'] = True
+
             success = self._blender_service.queue_apply_animation(uuid, name, options)
 
         if success:
             item_type = "pose" if is_pose else "animation"
             mirror_text = " (mirrored)" if mirror else ""
             slots_text = " (as slot)" if use_slots and not is_pose else ""
-            self._status_bar.showMessage(f"Applied {item_type} '{name}'{mirror_text}{slots_text} to Blender")
+            playhead_text = " at playhead" if insert_at_playhead and not is_pose else ""
+            self._status_bar.showMessage(f"Applied {item_type} '{name}'{mirror_text}{slots_text}{playhead_text} to Blender")
         else:
             self._status_bar.showMessage(f"Failed to apply '{name}'")
             self._event_bus.report_error("blender", f"Failed to apply animation '{name}'")
@@ -528,7 +677,7 @@ class MainWindow(QMainWindow):
         dialog = VersionHistoryDialog(
             version_group_id,
             parent=self,
-            theme_manager=get_theme_manager()
+            theme_manager=self._theme_manager
         )
 
         # Connect signals
@@ -703,6 +852,12 @@ class MainWindow(QMainWindow):
                     folder_item_id = data.get('folder_id')
                     if folder_item_id:
                         self._filter_ctrl.set_folder_filter(folder_item_id, folder_name, None)
+
+    def _on_animation_updated(self, uuid: str):
+        """Handle animation updated event - refresh the card in the view"""
+        if uuid:
+            # Refresh the animation in the model to update the card
+            self._animation_model.refresh_animation(uuid)
 
     # ==================== ARCHIVE/TRASH OPERATIONS (delegated to controller) ====================
 

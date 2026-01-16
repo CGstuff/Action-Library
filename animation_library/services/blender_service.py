@@ -7,6 +7,8 @@ Communication Methods (in order of preference):
 
 The service automatically tries socket communication first and falls back
 to file-based communication if the socket server is not available.
+
+Uses the protocol package for consistent message building and validation.
 """
 
 import json
@@ -17,6 +19,14 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 
 from ..config import Config
+from ..protocol import (
+    build_apply_animation,
+    build_apply_pose,
+    QUEUE_DIR_NAME,
+    FALLBACK_QUEUE_DIR,
+    APPLY_ANIMATION_FILE,
+    MessageStatus,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -48,8 +58,8 @@ class BlenderService:
         blender_service.queue_apply_animation(animation_uuid, animation_name)
     """
 
-    # Single file name for apply requests
-    APPLY_FILE = "apply_animation.json"
+    # Single file name for apply requests (from protocol)
+    APPLY_FILE = APPLY_ANIMATION_FILE
 
     def __init__(self):
         self._queue_dir = None
@@ -63,10 +73,10 @@ class BlenderService:
         library_path = Config.load_library_path()
         if library_path and library_path.exists():
             # Use .queue folder inside library (shared between Blender and desktop app)
-            self._queue_dir = library_path / ".queue"
+            self._queue_dir = library_path / QUEUE_DIR_NAME
         else:
             # Fallback to system temp if no library configured
-            self._queue_dir = Path(tempfile.gettempdir()) / "animation_library_queue"
+            self._queue_dir = Path(tempfile.gettempdir()) / FALLBACK_QUEUE_DIR
 
         self._queue_dir.mkdir(parents=True, exist_ok=True)
         logger.debug(f"Queue directory: {self._queue_dir}")
@@ -150,16 +160,11 @@ class BlenderService:
     ) -> bool:
         """File-based fallback for animation application"""
         try:
-            timestamp = datetime.now().isoformat()
             apply_file = self._queue_dir / self.APPLY_FILE
 
-            request_data = {
-                "status": "pending",
-                "animation_id": animation_id,
-                "animation_name": animation_name,
-                "timestamp": timestamp,
-                "options": options
-            }
+            # Build message using protocol (adds type, timestamp automatically)
+            request_data = build_apply_animation(animation_id, animation_name, options)
+            request_data['status'] = MessageStatus.PENDING
 
             with open(apply_file, 'w') as f:
                 json.dump(request_data, f, indent=2)
@@ -225,18 +230,11 @@ class BlenderService:
     ) -> bool:
         """File-based fallback for pose application"""
         try:
-            timestamp = datetime.now().isoformat()
             apply_file = self._queue_dir / self.APPLY_FILE
 
-            request_data = {
-                "type": "pose",  # Mark as pose request
-                "status": "pending",
-                "animation_id": pose_id,  # Use same key for compatibility
-                "animation_name": pose_name,
-                "blend_file_path": blend_file_path,
-                "timestamp": timestamp,
-                "options": {"mirror": mirror}
-            }
+            # Build message using protocol (adds type, timestamp automatically)
+            request_data = build_apply_pose(pose_id, pose_name, blend_file_path, mirror)
+            request_data['status'] = MessageStatus.PENDING
 
             with open(apply_file, 'w') as f:
                 json.dump(request_data, f, indent=2)

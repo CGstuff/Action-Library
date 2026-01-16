@@ -3,18 +3,117 @@ Socket Command Handlers for Animation Library
 
 This module registers command handlers for the socket server,
 allowing the desktop app to trigger animation/pose application.
+
+Uses the protocol package for message validation.
 """
 
 import bpy
 import os
 import json
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional, Tuple
 
 from .socket_server import register_command_handler
 from .logger import get_logger
+from .protocol_loader import validate_message as protocol_validate
 
 logger = get_logger()
+
+
+# Command validation schemas
+# Format: {field_name: (required, expected_type, validator_func)}
+COMMAND_SCHEMAS = {
+    'apply_animation': {
+        'animation_id': (True, str, None),
+        'animation_name': (False, str, None),
+        'options': (False, dict, None),
+    },
+    'apply_pose': {
+        'pose_id': (False, str, None),  # Can also use animation_id
+        'animation_id': (False, str, None),
+        'pose_name': (False, str, None),
+        'blend_file_path': (True, str, lambda v: os.path.exists(v) if v else False),
+        'mirror': (False, bool, None),
+    },
+    'blend_pose_start': {
+        'pose_id': (True, str, None),
+        'pose_name': (False, str, None),
+        'blend_file_path': (True, str, lambda v: os.path.exists(v) if v else False),
+    },
+    'blend_pose': {
+        'blend_factor': (True, (int, float), lambda v: 0.0 <= v <= 1.0),
+        'mirror': (False, bool, None),
+    },
+    'blend_pose_end': {
+        'apply': (False, bool, None),
+        'insert_keyframes': (False, bool, None),
+    },
+    'select_bones': {
+        'bone_names': (True, list, lambda v: all(isinstance(b, str) for b in v)),
+        'mirror': (False, bool, None),
+        'add_to_selection': (False, bool, None),
+    },
+}
+
+
+def validate_command(command: dict, command_type: str) -> Tuple[bool, Optional[str]]:
+    """
+    Validate a command against its schema.
+
+    Uses protocol validation from library/.schema/protocol/ when available,
+    falls back to inline schemas for runtime checks (like file existence).
+
+    Args:
+        command: The command dict to validate
+        command_type: The type of command
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not isinstance(command, dict):
+        return False, "Command must be a dictionary"
+
+    if not command_type:
+        return False, "Missing command type"
+
+    # Try protocol validation first (single source of truth from library)
+    is_valid, error = protocol_validate(command, command_type)
+    if not is_valid:
+        return False, error
+    # Protocol validation passed, continue with any custom validators
+    # that have runtime checks (like file existence)
+
+    # Fallback or additional validation with inline schemas
+    schema = COMMAND_SCHEMAS.get(command_type)
+    if not schema:
+        # No schema defined - allow unknown commands but log warning
+        logger.debug(f"No validation schema for command type: {command_type}")
+        return True, None
+
+    for field, (required, expected_type, validator) in schema.items():
+        value = command.get(field)
+
+        # Check required fields
+        if required and value is None:
+            # Special case: apply_pose allows either pose_id or animation_id
+            if command_type == 'apply_pose' and field == 'pose_id':
+                if command.get('animation_id') is not None:
+                    continue
+            return False, f"Missing required field: {field}"
+
+        # Skip optional fields that aren't present
+        if value is None:
+            continue
+
+        # Check type
+        if not isinstance(value, expected_type):
+            return False, f"Field '{field}' has invalid type. Expected {expected_type.__name__}"
+
+        # Run custom validator if present (e.g., file existence checks)
+        if validator and not validator(value):
+            return False, f"Field '{field}' failed validation"
+
+    return True, None
 
 
 def _get_active_armature():
@@ -55,6 +154,11 @@ def handle_apply_animation(command: dict, client_id: str) -> dict:
     }
     """
     try:
+        # Validate command
+        is_valid, error = validate_command(command, 'apply_animation')
+        if not is_valid:
+            return {'status': 'error', 'message': error}
+
         animation_id = command.get('animation_id')
         animation_name = command.get('animation_name', 'Unknown')
         options = command.get('options', {})
@@ -140,6 +244,11 @@ def handle_apply_pose(command: dict, client_id: str) -> dict:
     }
     """
     try:
+        # Validate command
+        is_valid, error = validate_command(command, 'apply_pose')
+        if not is_valid:
+            return {'status': 'error', 'message': error}
+
         pose_id = command.get('pose_id') or command.get('animation_id')
         pose_name = command.get('pose_name') or command.get('animation_name', 'Unknown Pose')
         blend_file_path = command.get('blend_file_path')
@@ -219,7 +328,7 @@ def handle_apply_pose(command: dict, client_id: str) -> dict:
                         bone_name = data_path.split('"')[1]
                         bone_names.add(bone_name)
                     except (IndexError, KeyError):
-                        pass
+                        logger.debug(f"Could not extract bone name from: {data_path}")
 
             # Clean up - remove the loaded action BEFORE keyframing
             bpy.data.actions.remove(pose_action)
@@ -297,8 +406,10 @@ def _insert_pose_keyframes_for_bones(armature, bone_names):
 
             pose_bone.keyframe_insert(data_path="scale", frame=current_frame)
             keyframed_count += 1
-        except Exception:
-            pass
+        except RuntimeError as e:
+            logger.debug(f"Could not keyframe bone {bone_name}: {e}")
+        except KeyError:
+            logger.debug(f"Bone {bone_name} not found in armature")
 
     return keyframed_count
 
@@ -432,6 +543,11 @@ def handle_blend_pose_start(command: dict, client_id: str) -> dict:
     global _blend_session
 
     try:
+        # Validate command
+        is_valid, error = validate_command(command, 'blend_pose_start')
+        if not is_valid:
+            return {'status': 'error', 'message': error}
+
         pose_name = command.get('pose_name', 'Unknown Pose')
         blend_file_path = command.get('blend_file_path')
 
@@ -514,6 +630,11 @@ def handle_blend_pose(command: dict, client_id: str) -> dict:
     global _blend_session
 
     try:
+        # Validate command
+        is_valid, error = validate_command(command, 'blend_pose')
+        if not is_valid:
+            return {'status': 'error', 'message': error}
+
         if not _blend_session['active']:
             return {
                 'status': 'error',
@@ -590,6 +711,11 @@ def handle_blend_pose_end(command: dict, client_id: str) -> dict:
     global _blend_session
 
     try:
+        # Validate command
+        is_valid, error = validate_command(command, 'blend_pose_end')
+        if not is_valid:
+            return {'status': 'error', 'message': error}
+
         if not _blend_session['active']:
             return {
                 'status': 'error',
@@ -631,7 +757,7 @@ def handle_blend_pose_end(command: dict, client_id: str) -> dict:
                                 bone_name = data_path.split('"')[1]
                                 bone_names.add(bone_name)
                             except (IndexError, KeyError):
-                                pass
+                                logger.debug(f"Could not extract bone name from: {data_path}")
 
                     keyframe_count = _insert_pose_keyframes_for_bones(armature, bone_names)
                     if keyframe_count > 0:
@@ -664,8 +790,8 @@ def handle_blend_pose_end(command: dict, client_id: str) -> dict:
         if _blend_session.get('pose_action'):
             try:
                 bpy.data.actions.remove(_blend_session['pose_action'])
-            except:
-                pass
+            except (ReferenceError, RuntimeError) as cleanup_error:
+                logger.debug(f"Could not remove pose action during cleanup: {cleanup_error}")
         _blend_session = {
             'active': False,
             'pose_action': None,
@@ -815,6 +941,115 @@ def _blend_pose_manually(armature, pose_action, blend_factor, mirror=False):
             logger.debug(f"Could not blend fcurve {data_path}: {e}")
 
 
+def handle_select_bones(command: dict, client_id: str) -> dict:
+    """
+    Select bones in pose mode from Animation Library.
+
+    Expected command format:
+    {
+        "type": "select_bones",
+        "bone_names": ["bone1", "bone2", ...],
+        "mirror": false,
+        "add_to_selection": false
+    }
+    """
+    try:
+        # Validate command
+        is_valid, error = validate_command(command, 'select_bones')
+        if not is_valid:
+            return {'status': 'error', 'message': error}
+
+        bone_names = command.get('bone_names', [])
+        mirror = command.get('mirror', False)
+        add_to_selection = command.get('add_to_selection', False)
+
+        if not bone_names:
+            return {'status': 'error', 'message': 'No bone names provided'}
+
+        # Get active armature
+        armature = _get_active_armature()
+        if not armature:
+            return {
+                'status': 'error',
+                'message': 'No armature selected. Please select an armature in Blender.'
+            }
+
+        # Make sure the armature is active
+        bpy.context.view_layer.objects.active = armature
+
+        # Ensure we're in pose mode
+        if bpy.context.mode != 'POSE':
+            bpy.ops.object.mode_set(mode='POSE')
+
+        pose_bones = armature.pose.bones
+
+        # Clear selection if not adding
+        if not add_to_selection:
+            bpy.ops.pose.select_all(action='DESELECT')
+
+        # Mirror bone names if requested
+        if mirror:
+            bone_names = _mirror_bone_names(bone_names)
+
+        # Select bones using version-compatible helper
+        from .utils import select_bone
+        selected_count = 0
+        for bone_name in bone_names:
+            if bone_name in pose_bones:
+                pose_bone = pose_bones[bone_name]
+                select_bone(pose_bone, True)
+                selected_count += 1
+
+        mirror_msg = " (mirrored)" if mirror else ""
+        add_msg = " (added to selection)" if add_to_selection else ""
+
+        return {
+            'status': 'success',
+            'message': f'Selected {selected_count} bones{mirror_msg}{add_msg}',
+            'selected_count': selected_count
+        }
+
+    except Exception as e:
+        logger.error(f"Error in handle_select_bones: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'status': 'error',
+            'message': str(e)
+        }
+
+
+def _mirror_bone_names(bone_names: list) -> list:
+    """Mirror bone names by swapping L/R indicators."""
+    mirrored = []
+    for name in bone_names:
+        # Handle common naming conventions
+        if '.L' in name:
+            mirrored.append(name.replace('.L', '.R'))
+        elif '.R' in name:
+            mirrored.append(name.replace('.R', '.L'))
+        elif '_L' in name:
+            mirrored.append(name.replace('_L', '_R'))
+        elif '_R' in name:
+            mirrored.append(name.replace('_R', '_L'))
+        elif 'Left' in name:
+            mirrored.append(name.replace('Left', 'Right'))
+        elif 'Right' in name:
+            mirrored.append(name.replace('Right', 'Left'))
+        elif '.l' in name:
+            mirrored.append(name.replace('.l', '.r'))
+        elif '.r' in name:
+            mirrored.append(name.replace('.r', '.l'))
+        elif '_l' in name:
+            mirrored.append(name.replace('_l', '_r'))
+        elif '_r' in name:
+            mirrored.append(name.replace('_r', '_l'))
+        else:
+            # No L/R indicator, keep original
+            mirrored.append(name)
+    return mirrored
+
+
 def handle_get_armature_info(command: dict, client_id: str) -> dict:
     """
     Handle get_armature_info command - returns info about active armature.
@@ -855,6 +1090,8 @@ def register_socket_commands():
     register_command_handler('blend_pose_start', handle_blend_pose_start)
     register_command_handler('blend_pose', handle_blend_pose)
     register_command_handler('blend_pose_end', handle_blend_pose_end)
+    # Select bones command
+    register_command_handler('select_bones', handle_select_bones)
     logger.info("Socket command handlers registered")
 
 

@@ -5,6 +5,153 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-01-16
+
+> **IMPORTANT: Breaking Change for Existing Users**
+>
+> Version 1.3 includes a complete database overhaul for improved stability, performance, and future extensibility. **This is a breaking change - the old library format is not compatible.**
+>
+> **New users:** No action needed - just install and start using the app!
+>
+> **Existing users (v1.2 or earlier):**
+> 1. **Before updating**, apply each of your animations to Blender and save them as .blend files
+> 2. Install v1.3 fresh with a new storage folder
+> 3. Re-capture your animations from Blender into the new v1.3 library
+>
+> We sincerely apologize for this inconvenience. This database restructuring was necessary to support new features and ensure the long-term stability of the application as your library grows. We made this difficult decision now rather than later when migration would affect even more users.
+>
+> Thank you for your understanding and patience!
+
+### Added
+
+#### Dailies & Review
+
+- **Version Comparison**
+  - Side-by-side compare mode in Lineage dialog
+  - Select any 2 versions to compare simultaneously
+  - Synchronized playback - both videos play/pause together
+  - Shared progress slider for frame-accurate comparison
+  - Dialog expands to fit both previews at full size
+
+- **Review Notes**
+  - Add timestamped notes to any frame during review
+  - Click timestamp to jump to that frame in preview
+  - Multi-line note input with Enter for new lines
+  - Multi-line editing with Save/Cancel buttons
+  - Marker index badges (1, 2, 3) on notes matching timeline markers
+  - Notes persist with the animation metadata
+
+- **Unresolved Comments Badge**
+  - Info icon with count appears on cards with unresolved comments
+  - Badge shows in both grid and list view modes
+  - Comment indicator also shown in metadata panel
+  - Badge disappears when all comments are resolved
+
+- **Drawover Annotations**
+  - Draw directly on video frames during review
+  - Multiple drawing tools (pen, line, arrow, shapes)
+  - Annotations saved per-frame and persist with animation
+
+#### Apply to Blender
+
+- **Redesigned Apply Panel**
+  - Split into two dedicated buttons: "New Action" and "Insert at Playhead"
+  - Removed dropdown menu for cleaner, faster workflow
+  - Double-click on card defaults to New Action
+  - **Alt + Double-click** inserts at playhead
+  - Clearer visual distinction between apply modes
+
+#### Blender Capture
+
+- **Selective Keyframe Capture**
+  - Capture only keyframes within a specified frame range
+  - Option to capture only selected bones' keyframes
+  - Useful for extracting specific parts of longer animations
+
+- **Studio Naming Engine**
+  - Template-based naming system for pipeline integration
+  - Configure in Blender Addon Preferences → Studio Naming
+  - Template syntax: `{show}_{asset}_v{version:03}` → `MYPROJ_hero_v001`
+  - Three context modes:
+    - **Manual** - Enter all fields manually
+    - **Scene Name** - Auto-extract fields from Blender scene name via regex
+    - **Folder Path** - Auto-extract fields from .blend file path via regex
+  - **Immutable versions** - Version numbers can never be changed
+  - Field-based renaming in desktop app preserves template structure
+
+#### Lineage
+
+- **Video Preview in Lineage Dialog**
+  - Preview any version directly in the Lineage dialog
+  - No need to switch to main view to see animation previews
+
+- **Version Notes**
+  - Add notes to any version in the Lineage dialog
+  - Document changes, feedback, or approval status per version
+
+#### Video Preview
+
+- **Playback Speed Control**
+  - Cycle through 0.25x, 0.5x, 1x, 2x playback speeds
+  - Speed button in playback controls
+  - Works in both main preview and comparison mode
+
+- **Keyboard Shortcuts**
+  - **J** - Reverse playback
+  - **K** - Pause
+  - **L** - Forward playback
+  - **Left/Right arrows** - Step single frames
+  - **Space** - Toggle play/pause
+
+- **Resizable Video Preview**
+  - Drag splitter in metadata panel to resize preview area
+
+#### Maintenance & Migration
+
+- **v1.2 → v1.3 Migration**
+  - Automatic detection of legacy v1.2 animations
+  - Legacy animations imported as fresh v001 with new UUID
+  - Old metadata cleared to prevent corruption
+  - One-time migration only (future updates won't trigger)
+
+- **Rebuild Database**
+  - New "Rebuild Database" button in Maintenance tab
+  - Clears all animations and rescans library from disk
+  - Useful for fixing database corruption or sync issues
+
+- **Maintenance Tab**
+  - Database maintenance and repair tools
+  - Rescan library to sync with file system
+  - Orphan cleanup and integrity checks
+
+- **Backup System Enhancements**
+  - Review notes database (notes.db) now included in .animlib backups
+  - Drawover annotations (.meta/drawovers/) included in backups
+  - Manifest reports `includes_notes` and `drawover_count`
+
+### Changed
+
+- Apply panel redesigned with two buttons instead of dropdown menu
+- Double-click behavior updated: plain double-click = New Action, Alt+double-click = Insert at Playhead
+- Rename button added to metadata panel (next to animation name)
+- Rename dialog shows field editors based on template used at capture time
+- Animations captured without studio naming show simplified rename (base name + immutable version)
+- Review note input now uses confirm button instead of Enter to submit
+- Lineage dialog now refreshes comment badges when closed
+- JSON metadata now includes `app_version` field for future compatibility
+
+### Fixed
+
+- **Version Inheritance** - New versions now correctly inherit folder and tags from source animation
+- **is_latest Flag** - Fixed versions in cold storage incorrectly marked as latest after database rebuild
+- **JSON Sync** - Database folder/tag changes now sync back to JSON files on disk
+
+- **Blender 4.5+/5.0 Video Output Bug** - Thumbnails and previews now generate correctly when Blender's output is set to video format (handles new `media_type` property)
+- **Annotation Clear Bug** - Clearing annotations no longer restores them when exiting annotation mode (cache invalidation fix)
+- Fixed "Animation Library" → "Action Library" in addon installation instructions
+
+---
+
 ## [1.2.0] - 2026-01-10
 
 ### Added

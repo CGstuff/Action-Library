@@ -9,6 +9,7 @@ Handles:
 """
 
 import json
+import logging
 import os
 import shutil
 import zipfile
@@ -17,6 +18,8 @@ from typing import Dict, List, Optional, Callable, Any
 from datetime import datetime
 
 from ..config import Config
+
+logger = logging.getLogger(__name__)
 
 # Metadata file name for portable library export
 METADATA_FILENAME = "library_metadata.json"
@@ -27,7 +30,7 @@ class BackupService:
     """Service for backing up and restoring animation libraries"""
 
     # Archive format version for future compatibility
-    ARCHIVE_VERSION = "1.1"  # Bumped for metadata support
+    ARCHIVE_VERSION = "1.3"  # Includes notes.db and drawovers/
 
     @classmethod
     def export_library(
@@ -123,6 +126,8 @@ class BackupService:
         stats = {
             'imported': 0,
             'metadata_imported': 0,
+            'notes_imported': False,
+            'drawovers_imported': 0,
             'errors': []
         }
 
@@ -143,15 +148,26 @@ class BackupService:
                     try:
                         metadata_data = zipf.read(METADATA_FILENAME)
                         metadata = json.loads(metadata_data)
-                    except Exception:
-                        pass  # Metadata is optional
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Invalid metadata JSON in archive: {e}")
+                    except Exception as e:
+                        logger.warning(f"Could not read metadata from archive: {e}")
 
-                # Get list of files to extract (skip special files and database folder)
+                # Get list of files to extract (skip special files)
+                # Allow .meta/notes.db and .meta/drawovers/ but skip other .meta files
                 skip_files = {'manifest.json', METADATA_FILENAME}
-                file_list = [
-                    name for name in zipf.namelist()
-                    if name not in skip_files and not name.startswith(Config.DB_FOLDER_NAME)
-                ]
+                file_list = []
+                for name in zipf.namelist():
+                    if name in skip_files:
+                        continue
+                    # Allow notes.db and drawovers from .meta folder
+                    if name.startswith(Config.META_FOLDER_NAME + '/'):
+                        # Only allow notes.db and drawovers/
+                        meta_rest = name[len(Config.META_FOLDER_NAME) + 1:]
+                        if meta_rest == 'notes.db' or meta_rest.startswith('drawovers/'):
+                            file_list.append(name)
+                    else:
+                        file_list.append(name)
                 total_files = len(file_list)
 
                 if progress_callback:
@@ -178,6 +194,12 @@ class BackupService:
                                 shutil.copyfileobj(source, target)
 
                         stats['imported'] += 1
+
+                        # Track notes and drawovers
+                        if file_name.endswith('notes.db'):
+                            stats['notes_imported'] = True
+                        elif '/drawovers/' in file_name and file_name.endswith('.json'):
+                            stats['drawovers_imported'] += 1
 
                     except Exception as e:
                         stats['errors'].append(f"{file_name}: {str(e)}")
@@ -220,21 +242,50 @@ class BackupService:
         if icons_path.exists():
             files.append((icons_path, 'folder_icons.json'))
 
-        # Collect animation files from library/ folder
-        library_folder = library_path / 'library'
-        if library_folder.exists():
-            for root, dirs, filenames in os.walk(library_folder):
-                root_path = Path(root)
+        # Folders to include in backup
+        # - library/ : Hot storage (actions and poses)
+        # - _versions/ : Cold storage (version history)
+        # - .deleted/ : Soft-deleted items (archived)
+        # NOTE: .trash/ is excluded - items pending permanent deletion
+        content_folders = [
+            Config.LIBRARY_FOLDER_NAME,      # 'library' - active animations
+            Config.VERSIONS_FOLDER_NAME,     # '_versions' - version history
+            Config.DELETED_FOLDER_NAME,      # '.deleted' - archived items
+        ]
 
+        for folder_name in content_folders:
+            folder = library_path / folder_name
+            if folder.exists():
+                for root, dirs, filenames in os.walk(folder):
+                    root_path = Path(root)
+
+                    for filename in filenames:
+                        file_path = root_path / filename
+
+                        # Skip hidden files and system files
+                        if filename.startswith('.') or filename == 'desktop.ini':
+                            continue
+
+                        # Include animation files
+                        if filename.endswith(('.blend', '.json', '.webm', '.mp4', '.png')):
+                            rel_path = file_path.relative_to(library_path)
+                            files.append((file_path, str(rel_path).replace('\\', '/')))
+
+        # Include notes database if it exists
+        notes_db_path = library_path / Config.META_FOLDER_NAME / 'notes.db'
+        if notes_db_path.exists():
+            rel_path = notes_db_path.relative_to(library_path)
+            files.append((notes_db_path, str(rel_path).replace('\\', '/')))
+
+        # Include drawovers folder (annotations) if it exists
+        drawovers_folder = library_path / Config.META_FOLDER_NAME / 'drawovers'
+        if drawovers_folder.exists():
+            for root, dirs, filenames in os.walk(drawovers_folder):
+                root_path = Path(root)
                 for filename in filenames:
                     file_path = root_path / filename
-
-                    # Skip hidden files and system files
-                    if filename.startswith('.') or filename == 'desktop.ini':
-                        continue
-
-                    # Include animation files
-                    if filename.endswith(('.blend', '.json', '.webm', '.mp4', '.png')):
+                    # Include JSON (annotation data) and PNG (cached thumbnails)
+                    if filename.endswith(('.json', '.png')):
                         rel_path = file_path.relative_to(library_path)
                         files.append((file_path, str(rel_path).replace('\\', '/')))
 
@@ -247,9 +298,17 @@ class BackupService:
         total_size = sum(f[0].stat().st_size for f in files if f[0].exists())
         total_size_mb = total_size / (1024 * 1024)
 
-        # Count animations (unique UUIDs from .json files)
+        # Count animations (unique UUIDs from .json files in library folders)
         animation_count = sum(1 for f in files if str(f[1]).endswith('.json')
-                             and not str(f[1]).endswith('folder_icons.json'))
+                             and not str(f[1]).endswith('folder_icons.json')
+                             and not str(f[1]).startswith('.meta/'))
+
+        # Check if notes.db is included
+        has_notes = any(str(f[1]).endswith('notes.db') for f in files)
+
+        # Count drawovers
+        drawover_count = sum(1 for f in files if '/drawovers/' in str(f[1])
+                            and str(f[1]).endswith('.json'))
 
         return {
             'version': cls.ARCHIVE_VERSION,
@@ -257,7 +316,9 @@ class BackupService:
             'app_version': Config.APP_VERSION,
             'animation_count': animation_count,
             'total_size_mb': round(total_size_mb, 2),
-            'file_count': len(files)
+            'file_count': len(files),
+            'includes_notes': has_notes,
+            'drawover_count': drawover_count
         }
 
     @classmethod
@@ -295,7 +356,14 @@ class BackupService:
                     manifest['total_size_mb'] = round(total_size / (1024 * 1024), 2)
 
                 return manifest
-        except Exception:
+        except zipfile.BadZipFile as e:
+            logger.warning(f"Invalid archive file {archive_path}: {e}")
+            return None
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid manifest JSON in {archive_path}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error reading archive info from {archive_path}: {e}")
             return None
 
     @classmethod
@@ -384,7 +452,11 @@ class BackupService:
 
             return metadata
 
-        except Exception:
+        except ImportError as e:
+            logger.error(f"Missing dependency for metadata export: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to export metadata: {e}")
             return None
 
     @classmethod
@@ -442,7 +514,14 @@ class BackupService:
 
             return stats
 
-        except Exception:
+        except ImportError as e:
+            logger.error(f"Missing dependency for metadata import: {e}")
+            return stats
+        except IOError as e:
+            logger.error(f"Failed to write pending metadata file: {e}")
+            return stats
+        except Exception as e:
+            logger.error(f"Failed to import metadata: {e}")
             return stats
 
     @classmethod
@@ -450,7 +529,7 @@ class BackupService:
         """Get path to pending metadata file"""
         library_path = Config.load_library_path()
         if library_path:
-            return library_path / Config.DB_FOLDER_NAME / "pending_metadata.json"
+            return library_path / Config.META_FOLDER_NAME / "pending_metadata.json"
         return Config.get_user_data_dir() / "pending_metadata.json"
 
     @classmethod
@@ -484,8 +563,12 @@ class BackupService:
             # Delete pending file after successful apply
             pending_file.unlink()
 
-        except Exception:
-            pass
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid pending metadata JSON: {e}")
+        except IOError as e:
+            logger.warning(f"Could not read pending metadata file: {e}")
+        except Exception as e:
+            logger.error(f"Failed to apply pending metadata: {e}")
 
         return stats
 

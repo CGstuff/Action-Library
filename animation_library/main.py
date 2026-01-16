@@ -8,6 +8,7 @@ Usage:
 """
 
 import sys
+import shutil
 from pathlib import Path
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QPixmapCache, QIcon
@@ -17,6 +18,40 @@ from .config import Config
 from .themes.theme_manager import get_theme_manager
 from .events.event_bus import get_event_bus
 from .utils.logging_config import LoggingConfig
+
+
+def sync_protocol_to_library():
+    """
+    Copy protocol schema files to library/.schema/protocol/ for Blender addon access.
+
+    This ensures the Blender addon can import the protocol from the library path
+    without needing a separate copy bundled with the addon.
+    """
+    library_path = Config.load_library_path()
+    if not library_path or not library_path.exists():
+        return
+
+    # Source: protocol/ directory next to this file
+    source_protocol = Path(__file__).parent / 'protocol'
+    if not source_protocol.exists():
+        return
+
+    # Destination: library/.schema/protocol/
+    dest_schema = library_path / '.schema'
+    dest_protocol = dest_schema / 'protocol'
+
+    try:
+        # Create .schema directory if needed
+        dest_schema.mkdir(parents=True, exist_ok=True)
+
+        # Copy protocol files (overwrite existing)
+        if dest_protocol.exists():
+            shutil.rmtree(dest_protocol)
+        shutil.copytree(source_protocol, dest_protocol)
+
+    except Exception as e:
+        # Non-fatal - addon can fall back to bundled copy
+        print(f"[Animation Library] Warning: Could not sync protocol to library: {e}")
 
 
 def _get_icon_path() -> Path:
@@ -103,6 +138,9 @@ def main():
     logger.info(f"Starting {Config.APP_NAME} {Config.APP_VERSION}...")
     logger.info(f"Database: {Config.get_database_path()}")
     logger.info(f"Cache: {Config.get_cache_dir()}")
+
+    # Sync protocol schema to library for Blender addon access
+    sync_protocol_to_library()
 
     # Setup application
     app = setup_application()

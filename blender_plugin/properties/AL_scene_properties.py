@@ -108,12 +108,6 @@ class ANIMLIB_SceneProperties(PropertyGroup):
         default=False
     )
 
-    bpy.types.Scene.animlib_show_desktop_integration = bpy.props.BoolProperty(
-        name="Show Desktop Integration",
-        description="Toggle Desktop Integration section",
-        default=False
-    )
-
     # Merge-related properties
     bpy.types.Scene.animlib_merge_selected_slots = bpy.props.StringProperty(
         name="Merge Selected Slots",
@@ -149,19 +143,27 @@ class ANIMLIB_SceneProperties(PropertyGroup):
         default=""
     )
 
-    bpy.types.Scene.animlib_root_motion_x = bpy.props.BoolProperty(
-        name="Root Motion X",
-        description="Maintain continuity on the X axis",
+    # Location continuity axes
+    bpy.types.Scene.animlib_root_motion_loc_x = bpy.props.BoolProperty(
+        name="X",
+        description="Maintain location continuity on the X axis",
         default=False
     )
-    bpy.types.Scene.animlib_root_motion_y = bpy.props.BoolProperty(
-        name="Root Motion Y",
-        description="Maintain continuity on the Y axis",
+    bpy.types.Scene.animlib_root_motion_loc_y = bpy.props.BoolProperty(
+        name="Y",
+        description="Maintain location continuity on the Y axis",
         default=False
     )
-    bpy.types.Scene.animlib_root_motion_z = bpy.props.BoolProperty(
-        name="Root Motion Z",
-        description="Maintain continuity on the Z axis",
+    bpy.types.Scene.animlib_root_motion_loc_z = bpy.props.BoolProperty(
+        name="Z",
+        description="Maintain location continuity on the Z axis",
+        default=False
+    )
+
+    # Rotation continuity (handles both Euler and Quaternion properly)
+    bpy.types.Scene.animlib_root_motion_rotation = bpy.props.BoolProperty(
+        name="Rotation",
+        description="Maintain rotation continuity (uses proper quaternion multiplication for quaternion rotations)",
         default=False
     )
 
@@ -188,6 +190,103 @@ class ANIMLIB_SceneProperties(PropertyGroup):
     bpy.types.Scene.animlib_is_versioning = bpy.props.BoolProperty(
         name="Is Versioning",
         description="True if next capture should create a new version",
+        default=False
+    )
+
+    # ==================== Studio Naming Fields ====================
+    # These are populated from context or manual entry when studio mode is enabled
+
+    bpy.types.Scene.animlib_naming_show = bpy.props.StringProperty(
+        name="Show",
+        description="Show/Project code",
+        default=""
+    )
+
+    bpy.types.Scene.animlib_naming_seq = bpy.props.StringProperty(
+        name="Sequence",
+        description="Sequence number or code",
+        default=""
+    )
+
+    bpy.types.Scene.animlib_naming_shot = bpy.props.StringProperty(
+        name="Shot",
+        description="Shot number or code",
+        default=""
+    )
+
+    bpy.types.Scene.animlib_naming_asset = bpy.props.StringProperty(
+        name="Asset",
+        description="Asset name (character, prop, etc.)",
+        default=""
+    )
+
+    bpy.types.Scene.animlib_naming_task = bpy.props.StringProperty(
+        name="Task",
+        description="Task type (anim, layout, etc.)",
+        default="anim"
+    )
+
+    bpy.types.Scene.animlib_naming_variant = bpy.props.StringProperty(
+        name="Variant",
+        description="Variant name",
+        default=""
+    )
+
+    # Additional common field aliases
+    bpy.types.Scene.animlib_naming_showname = bpy.props.StringProperty(
+        name="Show Name",
+        description="Show/Project name (alias for show)",
+        default=""
+    )
+
+    bpy.types.Scene.animlib_naming_project = bpy.props.StringProperty(
+        name="Project",
+        description="Project name",
+        default=""
+    )
+
+    bpy.types.Scene.animlib_naming_character = bpy.props.StringProperty(
+        name="Character",
+        description="Character name",
+        default=""
+    )
+
+    bpy.types.Scene.animlib_naming_episode = bpy.props.StringProperty(
+        name="Episode",
+        description="Episode number or code",
+        default=""
+    )
+
+    # Generic custom fields for any template field not covered above
+    bpy.types.Scene.animlib_naming_custom1 = bpy.props.StringProperty(
+        name="Custom Field 1",
+        description="Custom naming field 1",
+        default=""
+    )
+
+    bpy.types.Scene.animlib_naming_custom2 = bpy.props.StringProperty(
+        name="Custom Field 2",
+        description="Custom naming field 2",
+        default=""
+    )
+
+    bpy.types.Scene.animlib_naming_custom3 = bpy.props.StringProperty(
+        name="Custom Field 3",
+        description="Custom naming field 3",
+        default=""
+    )
+
+    # Flag to indicate studio naming is active for this capture
+    bpy.types.Scene.animlib_use_studio_naming = bpy.props.BoolProperty(
+        name="Use Studio Naming",
+        description="Use template-based naming for this capture",
+        default=False
+    )
+
+    # Use action name for {asset} field in studio naming
+    bpy.types.Scene.animlib_asset_use_action_name = bpy.props.BoolProperty(
+        name="Use Action Name",
+        description="Use the Blender action name for the {asset} field instead of manual entry",
         default=False
     )
 

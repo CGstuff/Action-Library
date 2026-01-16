@@ -10,6 +10,7 @@ from .AL_apply_animation import (
 )
 from .AL_capture_animation import ANIMLIB_OT_capture_animation, ANIMLIB_OT_cancel_versioning
 from .AL_capture_pose import ANIMLIB_OT_capture_pose
+from .AL_capture_selected import ANIMLIB_OT_capture_selected
 from .AL_version_choice import ANIMLIB_OT_version_choice
 from .AL_launch_desktop_app import ANIMLIB_OT_launch_desktop_app
 from .AL_slots_manager import (
@@ -36,6 +37,7 @@ classes = (
     ANIMLIB_OT_check_apply_queue,
     ANIMLIB_OT_capture_animation,
     ANIMLIB_OT_capture_pose,
+    ANIMLIB_OT_capture_selected,
     ANIMLIB_OT_cancel_versioning,
     ANIMLIB_OT_version_choice,
     ANIMLIB_OT_launch_desktop_app,

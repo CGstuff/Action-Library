@@ -52,16 +52,17 @@ class FolderTree(QTreeWidget):
     empty_trash_requested = pyqtSignal()  # user requested to empty trash
     empty_archive_requested = pyqtSignal()  # user requested to empty archive (move all to trash)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, db_service=None, event_bus=None,
+                 archive_service=None, trash_service=None):
         super().__init__(parent)
 
-        # Services
-        self._db_service = get_database_service()
-        self._event_bus = get_event_bus()
+        # Services (injectable for testing)
+        self._db_service = db_service or get_database_service()
+        self._event_bus = event_bus or get_event_bus()
         self._icon_service = get_folder_icon_service(self._db_service)
         self._move_service = FolderMoveService(self._db_service)
-        self._archive_service = get_archive_service()
-        self._trash_service = get_trash_service()
+        self._archive_service = archive_service or get_archive_service()
+        self._trash_service = trash_service or get_trash_service()
 
         # Load folder icons
         self._folder_icons = self._load_folder_icons()

@@ -611,6 +611,56 @@ QToolTip {{
     border: 1px solid {p.border};
     padding: 4px;
 }}
+
+/* ===== TABLE WIDGET ===== */
+QTableWidget {{
+    background-color: {p.background_secondary};
+    alternate-background-color: {p.background_secondary};
+    color: {p.text_primary};
+    border: 1px solid {p.border};
+    gridline-color: {p.border};
+    selection-background-color: {p.accent};
+    selection-color: {p.text_primary};
+}}
+
+QTableWidget::item {{
+    padding: 8px;
+    background-color: transparent;
+    color: {p.text_primary};
+}}
+
+QTableWidget::item:selected {{
+    background-color: {p.accent};
+    color: {p.text_primary};
+}}
+
+QTableWidget::item:selected:!active {{
+    background-color: {p.accent};
+    color: {p.text_primary};
+}}
+
+QTableWidget::item:hover:!selected {{
+    background-color: {p.button_hover};
+}}
+
+QTableWidget::item:!selected {{
+    background-color: transparent;
+}}
+
+/* ===== TABLE HEADER ===== */
+QHeaderView::section {{
+    background-color: {p.button_hover};
+    color: {p.text_primary};
+    padding: 8px;
+    border: none;
+    border-right: 1px solid {p.border};
+    border-bottom: 1px solid {p.border};
+    font-weight: bold;
+}}
+
+QHeaderView::section:hover {{
+    background-color: {p.button_background};
+}}
 """
 
 

@@ -382,7 +382,16 @@ def get_socket_client() -> BlenderSocketClient:
     """
     global _socket_client_instance
     if _socket_client_instance is None:
-        _socket_client_instance = BlenderSocketClient()
+        # Load port from settings
+        try:
+            from ..config import Config
+            settings = Config.load_blender_settings()
+            port = settings.get('socket_port', 9876)
+        except Exception:
+            port = 9876
+
+        config = ConnectionConfig(port=port)
+        _socket_client_instance = BlenderSocketClient(config)
     return _socket_client_instance
 
 

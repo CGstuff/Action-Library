@@ -99,8 +99,3 @@ def unregister():
 class Icons:
     """Constants for icon names used in the addon"""
     LAUNCH_APP = "AL"  # Animation Library launch icon
-    # Add more icon names here as you create them
-    # Example:
-    # CAPTURE = "capture"
-    # APPLY = "apply"
-    # REFRESH = "refresh"

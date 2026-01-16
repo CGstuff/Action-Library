@@ -2,8 +2,8 @@
 ApplyPanel - Panel for applying animations to Blender with options
 
 Features:
-- Big "Apply to Blender" button
-- Apply mode selection (New Action / Insert at Playhead)
+- For Actions: Two buttons "Apply New Action" and "Apply at Playhead"
+- For Poses: Single "Apply Pose to Blender" button
 - Option checkboxes (Mirror, Reverse, Selected Bones, Use Slots)
 - Settings persistence
 - Optional hide of Mirror/Slots toggles for power users (keyboard shortcuts available)
@@ -11,12 +11,13 @@ Features:
 Keyboard shortcuts (always available):
 - Ctrl+double-click for Mirror
 - Shift+double-click for Use Slots
+- Alt+double-click for Insert at Playhead (actions only)
 """
 
 from typing import Optional, Dict, Any
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QComboBox, QCheckBox, QFrame, QGroupBox
+    QCheckBox, QFrame, QGroupBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSettings
 
@@ -28,17 +29,22 @@ class ApplyPanel(QWidget):
     """
     Panel for applying animations to Blender with options.
 
-    Layout:
+    Layout for Actions:
         ┌─────────────────────────────────┐
-        │  APPLY TO BLENDER               │
-        │  [========= BIG BUTTON ========]│
+        │  [Apply New Action][At Playhead]│
         │                                 │
-        │  Apply Mode: [New Action     v] │
-        │                                 │
-        │  [ ] Mirror Animation (L<->R)   │  <- hideable
+        │  [ ] Mirror Animation (L<->R)   │
         │  [ ] Reverse Animation          │
         │  [ ] Selected Bones Only        │
-        │  [ ] Use Action Slots           │  <- hideable
+        │  [ ] Use Action Slots           │
+        └─────────────────────────────────┘
+
+    Layout for Poses:
+        ┌─────────────────────────────────┐
+        │  [=== Apply Pose to Blender ===]│
+        │                                 │
+        │  [ ] Mirror Pose (L<->R)        │
+        │  [ ] Selected Bones Only        │
         └─────────────────────────────────┘
 
     Signals:
@@ -52,6 +58,7 @@ class ApplyPanel(QWidget):
 
         # Current animation (set from outside)
         self._current_animation: Optional[Dict[str, Any]] = None
+        self._is_pose: bool = False
 
         # Theme manager
         self._theme_manager = get_theme_manager()
@@ -71,20 +78,25 @@ class ApplyPanel(QWidget):
     def _create_widgets(self):
         """Create panel widgets"""
 
-        # Big apply button
-        self._apply_button = QPushButton("APPLY TO BLENDER")
-        self._apply_button.setMinimumHeight(50)
-        self._apply_button.setEnabled(False)  # Disabled until animation selected
-        self._apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        # === Action buttons (shown for animations) ===
+        self._new_action_button = QPushButton("Apply New Action")
+        self._new_action_button.setMinimumHeight(40)
+        self._new_action_button.setEnabled(False)
+        self._new_action_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._new_action_button.setToolTip("Create a new action with this animation")
 
-        # Apply mode combo
-        self._mode_label = QLabel("Apply Mode:")
-        self._mode_combo = QComboBox()
-        self._mode_combo.addItems(["New Action", "Insert at Playhead"])
-        self._mode_combo.setToolTip(
-            "New Action: Create a new action with the animation\n"
-            "Insert at Playhead: Insert keyframes at current frame"
-        )
+        self._playhead_button = QPushButton("At Playhead")
+        self._playhead_button.setMinimumHeight(40)
+        self._playhead_button.setEnabled(False)
+        self._playhead_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._playhead_button.setToolTip("Insert keyframes at current frame\nShortcut: Alt+double-click")
+
+        # === Pose button (shown for poses) ===
+        self._pose_button = QPushButton("Apply Pose to Blender")
+        self._pose_button.setMinimumHeight(50)
+        self._pose_button.setEnabled(False)
+        self._pose_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pose_button.setToolTip("Apply this pose to the selected armature")
 
         # Option checkboxes
         self._mirror_check = QCheckBox("Mirror Animation (L<->R)")
@@ -115,41 +127,47 @@ class ApplyPanel(QWidget):
         main_layout.setContentsMargins(8, 8, 8, 8)
         main_layout.setSpacing(8)
 
-        # Big apply button
-        main_layout.addWidget(self._apply_button)
+        # Action buttons row (for animations)
+        self._action_buttons_layout = QHBoxLayout()
+        self._action_buttons_layout.setSpacing(4)
+        self._action_buttons_layout.addWidget(self._new_action_button)
+        self._action_buttons_layout.addWidget(self._playhead_button)
+
+        # Container widget for action buttons
+        self._action_buttons_widget = QWidget()
+        self._action_buttons_widget.setLayout(self._action_buttons_layout)
+        main_layout.addWidget(self._action_buttons_widget)
+
+        # Pose button (for poses)
+        main_layout.addWidget(self._pose_button)
 
         # Separator
         main_layout.addWidget(self._separator)
 
-        # Apply mode row
-        mode_layout = QHBoxLayout()
-        mode_layout.addWidget(self._mode_label)
-        mode_layout.addWidget(self._mode_combo, 1)
-        main_layout.addLayout(mode_layout)
-
-        # Spacer
-        main_layout.addSpacing(4)
-
         # Options group
-        options_group = QGroupBox("Options")
-        options_layout = QVBoxLayout(options_group)
+        self._options_group = QGroupBox("Options")
+        options_layout = QVBoxLayout(self._options_group)
         options_layout.setSpacing(4)
         options_layout.addWidget(self._mirror_check)
         options_layout.addWidget(self._reverse_check)
         options_layout.addWidget(self._bones_check)
         options_layout.addWidget(self._slots_check)
-        main_layout.addWidget(options_group)
+        main_layout.addWidget(self._options_group)
 
         # Push everything to top
         main_layout.addStretch()
 
+        # Initially hide pose button (default to action mode)
+        self._pose_button.hide()
+
     def _connect_signals(self):
         """Connect widget signals"""
 
-        self._apply_button.clicked.connect(self._on_apply_clicked)
+        self._new_action_button.clicked.connect(self._on_new_action_clicked)
+        self._playhead_button.clicked.connect(self._on_playhead_clicked)
+        self._pose_button.clicked.connect(self._on_pose_clicked)
 
         # Save options when changed
-        self._mode_combo.currentIndexChanged.connect(self._save_options)
         self._mirror_check.stateChanged.connect(self._save_options)
         self._reverse_check.stateChanged.connect(self._save_options)
         self._bones_check.stateChanged.connect(self._save_options)
@@ -162,18 +180,19 @@ class ApplyPanel(QWidget):
         if not theme:
             return
 
-        # Style the big apply button with accent color
         accent = theme.palette.accent
         text_color = theme.palette.text_primary
-        self._apply_button.setStyleSheet(f"""
+
+        # Style for main action buttons (Apply New Action, Apply Pose)
+        primary_button_style = f"""
             QPushButton {{
                 background-color: {accent};
                 color: white;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: bold;
                 border: 0px;
                 border-radius: 0px;
-                padding: 10px;
+                padding: 8px;
                 outline: none;
             }}
             QPushButton:hover {{
@@ -192,7 +211,41 @@ class ApplyPanel(QWidget):
                 border: 0px;
                 border-radius: 0px;
             }}
-        """)
+        """
+
+        # Style for secondary button (At Playhead) - slightly muted
+        secondary_button_style = f"""
+            QPushButton {{
+                background-color: #555555;
+                color: white;
+                font-size: 13px;
+                font-weight: bold;
+                border: 0px;
+                border-radius: 0px;
+                padding: 8px;
+                outline: none;
+            }}
+            QPushButton:hover {{
+                background-color: #666666;
+                border: 0px;
+                border-radius: 0px;
+            }}
+            QPushButton:pressed {{
+                background-color: #444444;
+                border: 0px;
+                border-radius: 0px;
+            }}
+            QPushButton:disabled {{
+                background-color: #444444;
+                color: #777777;
+                border: 0px;
+                border-radius: 0px;
+            }}
+        """
+
+        self._new_action_button.setStyleSheet(primary_button_style)
+        self._playhead_button.setStyleSheet(secondary_button_style)
+        self._pose_button.setStyleSheet(primary_button_style)
 
         # Style checkboxes - gray unchecked, accent when checked (sharp, no bevels)
         checkbox_style = f"""
@@ -261,15 +314,50 @@ class ApplyPanel(QWidget):
             animation: Animation data dict or None to clear
         """
         self._current_animation = animation
-        self._apply_button.setEnabled(animation is not None)
+        self._is_pose = animation.get('is_pose', 0) == 1 if animation else False
+
+        has_animation = animation is not None
+
+        # Update button visibility and enabled state based on pose vs action
+        if self._is_pose:
+            # Pose mode: show single pose button, hide action buttons
+            self._action_buttons_widget.hide()
+            self._pose_button.show()
+            self._pose_button.setEnabled(has_animation)
+
+            # Update labels for pose mode
+            self._mirror_check.setText("Mirror Pose (L<->R)")
+
+            # Hide options that don't apply to poses
+            self._reverse_check.hide()
+            self._slots_check.hide()
+        else:
+            # Action mode: show action buttons, hide pose button
+            self._action_buttons_widget.show()
+            self._pose_button.hide()
+            self._new_action_button.setEnabled(has_animation)
+            self._playhead_button.setEnabled(has_animation)
+
+            # Update labels for animation mode
+            self._mirror_check.setText("Mirror Animation (L<->R)")
+
+            # Show all options
+            self._reverse_check.show()
+            self._slots_check.show()
+
+        # Update visibility of hidden toggles
+        self._update_shortcut_toggles_visibility()
 
     def clear(self):
         """Clear the current animation"""
         self.set_animation(None)
 
-    def get_options(self) -> Dict[str, Any]:
+    def get_options(self, apply_mode: str = "NEW") -> Dict[str, Any]:
         """
         Get current apply options.
+
+        Args:
+            apply_mode: "NEW" or "INSERT" - which apply mode to use
 
         Returns:
             Dict with keys:
@@ -280,7 +368,7 @@ class ApplyPanel(QWidget):
                 - use_slots: bool
         """
         return {
-            "apply_mode": "NEW" if self._mode_combo.currentIndex() == 0 else "INSERT",
+            "apply_mode": apply_mode,
             "mirror": self._mirror_check.isChecked(),
             "reverse": self._reverse_check.isChecked(),
             "selected_bones_only": self._bones_check.isChecked(),
@@ -291,21 +379,33 @@ class ApplyPanel(QWidget):
         """Get the currently set animation"""
         return self._current_animation
 
+    def is_pose(self) -> bool:
+        """Check if current animation is a pose"""
+        return self._is_pose
+
     # ==================== INTERNAL ====================
 
-    def _on_apply_clicked(self):
-        """Handle apply button click"""
+    def _on_new_action_clicked(self):
+        """Handle Apply New Action button click"""
         if self._current_animation:
-            options = self.get_options()
+            options = self.get_options(apply_mode="NEW")
+            self.apply_clicked.emit(options)
+
+    def _on_playhead_clicked(self):
+        """Handle At Playhead button click"""
+        if self._current_animation:
+            options = self.get_options(apply_mode="INSERT")
+            self.apply_clicked.emit(options)
+
+    def _on_pose_clicked(self):
+        """Handle Apply Pose button click"""
+        if self._current_animation:
+            options = self.get_options(apply_mode="NEW")
             self.apply_clicked.emit(options)
 
     def _load_options(self):
         """Load saved options from settings"""
         settings = QSettings(Config.APP_AUTHOR, Config.APP_NAME)
-
-        # Apply mode
-        mode_index = settings.value("apply/mode_index", 0, type=int)
-        self._mode_combo.setCurrentIndex(mode_index)
 
         # Checkboxes
         self._mirror_check.setChecked(settings.value("apply/mirror", False, type=bool))
@@ -320,7 +420,6 @@ class ApplyPanel(QWidget):
         """Save current options to settings"""
         settings = QSettings(Config.APP_AUTHOR, Config.APP_NAME)
 
-        settings.setValue("apply/mode_index", self._mode_combo.currentIndex())
         settings.setValue("apply/mirror", self._mirror_check.isChecked())
         settings.setValue("apply/reverse", self._reverse_check.isChecked())
         settings.setValue("apply/selected_bones", self._bones_check.isChecked())
