@@ -10,6 +10,8 @@ import os
 import sys
 import shutil
 import subprocess
+import zipfile
+import tempfile
 from pathlib import Path
 from typing import Optional, Tuple, List
 import logging
@@ -33,14 +35,22 @@ class AddonInstallerService:
             # Running as compiled exe - use internal _MEIPASS path
             base_path = Path(sys._MEIPASS)
             self.addon_source_path = base_path / "blender_plugin"
+            # Locate the installation script in bundled mode
+            # It should be in animation_library/services/utils/install_addon.py
+            # But in PyInstaller it might be flattened or structured differently depending on spec
+            # We will assume it is at base_path/animation_library/services/utils/install_addon.py
+            self.install_script_path = base_path / "animation_library" / "services" / "utils" / "install_addon.py"
             logger.info(f"Running as bundled exe, using internal plugin path: {self.addon_source_path}")
         else:
             # Running in development mode - auto-detect v2 root
             # This file is at: animation_library_v2/animation_library/services/addon_installer_service.py
-            # Plugin is at: animation_library_v2/blender_plugin/
             current_file = Path(__file__)
             v2_root = current_file.parent.parent.parent  # Up 3 levels
             self.addon_source_path = v2_root / "blender_plugin"
+            
+            # Script is at animation_library/services/utils/install_addon.py
+            self.install_script_path = current_file.parent / "utils" / "install_addon.py"
+            
             logger.info(f"Running in dev mode, using project plugin path: {self.addon_source_path}")
 
     def verify_blender_executable(self, blender_path: str) -> Tuple[bool, str, Optional[str]]:
@@ -189,13 +199,50 @@ class AddonInstallerService:
             logger.error(traceback.format_exc())
             return None
 
-    def install_addon(self, blender_path: str) -> Tuple[bool, str]:
+    def _create_addon_zip(self) -> str:
         """
-        Install the addon to Blender
+        Creates a temporary zip file of the addon.
+        
+        Returns:
+            Path to the created zip file
+        """
+        temp_dir = tempfile.mkdtemp()
+        zip_path = os.path.join(temp_dir, f"{self.ADDON_FOLDER_NAME}.zip")
+        
+        logger.info(f"Creating addon zip at: {zip_path}")
+        
+        try:
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                # Walk the directory structure
+                for root, dirs, files in os.walk(self.addon_source_path):
+                    for file in files:
+                        if file.endswith('.pyc') or file.endswith('__pycache__'):
+                            continue
+                            
+                        file_path = os.path.join(root, file)
+                        # Calculate relative path for zip
+                        # We want the folder inside the zip to be 'animation_library_addon'
+                        rel_path = os.path.relpath(file_path, self.addon_source_path)
+                        zip_path_in_archive = os.path.join(self.ADDON_FOLDER_NAME, rel_path)
+                        
+                        zipf.write(file_path, zip_path_in_archive)
+            
+            logger.info("Zip created successfully")
+            return zip_path
+            
+        except Exception as e:
+            logger.error(f"Failed to zip addon: {e}")
+            raise
 
+    def install_addon(self, blender_path: str, storage_path: str = None, exe_path: str = None) -> Tuple[bool, str]:
+        """
+        Install the addon to Blender using a zip file and background script.
+        
         Args:
             blender_path: Path to blender.exe
-
+            storage_path: Optional path to the animation library storage to configure in the addon
+            exe_path: Optional path to the current application executable to configure in the addon
+            
         Returns:
             Tuple of (success, message)
         """
@@ -204,44 +251,83 @@ class AddonInstallerService:
         if not is_valid:
             return False, verify_msg
 
-        # Check source addon exists FIRST
+        # Check source addon exists
         if not self.addon_source_path.exists():
-            error_msg = f"Addon source not found at: {self.addon_source_path}\n\n"
-            error_msg += "This usually means the Blender plugin was not bundled with the application.\n"
-            error_msg += "If you're running from source, make sure 'blender_plugin' folder exists.\n"
-            error_msg += "If you're running the compiled exe, the plugin should be embedded."
-            logger.error(error_msg)
-            return False, error_msg
+            return False, f"Addon source not found at: {self.addon_source_path}"
 
-        # Get addons directory
-        logger.info(f"Looking for Blender addons directory for version: {version}")
-        addons_dir = self.get_blender_addons_directory(blender_path)
-        if not addons_dir:
-            error_msg = f"Could not locate Blender addons directory for version {version}\n\n"
-            error_msg += "Tried to create directory structure but failed.\n"
-            error_msg += f"Expected path: %APPDATA%\\Blender Foundation\\Blender\\{version if version else 'VERSION'}\\scripts\\addons\n\n"
-            error_msg += "Please check the application logs for more details."
-            logger.error(error_msg)
-            return False, error_msg
+        # Check installation script exists
+        if not self.install_script_path.exists():
+             # Fallback check for dev environment vs packaged inconsistencies
+             # If we can't find it where we expect, try to find it relative to this file
+             current_dir = Path(__file__).parent
+             alt_path = current_dir / "utils" / "install_addon.py"
+             if alt_path.exists():
+                 self.install_script_path = alt_path
+             else:
+                return False, f"Installation script not found at: {self.install_script_path}"
 
-        # Destination path
-        addon_dest_path = addons_dir / self.ADDON_FOLDER_NAME
-
+        zip_path = None
         try:
-            # Remove existing installation if present
-            if addon_dest_path.exists():
-                logger.info(f"Removing existing addon at {addon_dest_path}")
-                shutil.rmtree(addon_dest_path)
-
-            # Copy addon files
-            logger.info(f"Installing addon to {addon_dest_path}")
-            shutil.copytree(self.addon_source_path, addon_dest_path)
-
-            return True, f"Successfully installed addon to:\n{addon_dest_path}\n\nPlease restart Blender and enable the addon in:\nEdit > Preferences > Add-ons > Search for 'Action Library'"
+            # 1. Create Zip
+            zip_path = self._create_addon_zip()
+            
+            # 2. Run Blender with install script
+            logger.info("Running Blender to install addon...")
+            
+            # Command: blender.exe --background --python install_addon.py -- path/to/zip [storage_path] [exe_path]
+            cmd = [
+                str(blender_path),
+                "--background",
+                "--python", str(self.install_script_path),
+                "--", str(zip_path)
+            ]
+            
+            # Add storage path (pass "None" string if not provided but we need to pass exe_path)
+            if storage_path:
+                cmd.append(str(storage_path))
+            elif exe_path:
+                cmd.append("None")
+                
+            # Add exe path if provided
+            if exe_path:
+                cmd.append(str(exe_path))
+            
+            process = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            # Log output for debugging
+            logger.info(f"Blender Install Output (stdout): {process.stdout}")
+            if process.stderr:
+                logger.warning(f"Blender Install Output (stderr): {process.stderr}")
+                
+            # Check success based on output or exit code
+            if process.returncode == 0 and "Action Library installed and enabled successfully" in process.stdout:
+                return True, "Action Library installed and enabled successfully."
+            else:
+                # Try to extract error message
+                error_lines = [line for line in process.stdout.split('\n') if "Error" in line]
+                error_msg = "\n".join(error_lines) if error_lines else "Unknown error during installation"
+                return False, f"Installation failed:\n{error_msg}\n\nCheck logs for details."
 
         except Exception as e:
             logger.error(f"Error installing addon: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False, f"Error installing addon: {str(e)}"
+            
+        finally:
+            # Cleanup zip
+            if zip_path and os.path.exists(zip_path):
+                try:
+                    os.remove(zip_path)
+                    # Try to remove temp dir if empty
+                    os.rmdir(os.path.dirname(zip_path))
+                except:
+                    pass
 
     def check_addon_installed(self, blender_path: str) -> Tuple[bool, Optional[Path]]:
         """

@@ -198,6 +198,8 @@ class BlenderIntegrationTab(QWidget):
 
     def install_addon(self):
         """Install addon to Blender"""
+        import sys
+        
         blender_path = self.blender_path_input.text().strip()
 
         if not blender_path:
@@ -218,8 +220,21 @@ class BlenderIntegrationTab(QWidget):
             )
             return
 
+        # Get current storage path to configure in the addon
+        library_path = Config.load_library_path()
+        storage_path = str(library_path) if library_path else None
+        
+        # Get current executable path to configure in the addon
+        # Only meaningful if we are running as a frozen bundle (exe)
+        # But user requested it, so we pass sys.executable regardless
+        exe_path = sys.executable
+
         # Install
-        success, install_message = self.addon_installer.install_addon(blender_path)
+        success, install_message = self.addon_installer.install_addon(
+            blender_path, 
+            storage_path=storage_path, 
+            exe_path=exe_path
+        )
 
         if success:
             self.addon_status_label.setText(f"✓ Installation successful")

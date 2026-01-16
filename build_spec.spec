@@ -40,6 +40,9 @@ datas = [
 
     # Blender plugin (for addon installer feature)
     (str(PROJECT_ROOT / 'blender_plugin'), 'blender_plugin'),
+
+    # Installation script (must be physical file for Blender to run it)
+    (str(PROJECT_ROOT / 'animation_library' / 'services' / 'utils' / 'install_addon.py'), 'animation_library/services/utils'),
 ]
 
 # Include ffmpeg binary if present (for video preview generation)
