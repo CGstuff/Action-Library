@@ -78,9 +78,9 @@ class SettingsDialog(QDialog):
         self.maintenance_tab = MaintenanceTab(self.theme_manager, self)
         self.tab_widget.addTab(self.maintenance_tab, "Maintenance")
 
-        # Studio Mode tab
+        # Operation Mode tab (Solo/Studio/Pipeline)
         self.studio_mode_tab = StudioModeTab(self.theme_manager, self)
-        self.tab_widget.addTab(self.studio_mode_tab, "Studio Mode")
+        self.tab_widget.addTab(self.studio_mode_tab, "Operation Mode")
 
         layout.addWidget(self.tab_widget)
 

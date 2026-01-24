@@ -1,5 +1,10 @@
 """
-StudioModeTab - Settings tab for Solo/Studio mode switching and user management
+OperationModeTab - Settings tab for Solo/Studio/Pipeline mode switching and user management
+
+Operation Modes:
+- Solo: No restrictions, simple workflow for individual use
+- Studio: Role-based permissions, audit trail, soft delete with restore
+- Pipeline: Controlled by Pipeline Control app - status changes blocked locally
 """
 
 from PyQt6.QtWidgets import (
@@ -231,9 +236,9 @@ class UserManagementDialog(QDialog):
 
 
 class StudioModeTab(QWidget):
-    """Settings tab for Solo/Studio mode configuration."""
+    """Settings tab for Solo/Studio/Pipeline mode configuration."""
 
-    mode_changed = pyqtSignal(bool)  # True = studio mode
+    mode_changed = pyqtSignal(str)  # 'solo', 'studio', or 'pipeline'
 
     def __init__(self, theme_manager, parent=None):
         super().__init__(parent)
@@ -306,7 +311,7 @@ class StudioModeTab(QWidget):
         layout.setSpacing(16)
 
         # Mode selection group
-        mode_group = QGroupBox("Application Mode")
+        mode_group = QGroupBox("Operation Mode")
         mode_layout = QVBoxLayout(mode_group)
 
         self._mode_btn_group = QButtonGroup(self)
@@ -326,11 +331,32 @@ class StudioModeTab(QWidget):
         mode_layout.addWidget(self._studio_radio)
 
         studio_desc = QLabel("Role-based permissions. Audit trail. Soft delete with restore.")
-        studio_desc.setStyleSheet("color: #888; margin-left: 22px; font-size: 11px;")
+        studio_desc.setStyleSheet("color: #888; margin-left: 22px; margin-bottom: 12px; font-size: 11px;")
         mode_layout.addWidget(studio_desc)
+
+        # Pipeline mode option
+        self._pipeline_radio = QRadioButton("Pipeline Mode (Pipeline Control)")
+        self._pipeline_radio.setStyleSheet("font-weight: bold; font-size: 12px;")
+        mode_layout.addWidget(self._pipeline_radio)
+
+        pipeline_desc = QLabel("Status controlled by Pipeline Control. Local status changes disabled.")
+        pipeline_desc.setStyleSheet("color: #888; margin-left: 22px; margin-bottom: 8px; font-size: 11px;")
+        mode_layout.addWidget(pipeline_desc)
+
+        # Pipeline mode indicator
+        self._pipeline_indicator = QLabel("Pipeline Control is the maestro for this library.")
+        self._pipeline_indicator.setStyleSheet("""
+            color: #FF9800;
+            margin-left: 22px;
+            font-size: 11px;
+            font-style: italic;
+        """)
+        self._pipeline_indicator.setVisible(False)
+        mode_layout.addWidget(self._pipeline_indicator)
 
         self._mode_btn_group.addButton(self._solo_radio, 0)
         self._mode_btn_group.addButton(self._studio_radio, 1)
+        self._mode_btn_group.addButton(self._pipeline_radio, 2)
         self._mode_btn_group.idToggled.connect(self._on_mode_changed)
 
         layout.addWidget(mode_group)
@@ -403,10 +429,12 @@ class StudioModeTab(QWidget):
 
     def _load_settings(self):
         """Load current settings from database."""
-        is_studio = self._notes_db.is_studio_mode()
+        mode = self._notes_db.get_operation_mode()
         current_user = self._notes_db.get_current_user()
 
-        if is_studio:
+        if mode == 'pipeline':
+            self._pipeline_radio.setChecked(True)
+        elif mode == 'studio':
             self._studio_radio.setChecked(True)
         else:
             self._solo_radio.setChecked(True)
@@ -436,11 +464,16 @@ class StudioModeTab(QWidget):
     def _update_ui_visibility(self):
         """Update visibility based on mode."""
         is_studio = self._studio_radio.isChecked()
+        is_pipeline = self._pipeline_radio.isChecked()
 
-        self._user_group.setVisible(is_studio)
-        self._permissions_group.setVisible(is_studio)
+        # User/permissions visible in Studio and Pipeline modes
+        self._user_group.setVisible(is_studio or is_pipeline)
+        self._permissions_group.setVisible(is_studio or is_pipeline)
+        
+        # Pipeline indicator only visible in pipeline mode
+        self._pipeline_indicator.setVisible(is_pipeline)
 
-        if is_studio:
+        if is_studio or is_pipeline:
             self._update_role_badge()
             self._update_permissions_display()
 
@@ -516,11 +549,20 @@ class StudioModeTab(QWidget):
 
     def save_settings(self):
         """Save settings to database."""
-        is_studio = self._studio_radio.isChecked()
+        if self._pipeline_radio.isChecked():
+            mode = 'pipeline'
+        elif self._studio_radio.isChecked():
+            mode = 'studio'
+        else:
+            mode = 'solo'
+        
         current_user = self._user_combo.currentData() or ''
 
-        self._notes_db.set_setting('app_mode', 'studio' if is_studio else 'solo')
+        self._notes_db.set_setting('app_mode', mode)
         self._notes_db.set_setting('current_user', current_user)
+        
+        # Emit signal for any listeners
+        self.mode_changed.emit(mode)
 
 
 __all__ = ['StudioModeTab']

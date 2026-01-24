@@ -112,6 +112,11 @@ def scale_stroke(stroke: Dict, scale_x: float, scale_y: float) -> Dict:
         scaled['position'] = [position[0] * scale_x, position[1] * scale_y]
         scaled['font_size'] = int(stroke.get('font_size', 14) * min(scale_x, scale_y))
 
+    elif stroke_type == 'diamond':
+        position = stroke.get('position', [0, 0])
+        scaled['position'] = [position[0] * scale_x, position[1] * scale_y]
+        scaled['size_px'] = stroke.get('size_px', 9) * min(scale_x, scale_y)
+
     # Scale stroke width
     scaled['width'] = stroke.get('width', 3) * min(scale_x, scale_y)
 
@@ -197,6 +202,14 @@ def uv_stroke_to_screen(
         pos_pt = uv_to_screen(position)
         screen_stroke['position'] = [pos_pt.x(), pos_pt.y()]
         screen_stroke['font_size'] = int(stroke.get('font_size', 0.02) * rect_size)
+
+    elif stroke_type == 'diamond':
+        position = stroke.get('position', [0.5, 0.5])
+        pos_pt = uv_to_screen(position)
+        screen_stroke['position'] = [pos_pt.x(), pos_pt.y()]
+        # Convert normalized size to pixels
+        normalized_size = stroke.get('size', 0.03)
+        screen_stroke['size_px'] = normalized_size * rect_size
 
     return screen_stroke
 

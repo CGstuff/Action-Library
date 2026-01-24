@@ -821,19 +821,31 @@ class AnimationRepository:
 
     VALID_STATUSES = ['none', 'wip', 'review', 'approved', 'needs_work', 'final']
 
-    def set_status(self, uuid: str, status: str) -> bool:
+    def set_status(self, uuid: str, status: str, force: bool = False) -> bool:
         """
         Set lifecycle status for an animation.
 
         Args:
             uuid: Animation UUID
             status: Status value (wip, review, approved, needs_work, final)
+            force: If True, bypass pipeline mode check (used by Pipeline Control)
 
         Returns:
             True if updated successfully
         """
         if status not in self.VALID_STATUSES:
             return False
+
+        # Check if pipeline mode is active (unless force=True)
+        if not force:
+            try:
+                from ..notes_database import get_notes_database
+                notes_db = get_notes_database()
+                if notes_db and notes_db.is_pipeline_mode():
+                    # Pipeline Control manages status - local changes blocked
+                    return False
+            except Exception:
+                pass  # If notes_db unavailable, allow the change
 
         try:
             with self._conn.transaction() as conn:

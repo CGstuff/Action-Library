@@ -326,6 +326,7 @@ class AnnotationToolbar(QWidget):
         ("arrow_draw", DrawingTool.ARROW, "Arrow (A)", "A"),
         ("rectangle", DrawingTool.RECT, "Rectangle (R)", "R"),
         ("circle", DrawingTool.CIRCLE, "Circle (C)", "C"),
+        ("diamond", DrawingTool.DIAMOND, "Diamond/keyframe marker (K)", "K"),
     ]
 
     def __init__(self, parent: Optional[QWidget] = None):

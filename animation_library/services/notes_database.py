@@ -432,6 +432,36 @@ class NotesDatabase:
         """Check if app is in studio mode."""
         return self.get_setting('app_mode', 'solo') == 'studio'
 
+    def is_pipeline_mode(self) -> bool:
+        """Check if app is in pipeline mode (controlled by Pipeline Control)."""
+        return self.get_setting('app_mode', 'solo') == 'pipeline'
+
+    def get_operation_mode(self) -> str:
+        """
+        Get current operation mode.
+        
+        Returns:
+            'solo', 'studio', or 'pipeline'
+        """
+        mode = self.get_setting('app_mode', 'solo')
+        if mode not in ('solo', 'studio', 'pipeline'):
+            return 'solo'
+        return mode
+
+    def set_operation_mode(self, mode: str) -> bool:
+        """
+        Set operation mode.
+        
+        Args:
+            mode: 'solo', 'studio', or 'pipeline'
+            
+        Returns:
+            True if successful
+        """
+        if mode not in ('solo', 'studio', 'pipeline'):
+            return False
+        return self.set_setting('app_mode', mode)
+
     def get_current_user(self) -> str:
         """Get current username."""
         return self.get_setting('current_user', '')

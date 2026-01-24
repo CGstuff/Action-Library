@@ -862,9 +862,10 @@ class VersionHistoryDialog(QDialog):
             self._drawover_canvas.set_tool(DrawingTool.NONE)
         else:
             self._play_btn.setIcon(self._play_icon)
-            # Re-enable drawing when paused
+            # Re-enable drawing when paused - restore toolbar's current tool
             self._drawover_canvas.read_only = False
-            self._drawover_canvas.set_tool(DrawingTool.PEN)
+            current_tool = self._annotation_toolbar.current_tool
+            self._drawover_canvas.set_tool(current_tool)
 
     def _on_play_clicked(self):
         """Toggle video playback."""
@@ -1350,7 +1351,9 @@ class VersionHistoryDialog(QDialog):
         # Only enable drawing when video is NOT playing
         if not self._video_preview.is_playing:
             self._drawover_canvas.read_only = False
-            self._drawover_canvas.set_tool(DrawingTool.PEN)
+            # Preserve current tool selection from toolbar (don't reset to PEN)
+            current_tool = self._annotation_toolbar.current_tool
+            self._drawover_canvas.set_tool(current_tool)
         else:
             # During playback, make canvas transparent for mouse events
             self._drawover_canvas.read_only = True
@@ -1852,6 +1855,13 @@ class VersionHistoryDialog(QDialog):
                 if self._selected_uuid and not self._strokes_from_hold:
                     self._annotation_toolbar.set_tool(DrawingTool.CIRCLE)
                     self._drawover_canvas.set_tool(DrawingTool.CIRCLE)
+                    return
+
+            # K - Diamond/keyframe marker tool
+            elif key == Qt.Key.Key_K:
+                if self._selected_uuid and not self._strokes_from_hold:
+                    self._annotation_toolbar.set_tool(DrawingTool.DIAMOND)
+                    self._drawover_canvas.set_tool(DrawingTool.DIAMOND)
                     return
 
         super().keyPressEvent(event)

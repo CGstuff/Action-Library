@@ -21,12 +21,12 @@ from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem,
     QGraphicsPathItem, QGraphicsLineItem, QGraphicsRectItem,
     QGraphicsEllipseItem, QGraphicsTextItem,
-    QGraphicsItemGroup, QWidget
+    QGraphicsItemGroup, QGraphicsPolygonItem, QWidget
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF, QEvent
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QPainterPath,
-    QFont, QCursor, QUndoStack, QTabletEvent
+    QFont, QCursor, QUndoStack, QTabletEvent, QPolygonF
 )
 
 # Import from extracted modules
@@ -52,6 +52,7 @@ class DrawingTool(Enum):
     CIRCLE = 6    # Ellipse
     TEXT = 7      # Text annotation
     ERASER = 8    # Remove strokes
+    DIAMOND = 9   # Diamond/keyframe marker (single-click stamp)
 
 
 class DrawoverCanvas(QGraphicsView):
@@ -115,6 +116,9 @@ class DrawoverCanvas(QGraphicsView):
         # Read-only mode (for compare view)
         self._read_only = False
 
+        # Preview cursor for brush/diamond tools
+        self._preview_item: Optional[QGraphicsItem] = None
+
         # Use composition for coordinate conversion and ghost rendering
         self._coord = CoordinateConverter()
         self._ghost = GhostRenderer(self._scene)
@@ -161,6 +165,15 @@ class DrawoverCanvas(QGraphicsView):
     @brush_size.setter
     def brush_size(self, value: int):
         self._brush_size = max(self.MIN_BRUSH_SIZE, min(self.MAX_BRUSH_SIZE, value))
+        # Refresh preview if brush or diamond tool is active
+        if self._preview_item:
+            bounds = self._preview_item.boundingRect()
+            if not bounds.isEmpty():
+                center = bounds.center()
+                if self._current_tool == DrawingTool.DIAMOND:
+                    self._update_diamond_preview(center)
+                elif self._current_tool == DrawingTool.BRUSH:
+                    self._update_brush_preview(center)
 
     @property
     def opacity(self) -> float:
@@ -227,6 +240,9 @@ class DrawoverCanvas(QGraphicsView):
         if tool == self._current_tool:
             return
 
+        # Clear any preview when switching tools
+        self._clear_preview()
+
         self._current_tool = tool
         self.setCursor(self._get_tool_cursor(tool))
 
@@ -241,7 +257,8 @@ class DrawoverCanvas(QGraphicsView):
         if tool == DrawingTool.NONE:
             return QCursor(Qt.CursorShape.ArrowCursor)
         elif tool in (DrawingTool.PEN, DrawingTool.BRUSH, DrawingTool.LINE,
-                      DrawingTool.ARROW, DrawingTool.RECT, DrawingTool.CIRCLE):
+                      DrawingTool.ARROW, DrawingTool.RECT, DrawingTool.CIRCLE,
+                      DrawingTool.DIAMOND):
             return QCursor(Qt.CursorShape.CrossCursor)
         elif tool == DrawingTool.TEXT:
             return QCursor(Qt.CursorShape.IBeamCursor)
@@ -343,7 +360,19 @@ class DrawoverCanvas(QGraphicsView):
             pos = self._clamp_to_video_rect(pos)
             self._continue_drawing(pos)
             event.accept()
+        elif self._current_tool in (DrawingTool.DIAMOND, DrawingTool.BRUSH):
+            # Show preview cursor for diamond/brush tool
+            pos = self.mapToScene(event.pos())
+            if self._is_inside_video_rect(pos):
+                if self._current_tool == DrawingTool.DIAMOND:
+                    self._update_diamond_preview(pos)
+                else:
+                    self._update_brush_preview(pos)
+            else:
+                self._clear_preview()
+            event.accept()
         else:
+            self._clear_preview()
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -359,10 +388,16 @@ class DrawoverCanvas(QGraphicsView):
         else:
             super().mouseReleaseEvent(event)
 
+    def leaveEvent(self, event):
+        """Clear preview when mouse leaves canvas."""
+        self._clear_preview()
+        super().leaveEvent(event)
+
     # ==================== Drawing ====================
 
     def _start_drawing(self, pos: QPointF):
         """Start a new stroke."""
+        self._clear_preview()  # Hide preview when drawing starts
         self._is_drawing = True
         self._start_pos = pos
         self.drawing_started.emit()
@@ -379,6 +414,9 @@ class DrawoverCanvas(QGraphicsView):
             self._start_rect(pos)
         elif self._current_tool == DrawingTool.CIRCLE:
             self._start_circle(pos)
+        elif self._current_tool == DrawingTool.DIAMOND:
+            self._start_diamond(pos)
+            self._is_drawing = False  # Diamond is single-click stamp
         elif self._current_tool == DrawingTool.TEXT:
             self._add_text(pos)
             self._is_drawing = False
@@ -579,6 +617,167 @@ class DrawoverCanvas(QGraphicsView):
             h = abs(pos.y() - self._start_pos.y())
             self._current_item.setRect(x, y, w, h)
 
+    # ==================== Diamond Tool (Single-Click Stamp) ====================
+
+    def _start_diamond(self, pos: QPointF):
+        """Create a diamond shape at the clicked position (single-click stamp).
+
+        Diamond size scales with brush_size (size = brush_size * 3).
+        This is a keyframe/marker stamp, not a drag-to-draw shape.
+        """
+        # Size scales with brush_size slider
+        size = self._brush_size * 3
+        half = size / 2.0
+
+        # Create diamond points (top, right, bottom, left)
+        top = QPointF(pos.x(), pos.y() - half)
+        right = QPointF(pos.x() + half, pos.y())
+        bottom = QPointF(pos.x(), pos.y() + half)
+        left = QPointF(pos.x() - half, pos.y())
+
+        polygon = QPolygonF([top, right, bottom, left])
+
+        self._current_item = QGraphicsPolygonItem(polygon)
+
+        # Filled diamond with current color and opacity
+        color = QColor(self._current_color)
+        color.setAlphaF(self._opacity)
+        self._current_item.setPen(QPen(Qt.PenStyle.NoPen))  # No outline
+        self._current_item.setBrush(QBrush(color))
+
+        self._scene.addItem(self._current_item)
+
+        # Store position and size for serialization
+        self._diamond_center = pos
+        self._diamond_size = size
+
+        # Immediately finalize as this is a single-click stamp
+        stroke_data = self._finalize_diamond_stroke()
+        if stroke_data:
+            cmd = AddStrokeCommand(self, self._current_item, stroke_data)
+            self._undo_stack.push(cmd)
+            self.stroke_added.emit(stroke_data)
+            self.drawing_modified.emit()
+
+        self._current_item = None
+        self.drawing_finished.emit()
+
+    def _finalize_diamond_stroke(self) -> Optional[Dict]:
+        """Create stroke data for diamond shape in UV coordinates."""
+        if not self._current_item or not hasattr(self, '_diamond_center'):
+            return None
+
+        rect = self._get_effective_rect()
+        if rect.isEmpty():
+            return None
+
+        # Convert center position to UV coordinates
+        center_uv = self._screen_to_uv(self._diamond_center)
+
+        # Normalize size relative to rect size
+        size_normalized = self._diamond_size / max(rect.width(), rect.height())
+
+        stroke_id = str(uuid_lib.uuid4())
+
+        stroke_data = {
+            'id': stroke_id,
+            'type': 'diamond',
+            'tool': 'diamond',
+            'color': self._current_color.name(),
+            'opacity': self._opacity,
+            'position': center_uv,
+            'size': size_normalized,
+            'size_px': self._diamond_size,
+            'fill': True,
+            'format': 'uv',
+            'created_at': datetime.now().isoformat(),
+            'author': self._current_author
+        }
+
+        self._stroke_items[stroke_id] = self._current_item
+        self._item_data[id(self._current_item)] = stroke_data
+
+        return stroke_data
+
+    # ==================== Preview Cursors (Brush/Diamond) ====================
+
+    def _update_diamond_preview(self, pos: QPointF):
+        """Show/update diamond preview cursor at position."""
+        size = self._brush_size * 3
+        half = size / 2
+
+        # Diamond points centered on position
+        top = QPointF(pos.x(), pos.y() - half)
+        right = QPointF(pos.x() + half, pos.y())
+        bottom = QPointF(pos.x(), pos.y() + half)
+        left = QPointF(pos.x() - half, pos.y())
+
+        polygon = QPolygonF([top, right, bottom, left])
+
+        # Check if we need to recreate the preview item (wrong type)
+        if self._preview_item is not None and not isinstance(self._preview_item, QGraphicsPolygonItem):
+            self._clear_preview()
+
+        if self._preview_item is None:
+            self._preview_item = QGraphicsPolygonItem(polygon)
+            # Preview: semi-transparent fill with dashed outline
+            color = QColor(self._current_color)
+            color.setAlphaF(self._opacity * 0.5)
+            self._preview_item.setBrush(QBrush(color))
+            outline = QColor(self._current_color)
+            outline.setAlphaF(self._opacity)
+            self._preview_item.setPen(QPen(outline, 1, Qt.PenStyle.DashLine))
+            self._preview_item.setZValue(1000)  # On top
+            self._scene.addItem(self._preview_item)
+        else:
+            self._preview_item.setPolygon(polygon)
+            # Update colors in case they changed
+            color = QColor(self._current_color)
+            color.setAlphaF(self._opacity * 0.5)
+            self._preview_item.setBrush(QBrush(color))
+            outline = QColor(self._current_color)
+            outline.setAlphaF(self._opacity)
+            self._preview_item.setPen(QPen(outline, 1, Qt.PenStyle.DashLine))
+
+    def _update_brush_preview(self, pos: QPointF):
+        """Show/update brush size preview cursor at position."""
+        diameter = self._brush_size
+        radius = diameter / 2
+
+        # Check if we need to recreate the preview item (wrong type)
+        if self._preview_item is not None and not isinstance(self._preview_item, QGraphicsEllipseItem):
+            self._clear_preview()
+
+        if self._preview_item is None:
+            self._preview_item = QGraphicsEllipseItem(
+                pos.x() - radius, pos.y() - radius, diameter, diameter
+            )
+            # Preview: semi-transparent fill with dashed outline
+            color = QColor(self._current_color)
+            color.setAlphaF(self._opacity * 0.3)
+            self._preview_item.setBrush(QBrush(color))
+            outline = QColor(self._current_color)
+            outline.setAlphaF(self._opacity)
+            self._preview_item.setPen(QPen(outline, 1, Qt.PenStyle.DashLine))
+            self._preview_item.setZValue(1000)  # On top
+            self._scene.addItem(self._preview_item)
+        else:
+            self._preview_item.setRect(pos.x() - radius, pos.y() - radius, diameter, diameter)
+            # Update colors in case they changed
+            color = QColor(self._current_color)
+            color.setAlphaF(self._opacity * 0.3)
+            self._preview_item.setBrush(QBrush(color))
+            outline = QColor(self._current_color)
+            outline.setAlphaF(self._opacity)
+            self._preview_item.setPen(QPen(outline, 1, Qt.PenStyle.DashLine))
+
+    def _clear_preview(self):
+        """Remove preview cursor from scene."""
+        if self._preview_item is not None:
+            if self._preview_item.scene() is not None:
+                self._scene.removeItem(self._preview_item)
+            self._preview_item = None
+
     # ==================== Text Tool ====================
 
     def _add_text(self, pos: QPointF):
@@ -634,13 +833,20 @@ class DrawoverCanvas(QGraphicsView):
     # ==================== Helpers ====================
 
     def _get_current_width(self) -> int:
-        """Get stroke width based on tool and pressure."""
+        """Get stroke width based on tool and pressure.
+
+        Only BRUSH uses brush_size slider. Other tools use fixed widths:
+        - PEN: fixed 2px
+        - BRUSH: brush_size * pressure
+        - LINE, ARROW, RECT, CIRCLE: fixed 3px
+        """
         if self._current_tool == DrawingTool.PEN:
             return 2  # Fixed thin width for pen
         elif self._current_tool == DrawingTool.BRUSH:
             return max(1, int(self._brush_size * self._current_pressure))
         else:
-            return self._brush_size
+            # LINE, ARROW, RECT, CIRCLE use fixed width (not affected by brush size slider)
+            return 3
 
     def _create_pen(self) -> QPen:
         """Create pen with current settings including opacity and tool-specific width."""
@@ -665,14 +871,17 @@ class DrawoverCanvas(QGraphicsView):
         rect = self._get_effective_rect()
         rect_size = min(rect.width(), rect.height()) if rect.width() > 0 else 1
 
-        normalized_width = self._brush_size / rect_size if rect_size > 0 else 0.005
+        # Use actual drawing width (respects tool-specific fixed widths)
+        # This ensures PEN=2px, LINE/ARROW/RECT/CIRCLE=3px, BRUSH=brush_size*pressure
+        actual_width = self._get_current_width()
+        normalized_width = actual_width / rect_size if rect_size > 0 else 0.005
 
         stroke_data = {
             'id': stroke_id,
             'color': self._current_color.name(),
             'opacity': self._opacity,
             'width': normalized_width,
-            'width_px': self._brush_size,
+            'width_px': actual_width,
             'created_at': now,
             'author': self._current_author,
             'format': 'uv'

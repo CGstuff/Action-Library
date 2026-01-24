@@ -529,6 +529,30 @@ class MainWindow(QMainWindow):
                 except:
                     pass
 
+        # Handle animation_captured_*.json files (new animation captured from Blender)
+        for notification_file in queue_dir.glob("animation_captured_*.json"):
+            try:
+                with open(notification_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+
+                animation_name = data.get('animation_name', 'Unknown')
+                
+                # Trigger full library refresh to import the new animation
+                self._on_library_auto_refresh()
+                
+                # Update status bar
+                self._status_bar.showMessage(f"New animation captured: {animation_name}")
+
+                # Delete notification file after processing
+                notification_file.unlink()
+
+            except Exception as e:
+                print(f"Error processing animation_captured notification: {e}")
+                try:
+                    notification_file.unlink()
+                except:
+                    pass
+
         # Find preview_updated_*.json files
         for notification_file in queue_dir.glob("preview_updated_*.json"):
             try:

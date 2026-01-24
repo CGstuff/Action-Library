@@ -63,6 +63,7 @@ class IconLoader:
         "arrow_draw": "arrow_draw.svg",
         "rectangle": "rectangle.svg",
         "circle": "circle.svg",
+        "diamond": "diamond.svg",
         "eraser": "eraser.svg",
         "undo": "undo.svg",
         "redo": "redo.svg",

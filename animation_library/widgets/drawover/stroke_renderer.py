@@ -10,10 +10,10 @@ from typing import Optional, List, Dict
 from PyQt6.QtWidgets import (
     QGraphicsItem, QGraphicsPathItem, QGraphicsLineItem,
     QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsTextItem,
-    QGraphicsItemGroup
+    QGraphicsItemGroup, QGraphicsPolygonItem
 )
 from PyQt6.QtCore import Qt, QPointF, QLineF
-from PyQt6.QtGui import QPen, QBrush, QColor, QPainterPath, QFont
+from PyQt6.QtGui import QPen, QBrush, QColor, QPainterPath, QFont, QPolygonF
 
 
 def add_arrow_head_to_path(
@@ -212,6 +212,28 @@ def create_item_from_stroke(stroke: Dict) -> Optional[QGraphicsItem]:
         item.setPos(position[0], position[1])
         item.setDefaultTextColor(color)
         item.setFont(QFont('Arial', font_size))
+        return item
+
+    elif stroke_type == 'diamond':
+        # Diamond/keyframe marker - single-click filled stamp
+        position = stroke.get('position', [0, 0])
+        size = stroke.get('size_px', 9)  # Use size_px if available
+        half = size / 2.0
+
+        center_x, center_y = position[0], position[1]
+
+        # Create diamond points (top, right, bottom, left)
+        top = QPointF(center_x, center_y - half)
+        right = QPointF(center_x + half, center_y)
+        bottom = QPointF(center_x, center_y + half)
+        left = QPointF(center_x - half, center_y)
+
+        polygon = QPolygonF([top, right, bottom, left])
+        item = QGraphicsPolygonItem(polygon)
+
+        # Filled diamond with no outline
+        item.setPen(QPen(Qt.PenStyle.NoPen))
+        item.setBrush(QBrush(color))
         return item
 
     return None

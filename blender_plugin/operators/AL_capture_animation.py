@@ -405,6 +405,9 @@ class ANIMLIB_OT_capture_animation(Operator):
                 else:
                     self.report({'INFO'}, f"Action '{animation_name}' saved successfully")
 
+                # Notify desktop app to refresh library
+                self._notify_desktop_app_capture(animation_name, saved_metadata)
+
                 # Cleanup and finish
                 self.cleanup(context)
                 return {'FINISHED'}
@@ -490,7 +493,7 @@ class ANIMLIB_OT_capture_animation(Operator):
 
         library_dir = Path(library_path)
 
-        # Search for JSON file with this UUID in library folders
+        # Search for JSON file with this UUID in library folders (hot storage)
         for subfolder in ['library/actions', 'library/poses', 'library']:
             search_dir = library_dir / subfolder
             if not search_dir.exists():
@@ -511,6 +514,28 @@ class ANIMLIB_OT_capture_animation(Operator):
                             return library_name == expected_name
                     except Exception:
                         continue
+
+        # Also search cold storage (_versions folder) for old versions
+        # This is needed when user applies an old version from the desktop app
+        versions_dir = library_dir / "_versions"
+        if versions_dir.exists():
+            for anim_folder in versions_dir.iterdir():
+                if not anim_folder.is_dir():
+                    continue
+                for version_folder in anim_folder.iterdir():
+                    if not version_folder.is_dir():
+                        continue
+                    for json_file in version_folder.glob("*.json"):
+                        try:
+                            with open(json_file, 'r', encoding='utf-8') as f:
+                                data = json.load(f)
+
+                            if data.get('id') == uuid or data.get('uuid') == uuid:
+                                # Found UUID - check if name matches
+                                library_name = data.get('name', '')
+                                return library_name == expected_name
+                        except Exception:
+                            continue
 
         # UUID not found in library
         return False
@@ -654,6 +679,46 @@ class ANIMLIB_OT_capture_animation(Operator):
                         f"version_group_id={metadata.get('version_group_id')}")
         except Exception as e:
             logger.error(f"Error updating action library metadata: {e}")
+
+    def _notify_desktop_app_capture(self, animation_name: str, metadata: dict):
+        """
+        Notify the desktop app that a new animation was captured.
+        
+        This writes a notification file to the queue directory that the
+        desktop app watches. When detected, it triggers a library refresh.
+        
+        Args:
+            animation_name: Name of the captured animation
+            metadata: Saved animation metadata dict
+        """
+        from pathlib import Path
+        from ..preferences import get_library_path
+        
+        try:
+            library_path = get_library_path()
+            if not library_path:
+                return
+                
+            queue_dir = Path(library_path) / ".queue"
+            queue_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create notification file
+            notification_data = {
+                'animation_id': metadata.get('id', ''),
+                'animation_name': animation_name,
+                'version': metadata.get('version', 1),
+                'version_label': metadata.get('version_label', 'v001'),
+                'timestamp': time.time()
+            }
+            
+            notification_file = queue_dir / f"animation_captured_{int(time.time() * 1000)}.json"
+            with open(notification_file, 'w', encoding='utf-8') as f:
+                json.dump(notification_data, f)
+            
+            logger.info(f"Notified desktop app: animation captured '{animation_name}'")
+            
+        except Exception as e:
+            logger.warning(f"Could not notify desktop app: {e}")
 
     def _get_source_animation_metadata(self, version_group_id: str) -> dict:
         """
@@ -830,6 +895,29 @@ class ANIMLIB_OT_capture_animation(Operator):
                             # Track JSON files to update AFTER all moves complete
                             if f.suffix == '.json':
                                 json_files_to_update.append(dest)
+                        except PermissionError as e:
+                            # File is locked (likely by desktop app viewing preview)
+                            # Try copy instead - source stays but copy exists in cold storage
+                            logger.warning(f"File locked, trying copy instead: {f.name}")
+                            try:
+                                shutil.copy2(str(f), str(dest))
+                                completed_moves.append((str(dest), str(f)))  # Track for potential rollback
+                                logger.info(f"Copied to cold storage (source locked): {f.name} -> {version_label}/")
+                                
+                                # Track JSON files to update
+                                if f.suffix == '.json':
+                                    json_files_to_update.append(dest)
+                                    
+                                # Try to delete original - if it fails, that's ok
+                                try:
+                                    f.unlink()
+                                    logger.info(f"Deleted locked source after copy: {f.name}")
+                                except PermissionError:
+                                    logger.warning(f"Could not delete locked file {f.name} - will be orphaned in hot storage")
+                            except Exception as copy_error:
+                                logger.error(f"Failed to copy {f.name}: {copy_error}")
+                                move_failed = True
+                                break
                         except Exception as e:
                             logger.error(f"Failed to move {f.name}: {e}")
                             move_failed = True
