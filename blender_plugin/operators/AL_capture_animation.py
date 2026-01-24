@@ -807,6 +807,7 @@ class ANIMLIB_OT_capture_animation(Operator):
                 # Move each version's files to cold storage with transaction-like rollback
                 # Track all successful moves for potential rollback
                 completed_moves = []  # List of (source, dest) tuples
+                json_files_to_update = []  # Track JSON files to update AFTER all moves succeed
                 move_failed = False
 
                 for version_label, files in version_files.items():
@@ -826,17 +827,9 @@ class ANIMLIB_OT_capture_animation(Operator):
                             completed_moves.append((str(dest), str(f)))  # Store for rollback
                             logger.info(f"Moved to cold storage: {f.name} -> {version_label}/")
 
-                            # Update JSON files to set is_latest = 0 (no longer latest)
+                            # Track JSON files to update AFTER all moves complete
                             if f.suffix == '.json':
-                                try:
-                                    with open(dest, 'r', encoding='utf-8') as jf:
-                                        json_data = json.load(jf)
-                                    json_data['is_latest'] = 0
-                                    with open(dest, 'w', encoding='utf-8') as jf:
-                                        json.dump(json_data, jf, indent=2)
-                                    logger.info(f"Updated {dest.name}: is_latest = 0")
-                                except Exception as je:
-                                    logger.warning(f"Failed to update is_latest in {dest.name}: {je}")
+                                json_files_to_update.append(dest)
                         except Exception as e:
                             logger.error(f"Failed to move {f.name}: {e}")
                             move_failed = True
@@ -851,6 +844,18 @@ class ANIMLIB_OT_capture_animation(Operator):
                             logger.info(f"Rollback: moved {Path(src).name} back to hot storage")
                         except Exception as re:
                             logger.error(f"Rollback failed for {Path(src).name}: {re}")
+                elif not move_failed and json_files_to_update:
+                    # Only update is_latest AFTER all files moved successfully (no rollback needed)
+                    for json_dest in json_files_to_update:
+                        try:
+                            with open(json_dest, 'r', encoding='utf-8') as jf:
+                                json_data = json.load(jf)
+                            json_data['is_latest'] = 0
+                            with open(json_dest, 'w', encoding='utf-8') as jf:
+                                json.dump(json_data, jf, indent=2)
+                            logger.info(f"Updated {json_dest.name}: is_latest = 0")
+                        except Exception as je:
+                            logger.warning(f"Failed to update is_latest in {json_dest.name}: {je}")
 
             # Files use animation name (with version) for clarity: walk_cycle_v001.blend
             blend_path = animation_folder / f"{safe_anim_name}.blend"
