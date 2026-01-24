@@ -42,8 +42,8 @@ class BlenderSocketClient:
     and receives JSON responses.
 
     Thread Safety:
-        This client is NOT thread-safe. Create separate instances
-        for different threads, or use locks.
+        This client is thread-safe. Uses RLock to prevent race conditions
+        during connection check and reconnection.
     """
 
     def __init__(self, config: Optional[ConnectionConfig] = None):
@@ -56,12 +56,15 @@ class BlenderSocketClient:
         self.config = config or ConnectionConfig()
         self._socket: Optional[socket.socket] = None
         self._connected = False
-        self._lock = threading.Lock()
+        # Use RLock (reentrant lock) to allow same thread to acquire multiple times
+        # This prevents race conditions when send_command() calls connect()
+        self._lock = threading.RLock()
 
     @property
     def is_connected(self) -> bool:
-        """Check if client is connected to Blender"""
-        return self._connected and self._socket is not None
+        """Check if client is connected to Blender (thread-safe)"""
+        with self._lock:
+            return self._connected and self._socket is not None
 
     def connect(self) -> bool:
         """
@@ -112,7 +115,10 @@ class BlenderSocketClient:
 
     def send_command(self, command: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Send a command to Blender and wait for response.
+        Send a command to Blender and wait for response (thread-safe).
+
+        Uses RLock to hold lock across check-and-reconnect sequence,
+        preventing race conditions between multiple threads.
 
         Args:
             command: Command dictionary to send
@@ -120,10 +126,26 @@ class BlenderSocketClient:
         Returns:
             Response dictionary, or None if failed
         """
-        if not self.is_connected:
-            if not self.connect():
-                return None
+        with self._lock:
+            # Check connection status - reconnect if needed (all under same lock)
+            if not (self._connected and self._socket is not None):
+                # Try to connect (RLock allows re-acquiring by same thread)
+                if not self.connect():
+                    return None
 
+            # Now send the command
+            return self._send_command_unlocked(command)
+
+    def _send_command_unlocked(self, command: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Internal method to send command - must be called with lock held.
+
+        Args:
+            command: Command dictionary to send
+
+        Returns:
+            Response dictionary, or None if failed
+        """
         try:
             # Send command as JSON with newline delimiter
             message = json.dumps(command) + '\n'
@@ -154,9 +176,23 @@ class BlenderSocketClient:
 
         except socket.timeout:
             logger.warning(f"Response timeout after {self.config.recv_timeout}s")
+            # Don't cleanup on timeout - connection may still be valid
             return None
         except json.JSONDecodeError as e:
             logger.warning(f"Invalid JSON response: {e}")
+            # Don't cleanup on parse error - connection may still be valid
+            return None
+        except BrokenPipeError:
+            logger.warning("Broken pipe - connection lost")
+            self._cleanup_socket()
+            return None
+        except ConnectionResetError:
+            logger.warning("Connection reset by server")
+            self._cleanup_socket()
+            return None
+        except OSError as e:
+            logger.warning(f"Socket error: {e}")
+            self._cleanup_socket()
             return None
         except Exception as e:
             logger.warning(f"Send error: {e}")

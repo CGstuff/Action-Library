@@ -17,7 +17,14 @@ class Config:
 
     # Application metadata
     APP_NAME: Final[str] = "Action Library"
-    APP_VERSION: Final[str] = "1.3.2"
+    
+    # Try to read version from version.txt (injected by build system)
+    _version_file = Path(__file__).parent / "version.txt"
+    if _version_file.exists():
+        APP_VERSION: Final[str] = _version_file.read_text().strip()
+    else:
+        APP_VERSION: Final[str] = "1.3.2"  # Fallback/Dev version
+
     APP_AUTHOR: Final[str] = "CGstuff"
 
     # Paths

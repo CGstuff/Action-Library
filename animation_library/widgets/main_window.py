@@ -65,6 +65,9 @@ class MainWindow(QMainWindow):
         +------------------------------------------+
     """
 
+    # Max number of watched directories to prevent resource exhaustion
+    MAX_WATCHED_DIRECTORIES = 500
+
     def __init__(self, parent=None, db_service=None, blender_service=None,
                  archive_service=None, trash_service=None, event_bus=None,
                  thumbnail_loader=None, theme_manager=None):
@@ -92,6 +95,9 @@ class MainWindow(QMainWindow):
         self._proxy_model = AnimationFilterProxyModel()
         self._proxy_model.setSourceModel(self._animation_model)
 
+        # Track signal connections for cleanup
+        self._signal_connections = []
+
         # Setup window
         self._setup_window()
         self._create_widgets()
@@ -101,6 +107,7 @@ class MainWindow(QMainWindow):
         self._load_settings()
         self._load_animations()
         self._setup_queue_watcher()
+        self._setup_library_watcher()
 
     def _setup_window(self):
         """Configure window properties"""
@@ -222,88 +229,104 @@ class MainWindow(QMainWindow):
         animations = self._db_service.get_all_animations()
         self._animation_model.set_animations(animations)
 
+    def _track_connection(self, signal, slot):
+        """Connect signal to slot and track for cleanup on close"""
+        signal.connect(slot)
+        self._signal_connections.append((signal, slot))
+
+    def _disconnect_all_signals(self):
+        """Disconnect all tracked signal connections"""
+        for signal, slot in self._signal_connections:
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                # Signal already disconnected or object deleted
+                pass
+        self._signal_connections.clear()
+
     def _connect_signals(self):
         """Connect signals and slots"""
 
         # Folder tree selection -> filter animations
-        self._folder_tree.folder_selected.connect(self._on_folder_selected)
+        self._track_connection(self._folder_tree.folder_selected, self._on_folder_selected)
 
         # Folder tree archive/trash actions
-        self._folder_tree.empty_archive_requested.connect(self._on_empty_archive)
-        self._folder_tree.empty_trash_requested.connect(self._on_empty_trash)
+        self._track_connection(self._folder_tree.empty_archive_requested, self._on_empty_archive)
+        self._track_connection(self._folder_tree.empty_trash_requested, self._on_empty_trash)
 
         # Animation view selection -> update metadata panel
-        self._animation_view.selectionModel().selectionChanged.connect(
+        self._track_connection(
+            self._animation_view.selectionModel().selectionChanged,
             self._on_animation_selection_changed
         )
 
         # Animation view selection -> update event bus (for bulk toolbar)
-        self._animation_view.selectionModel().selectionChanged.connect(
+        self._track_connection(
+            self._animation_view.selectionModel().selectionChanged,
             self._animation_view._on_selection_changed
         )
 
         # Animation view double-click -> apply animation
-        self._animation_view.animation_double_clicked.connect(self._on_animation_double_clicked)
+        self._track_connection(self._animation_view.animation_double_clicked, self._on_animation_double_clicked)
 
         # Animation view context menu -> show options
-        self._animation_view.animation_context_menu.connect(self._on_animation_context_menu)
+        self._track_connection(self._animation_view.animation_context_menu, self._on_animation_context_menu)
 
         # Header toolbar search -> filter animations
-        self._header_toolbar.search_text_changed.connect(self._on_search_text_changed)
+        self._track_connection(self._header_toolbar.search_text_changed, self._on_search_text_changed)
 
         # Header toolbar view mode -> update view
-        self._header_toolbar.view_mode_changed.connect(self._animation_view.set_view_mode)
+        self._track_connection(self._header_toolbar.view_mode_changed, self._animation_view.set_view_mode)
 
         # Header toolbar card size -> update view
-        self._header_toolbar.card_size_changed.connect(self._animation_view.set_card_size)
+        self._track_connection(self._header_toolbar.card_size_changed, self._animation_view.set_card_size)
 
         # Header toolbar edit mode -> show/hide bulk toolbar
-        self._header_toolbar.edit_mode_changed.connect(self._on_edit_mode_changed)
+        self._track_connection(self._header_toolbar.edit_mode_changed, self._on_edit_mode_changed)
 
         # Header toolbar archive -> archive selected animations (soft delete)
-        self._header_toolbar.delete_clicked.connect(self._on_archive_clicked)
+        self._track_connection(self._header_toolbar.delete_clicked, self._on_archive_clicked)
 
         # Apply panel -> apply animation with options
-        self._apply_panel.apply_clicked.connect(self._on_apply_with_options)
+        self._track_connection(self._apply_panel.apply_clicked, self._on_apply_with_options)
 
         # Metadata panel notes changed -> refresh notes badges
-        self._metadata_panel.notes_changed.connect(self._on_notes_changed)
+        self._track_connection(self._metadata_panel.notes_changed, self._on_notes_changed)
 
         # Header toolbar refresh -> sync library with database
-        self._header_toolbar.refresh_library_clicked.connect(self._on_refresh_library)
+        self._track_connection(self._header_toolbar.refresh_library_clicked, self._on_refresh_library)
 
         # Header toolbar new folder -> create folder dialog
-        self._header_toolbar.new_folder_clicked.connect(self._on_create_folder)
+        self._track_connection(self._header_toolbar.new_folder_clicked, self._on_create_folder)
 
         # Header toolbar settings -> show settings dialog
-        self._header_toolbar.settings_clicked.connect(self._show_settings)
+        self._track_connection(self._header_toolbar.settings_clicked, self._show_settings)
 
         # Header toolbar help -> show keyboard shortcuts overlay
-        self._header_toolbar.help_clicked.connect(self._help_overlay.toggle)
+        self._track_connection(self._header_toolbar.help_clicked, self._help_overlay.toggle)
 
         # Header toolbar filters -> filter animations
-        self._header_toolbar.rig_type_filter_changed.connect(
-            lambda rig_types: self._proxy_model.set_rig_type_filter(set(rig_types))
-        )
-        self._header_toolbar.tags_filter_changed.connect(
-            lambda tags: self._proxy_model.set_tag_filter(set(tags))
-        )
-        self._header_toolbar.sort_changed.connect(self._on_sort_changed)
+        # Store lambda references to enable proper disconnection
+        self._rig_type_filter_slot = lambda rig_types: self._proxy_model.set_rig_type_filter(set(rig_types))
+        self._tags_filter_slot = lambda tags: self._proxy_model.set_tag_filter(set(tags))
+        self._track_connection(self._header_toolbar.rig_type_filter_changed, self._rig_type_filter_slot)
+        self._track_connection(self._header_toolbar.tags_filter_changed, self._tags_filter_slot)
+        self._track_connection(self._header_toolbar.sort_changed, self._on_sort_changed)
 
         # Bulk edit toolbar signals
-        self._bulk_edit_toolbar.remove_tags_clicked.connect(self._on_remove_tags)
-        self._bulk_edit_toolbar.move_to_folder_clicked.connect(self._on_move_to_folder)
-        self._bulk_edit_toolbar.gradient_preset_selected.connect(self._on_gradient_preset_selected)
-        self._bulk_edit_toolbar.custom_gradient_clicked.connect(self._on_custom_gradient_clicked)
-        self._bulk_edit_toolbar.restore_clicked.connect(self._on_restore_clicked)
+        self._track_connection(self._bulk_edit_toolbar.remove_tags_clicked, self._on_remove_tags)
+        self._track_connection(self._bulk_edit_toolbar.move_to_folder_clicked, self._on_move_to_folder)
+        self._track_connection(self._bulk_edit_toolbar.gradient_preset_selected, self._on_gradient_preset_selected)
+        self._track_connection(self._bulk_edit_toolbar.custom_gradient_clicked, self._on_custom_gradient_clicked)
+        self._track_connection(self._bulk_edit_toolbar.restore_clicked, self._on_restore_clicked)
 
         # Event bus signals
-        self._event_bus.loading_started.connect(self._on_loading_started)
-        self._event_bus.loading_finished.connect(self._on_loading_finished)
-        self._event_bus.error_occurred.connect(self._on_error)
-        self._event_bus.folder_changed.connect(self._on_folder_changed)
-        self._event_bus.settings_changed.connect(self._on_settings_changed)
-        self._event_bus.animation_updated.connect(self._on_animation_updated)
+        self._track_connection(self._event_bus.loading_started, self._on_loading_started)
+        self._track_connection(self._event_bus.loading_finished, self._on_loading_finished)
+        self._track_connection(self._event_bus.error_occurred, self._on_error)
+        self._track_connection(self._event_bus.folder_changed, self._on_folder_changed)
+        self._track_connection(self._event_bus.settings_changed, self._on_settings_changed)
+        self._track_connection(self._event_bus.animation_updated, self._on_animation_updated)
 
     def _load_settings(self):
         """Load window and splitter settings"""
@@ -393,6 +416,80 @@ class MainWindow(QMainWindow):
 
             # Also start periodic check (backup in case watcher misses events)
             self._queue_check_timer.start(Config.QUEUE_CHECK_INTERVAL_MS)
+
+    def _setup_library_watcher(self):
+        """Setup file system watcher for library folders to auto-refresh on new captures"""
+        self._library_watcher = QFileSystemWatcher(self)
+        self._library_refresh_timer = QTimer(self)
+        self._library_refresh_timer.setSingleShot(True)
+        self._library_refresh_timer.timeout.connect(self._on_library_auto_refresh)
+
+        # Get library path
+        library_path = Config.load_library_path()
+        if library_path:
+            library_dir = Path(library_path) / "library"
+
+            # Watch actions and poses folders
+            actions_dir = library_dir / "actions"
+            poses_dir = library_dir / "poses"
+
+            watch_count = 0
+            for folder in [actions_dir, poses_dir]:
+                if folder.exists() and watch_count < self.MAX_WATCHED_DIRECTORIES:
+                    self._library_watcher.addPath(str(folder))
+                    watch_count += 1
+                    # Also watch immediate subfolders (animation folders)
+                    for subfolder in folder.iterdir():
+                        if watch_count >= self.MAX_WATCHED_DIRECTORIES:
+                            break
+                        if subfolder.is_dir():
+                            self._library_watcher.addPath(str(subfolder))
+                            watch_count += 1
+
+            self._library_watcher.directoryChanged.connect(self._on_library_folder_changed)
+
+    def _on_library_folder_changed(self, path: str):
+        """Handle changes in library folders - debounce and auto-refresh"""
+        # Debounce: wait 500ms after last change before refreshing
+        # This prevents multiple refreshes when Blender writes multiple files
+        self._library_refresh_timer.start(500)
+
+        # Check if we've reached the max watched directories limit
+        current_count = len(self._library_watcher.directories())
+        if current_count >= self.MAX_WATCHED_DIRECTORIES:
+            # At limit - don't add more watchers (auto-refresh timer will still work)
+            return
+
+        # Also add the changed path to watcher if it's a new directory
+        path_obj = Path(path)
+        if path_obj.is_dir() and path not in self._library_watcher.directories():
+            if current_count < self.MAX_WATCHED_DIRECTORIES:
+                self._library_watcher.addPath(path)
+                current_count += 1
+
+            # Watch new subfolders too (with limit check)
+            for subfolder in path_obj.iterdir():
+                if current_count >= self.MAX_WATCHED_DIRECTORIES:
+                    break
+                if subfolder.is_dir() and str(subfolder) not in self._library_watcher.directories():
+                    self._library_watcher.addPath(str(subfolder))
+                    current_count += 1
+
+    def _on_library_auto_refresh(self):
+        """Auto-refresh library after file changes detected"""
+        # Sync library with database (lightweight - only imports new/changed)
+        total_found, newly_imported = self._db_service.sync_library()
+
+        if newly_imported > 0:
+            # Reload animations from database
+            animations = self._db_service.get_all_animations()
+            self._animation_model.set_animations(animations)
+
+            # Refresh filter dropdowns
+            self._header_toolbar.refresh_filters()
+
+            # Update status
+            self._status_bar.showMessage(f"Auto-imported {newly_imported} new animation(s)")
 
     def _on_queue_directory_changed(self, path: str):
         """Handle changes in queue directory"""
@@ -899,6 +996,17 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent):
         """Handle window close"""
+
+        # Stop queue check timer
+        if hasattr(self, '_queue_check_timer') and self._queue_check_timer.isActive():
+            self._queue_check_timer.stop()
+
+        # Stop library refresh timer
+        if hasattr(self, '_library_refresh_timer') and self._library_refresh_timer.isActive():
+            self._library_refresh_timer.stop()
+
+        # Disconnect all tracked signal connections to prevent memory leaks
+        self._disconnect_all_signals()
 
         # Save settings
         self._save_settings()

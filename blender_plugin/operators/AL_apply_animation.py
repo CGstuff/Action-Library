@@ -123,7 +123,8 @@ class ANIMLIB_OT_apply_animation(Operator):
                             try:
                                 with open(potential_json, 'r') as f:
                                     data = json.load(f)
-                                if data.get('id') == self.animation_id:
+                                animation_uuid = data.get('id') or data.get('uuid')
+                                if animation_uuid == self.animation_id:
                                     json_file = potential_json
                                     animation_folder = folder
                                     break
@@ -146,7 +147,8 @@ class ANIMLIB_OT_apply_animation(Operator):
                                         try:
                                             with open(potential_json, 'r') as f:
                                                 data = json.load(f)
-                                            if data.get('id') == self.animation_id:
+                                            animation_uuid = data.get('id') or data.get('uuid')
+                                            if animation_uuid == self.animation_id:
                                                 json_file = potential_json
                                                 animation_folder = version_folder
                                                 break

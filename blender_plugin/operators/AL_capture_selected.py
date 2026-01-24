@@ -140,6 +140,12 @@ class ANIMLIB_OT_capture_selected(Operator):
     _timer = None
     _state = None
     _context_data = None
+    _start_time = None
+    _last_activity_time = None
+
+    # Timeout configuration (in seconds)
+    MODAL_TIMEOUT = 300  # 5 minutes total timeout
+    STATE_TIMEOUT = 60   # 1 minute per state (watchdog)
 
     @classmethod
     def poll(cls, context):
@@ -198,6 +204,8 @@ class ANIMLIB_OT_capture_selected(Operator):
 
     def _start_modal(self, context):
         """Start the modal execution"""
+        import time
+
         wm = context.window_manager
 
         # Set capturing flag
@@ -206,6 +214,10 @@ class ANIMLIB_OT_capture_selected(Operator):
 
         # Initialize state machine
         self._state = 'DETERMINE_NAME'
+
+        # Initialize timeout tracking
+        self._start_time = time.time()
+        self._last_activity_time = time.time()
 
         # Add timer for modal updates
         self._timer = wm.event_timer_add(0.1, window=context.window)
@@ -223,6 +235,25 @@ class ANIMLIB_OT_capture_selected(Operator):
         """Handle modal execution"""
         if event.type != 'TIMER':
             return {'PASS_THROUGH'}
+
+        import time
+
+        # Timeout watchdog - prevent indefinite hangs
+        current_time = time.time()
+
+        # Check total operation timeout
+        if self._start_time and (current_time - self._start_time) > self.MODAL_TIMEOUT:
+            logger.error(f"Capture selected timed out after {self.MODAL_TIMEOUT}s")
+            self.report({'ERROR'}, "Capture timed out - operation took too long")
+            self.cleanup(context)
+            return {'CANCELLED'}
+
+        # Check state timeout (watchdog for stuck states)
+        if self._last_activity_time and (current_time - self._last_activity_time) > self.STATE_TIMEOUT:
+            logger.error(f"Capture selected stuck in state '{self._state}' for {self.STATE_TIMEOUT}s")
+            self.report({'ERROR'}, f"Capture stuck in '{self._state}' - cancelling")
+            self.cleanup(context)
+            return {'CANCELLED'}
 
         wm = self._context_data['wm']
         scene = self._context_data['scene']
@@ -268,6 +299,7 @@ class ANIMLIB_OT_capture_selected(Operator):
                     logger.info(f"Simple naming: {animation_name}")
 
                 self._state = 'CHECK_COLLISION'
+                self._last_activity_time = time.time()  # Reset watchdog
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'CHECK_COLLISION':
@@ -294,6 +326,7 @@ class ANIMLIB_OT_capture_selected(Operator):
                         return {'CANCELLED'}
 
                 self._state = 'CREATE_ACTION'
+                self._last_activity_time = time.time()  # Reset watchdog
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'CREATE_ACTION':
@@ -314,6 +347,7 @@ class ANIMLIB_OT_capture_selected(Operator):
 
                 self._context_data['new_action'] = new_action
                 self._state = 'DETECT_RIG'
+                self._last_activity_time = time.time()  # Reset watchdog
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'DETECT_RIG':
@@ -324,14 +358,20 @@ class ANIMLIB_OT_capture_selected(Operator):
                     # Auto-detect rig type
                     detected_rig_type, confidence = animation_queue_client.detect_rig_type(armature)
                     rig_type = detected_rig_type
+                    if rig_type == 'unknown':
+                        self.report({'WARNING'}, f"Could not detect rig type (confidence: {confidence:.2f})")
                 else:
-                    # Use manual rig type from panel
-                    rig_type = scene.animlib_rig_type
+                    # Use manual rig type from panel - strip whitespace and default to 'custom'
+                    rig_type = scene.animlib_rig_type.strip()
+                    if not rig_type:
+                        rig_type = 'custom'
+                    self.report({'INFO'}, f"Using custom rig type: {rig_type}")
 
                 self._context_data['rig_type'] = rig_type
                 logger.info(f"Rig type: {rig_type}")
 
                 self._state = 'SAVE_ACTION'
+                self._last_activity_time = time.time()  # Reset watchdog
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'SAVE_ACTION':
@@ -363,6 +403,7 @@ class ANIMLIB_OT_capture_selected(Operator):
 
                 self._context_data['saved_metadata'] = saved_metadata
                 self._state = 'CLEANUP'
+                self._last_activity_time = time.time()  # Reset watchdog
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'CLEANUP':
@@ -418,6 +459,8 @@ class ANIMLIB_OT_capture_selected(Operator):
 
         self._state = None
         self._context_data = None
+        self._start_time = None
+        self._last_activity_time = None
 
     def cancel(self, context):
         """Handle cancellation"""
@@ -559,6 +602,7 @@ class ANIMLIB_OT_capture_selected(Operator):
             # Create metadata
             metadata = {
                 'id': animation_id,
+                'app_version': '1.3.0',  # Prevents legacy detection by desktop app scanner
                 'name': animation_name,
                 'description': scene.animlib_description,
                 'author': scene.animlib_author,
@@ -724,8 +768,8 @@ class ANIMLIB_OT_capture_selected(Operator):
                         for png_file in png_files:
                             try:
                                 os.remove(png_file)
-                            except:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"Could not remove temp PNG {png_file}: {e}")
 
             finally:
                 self.restore_viewport_settings(viewport_settings)

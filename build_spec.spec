@@ -45,6 +45,11 @@ datas = [
     (str(PROJECT_ROOT / 'animation_library' / 'services' / 'utils' / 'install_addon.py'), 'animation_library/services/utils'),
 ]
 
+# Version file (injected by build process)
+version_file = PROJECT_ROOT / 'animation_library' / 'version.txt'
+if version_file.exists():
+    datas.append((str(version_file), 'animation_library'))
+
 # Include ffmpeg binary if present (for video preview generation)
 ffmpeg_path = PROJECT_ROOT / 'blender_plugin' / 'bin' / 'ffmpeg.exe'
 if ffmpeg_path.exists():

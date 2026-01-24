@@ -46,6 +46,17 @@ class CompareVideoColumn(QWidget):
         self._total_frames: int = 0
         self._current_frame: int = 0
         self._notes: List[Dict] = []
+        self._annotation_frames: List[int] = []  # Frames with annotations
+        self._annotations_hidden: bool = False  # Hide annotations flag
+        self._hold_enabled: bool = False  # Hold mode flag
+        self._ghost_enabled: bool = False  # Ghost mode flag
+        self._ghost_settings: Dict = {
+            'before_frames': 2,
+            'after_frames': 2,
+            'before_color': QColor("#FF5555"),
+            'after_color': QColor("#55FF55"),
+            'sketches_only': True
+        }
 
         # Drawover storage for loading annotations
         self._drawover_storage = DrawoverStorage()
@@ -98,9 +109,9 @@ class CompareVideoColumn(QWidget):
         self._version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         left_layout.addWidget(self._version_label)
 
-        # Frame ruler timeline
+        # Frame ruler timeline (compact height)
         self._timeline = FrameRulerTimeline()
-        self._timeline.setFixedHeight(40)
+        self._timeline.setFixedHeight(50)
         left_layout.addWidget(self._timeline)
 
         main_layout.addWidget(left_widget, 1)
@@ -171,8 +182,23 @@ class CompareVideoColumn(QWidget):
         # Update notes panel
         self._notes_panel.set_notes(self._notes)
 
+        # Load annotation frames for this version
+        self._load_annotation_frames()
+
         # Position canvas after video loads
         QTimer.singleShot(100, self._position_canvas)
+
+    def _load_annotation_frames(self):
+        """Load frames with annotations for timeline display."""
+        if not self._version_uuid or not self._version_label_text:
+            self._annotation_frames = []
+            self._timeline.set_annotation_frames([])
+            return
+
+        self._annotation_frames = self._drawover_storage.list_frames_with_drawovers(
+            self._version_uuid, self._version_label_text
+        )
+        self._timeline.set_annotation_frames(self._annotation_frames)
 
     def _position_canvas(self):
         """Position drawover canvas over video content."""
@@ -207,11 +233,53 @@ class CompareVideoColumn(QWidget):
             self._load_drawover_for_frame(frame)
 
     def _load_drawover_for_frame(self, frame: int):
-        """Load and display annotations for a frame."""
+        """Load and display annotations for a frame with hold/ghost support."""
         if not self._version_uuid or not self._version_label_text:
             self._canvas.hide()
             return
 
+        # If annotations are hidden, don't show canvas
+        if self._annotations_hidden:
+            self._canvas.hide()
+            return
+
+        # Position canvas first
+        self._position_canvas()
+
+        # Clear ghost strokes
+        self._canvas.clear_ghost_strokes()
+
+        # Get strokes for current frame (with hold mode support)
+        strokes, canvas_size, from_hold = self._get_strokes_for_frame(frame)
+
+        if strokes:
+            # Import strokes
+            source_size = tuple(canvas_size) if canvas_size else None
+            self._canvas.import_strokes(strokes, source_size)
+
+            # Add ghost strokes if enabled
+            if self._ghost_enabled:
+                self._add_ghost_strokes(frame)
+
+            self._canvas.show()
+        else:
+            self._canvas.clear()
+            # Add ghost strokes even if no current strokes
+            if self._ghost_enabled:
+                self._add_ghost_strokes(frame)
+                if self._canvas.has_ghost_strokes():
+                    self._canvas.show()
+                else:
+                    self._canvas.hide()
+            else:
+                self._canvas.hide()
+
+    def _get_strokes_for_frame(self, frame: int):
+        """Get strokes for a frame with hold mode support.
+
+        Returns:
+            (strokes, canvas_size, from_hold) tuple
+        """
         # Load from storage
         data = self._drawover_storage.load_drawover(
             self._version_uuid,
@@ -220,19 +288,73 @@ class CompareVideoColumn(QWidget):
         )
 
         if data and data.get('strokes'):
-            strokes = data.get('strokes', [])
-            canvas_size = data.get('canvas_size')
+            return data.get('strokes', []), data.get('canvas_size'), False
 
-            # Position canvas first
-            self._position_canvas()
+        # If hold enabled and no strokes, search backwards
+        if self._hold_enabled and self._annotation_frames:
+            prev_frames = [f for f in self._annotation_frames if f < frame]
+            if prev_frames:
+                held_frame = max(prev_frames)
+                data = self._drawover_storage.load_drawover(
+                    self._version_uuid,
+                    self._version_label_text,
+                    held_frame
+                )
+                if data and data.get('strokes'):
+                    return data.get('strokes', []), data.get('canvas_size'), True
 
-            # Import strokes
-            source_size = tuple(canvas_size) if canvas_size else None
-            self._canvas.import_strokes(strokes, source_size)
-            self._canvas.show()
+        return [], None, False
+
+    def _add_ghost_strokes(self, frame: int):
+        """Add ghost/onion skin strokes from neighboring frames."""
+        before_count = self._ghost_settings.get('before_frames', 2)
+        after_count = self._ghost_settings.get('after_frames', 2)
+        before_color = self._ghost_settings.get('before_color', QColor("#FF5555"))
+        after_color = self._ghost_settings.get('after_color', QColor("#55FF55"))
+        sketches_only = self._ghost_settings.get('sketches_only', True)
+
+        if sketches_only:
+            if not self._annotation_frames:
+                return
+            before_frames = sorted([f for f in self._annotation_frames if f < frame], reverse=True)
+            before_frames = before_frames[:before_count]
+            after_frames = sorted([f for f in self._annotation_frames if f > frame])
+            after_frames = after_frames[:after_count]
         else:
-            self._canvas.clear()
-            self._canvas.hide()
+            before_frames = [frame - i for i in range(1, before_count + 1) if frame - i >= 0]
+            after_frames = [frame + i for i in range(1, after_count + 1) if frame + i < self._total_frames]
+
+        # Add ghost strokes for "before" frames
+        for idx, ghost_frame in enumerate(before_frames):
+            data = self._drawover_storage.load_drawover(
+                self._version_uuid,
+                self._version_label_text,
+                ghost_frame
+            )
+            if data and data.get('strokes'):
+                distance = idx + 1
+                opacity = 0.5 / distance
+                canvas_size = data.get('canvas_size')
+                self._canvas.add_ghost_strokes(
+                    data['strokes'], before_color, opacity,
+                    tuple(canvas_size) if canvas_size else None
+                )
+
+        # Add ghost strokes for "after" frames
+        for idx, ghost_frame in enumerate(after_frames):
+            data = self._drawover_storage.load_drawover(
+                self._version_uuid,
+                self._version_label_text,
+                ghost_frame
+            )
+            if data and data.get('strokes'):
+                distance = idx + 1
+                opacity = 0.5 / distance
+                canvas_size = data.get('canvas_size')
+                self._canvas.add_ghost_strokes(
+                    data['strokes'], after_color, opacity,
+                    tuple(canvas_size) if canvas_size else None
+                )
 
     def _on_timeline_clicked(self, frame: int):
         """Handle timeline click - emit for sync."""
@@ -279,6 +401,39 @@ class CompareVideoColumn(QWidget):
     def fps(self) -> float:
         """Get video FPS."""
         return self._video.fps if self._video else 24
+
+    @property
+    def annotation_frames(self) -> List[int]:
+        """Get list of frames with annotations."""
+        return self._annotation_frames
+
+    def set_canvas_visible(self, visible: bool):
+        """Show or hide the annotation canvas."""
+        self._annotations_hidden = not visible
+        if visible:
+            # Reload annotations for current frame
+            self._load_drawover_for_frame(self._current_frame)
+        else:
+            self._canvas.hide()
+
+    def set_hold_enabled(self, enabled: bool):
+        """Enable or disable hold mode."""
+        self._hold_enabled = enabled
+        # Reload annotations to apply hold mode
+        self._load_drawover_for_frame(self._current_frame)
+
+    def set_ghost_enabled(self, enabled: bool):
+        """Enable or disable ghost mode."""
+        self._ghost_enabled = enabled
+        # Reload annotations to apply ghost mode
+        self._load_drawover_for_frame(self._current_frame)
+
+    def set_ghost_settings(self, settings: Dict):
+        """Set ghost mode settings."""
+        self._ghost_settings = settings
+        if self._ghost_enabled:
+            # Reload annotations to apply new settings
+            self._load_drawover_for_frame(self._current_frame)
 
     def resizeEvent(self, event):
         """Handle resize - reposition canvas."""

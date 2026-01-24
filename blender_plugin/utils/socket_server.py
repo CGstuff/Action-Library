@@ -65,6 +65,11 @@ _keep_running = False
 _is_initialized = False
 _timer_tick_count = 0  # Debug counter
 
+# Thread safety locks for shared data structures
+_response_queues_lock = threading.Lock()
+_command_handlers_lock = threading.Lock()
+_client_threads_lock = threading.Lock()
+
 # Command handlers registry
 _command_handlers: Dict[str, Callable] = {}
 
@@ -77,7 +82,8 @@ def register_command_handler(command_type: str, handler: Callable):
         command_type: The 'type' field value in incoming messages
         handler: Function that takes (command_data, client_id) and returns response dict
     """
-    _command_handlers[command_type] = handler
+    with _command_handlers_lock:
+        _command_handlers[command_type] = handler
     logger.debug(f"Registered command handler for '{command_type}'")
 
 
@@ -115,7 +121,8 @@ def get_connected_clients_count() -> int:
     if not is_server_running():
         return 0
     # Count active client threads
-    return sum(1 for t in _client_threads if t.is_alive())
+    with _client_threads_lock:
+        return sum(1 for t in _client_threads if t.is_alive())
 
 
 def start_server(host: Optional[str] = None, port: Optional[int] = None) -> bool:
@@ -211,7 +218,8 @@ def _accept_connections():
             logger.info(f"Client connected: {client_id}")
 
             # Create response queue for this client
-            _response_queues[client_id] = queue.Queue()
+            with _response_queues_lock:
+                _response_queues[client_id] = queue.Queue()
 
             # Handle client in separate thread
             client_thread = threading.Thread(
@@ -221,10 +229,11 @@ def _accept_connections():
                 daemon=False
             )
             client_thread.start()
-            _client_threads.append(client_thread)
 
-            # Clean up finished threads
-            _client_threads = [t for t in _client_threads if t.is_alive()]
+            with _client_threads_lock:
+                _client_threads.append(client_thread)
+                # Clean up finished threads
+                _client_threads[:] = [t for t in _client_threads if t.is_alive()]
 
         except socket.timeout:
             # Timeout is expected - just continue loop
@@ -296,7 +305,8 @@ def _handle_client(client_socket: socket.socket, client_id: str):
             except socket.timeout:
                 # Check for responses to send
                 try:
-                    response_queue = _response_queues.get(client_id)
+                    with _response_queues_lock:
+                        response_queue = _response_queues.get(client_id)
                     if response_queue:
                         while not response_queue.empty():
                             response = response_queue.get_nowait()
@@ -310,8 +320,9 @@ def _handle_client(client_socket: socket.socket, client_id: str):
     finally:
         client_socket.close()
         # Clean up response queue
-        if client_id in _response_queues:
-            del _response_queues[client_id]
+        with _response_queues_lock:
+            if client_id in _response_queues:
+                del _response_queues[client_id]
 
 
 def _send_response(client_socket: socket.socket, response: dict):
@@ -400,7 +411,8 @@ def _execute_command(command: dict, client_id: str) -> dict:
     command_type = command.get('type', 'unknown')
 
     # Check for registered handler
-    handler = _command_handlers.get(command_type)
+    with _command_handlers_lock:
+        handler = _command_handlers.get(command_type)
     if handler:
         try:
             return handler(command, client_id)
@@ -479,13 +491,17 @@ def stop_server():
     _server_thread = None
 
     # Wait for client threads
-    for thread in _client_threads:
+    with _client_threads_lock:
+        threads_to_join = list(_client_threads)
+    for thread in threads_to_join:
         if thread.is_alive():
             thread.join(timeout=1.0)
-    _client_threads.clear()
+    with _client_threads_lock:
+        _client_threads.clear()
 
     # Clear queues
-    _response_queues.clear()
+    with _response_queues_lock:
+        _response_queues.clear()
     while not _command_queue.empty():
         try:
             _command_queue.get_nowait()
@@ -503,7 +519,8 @@ def send_to_client(client_id: str, message: dict):
         client_id: The client identifier (host:port)
         message: Dict to send as JSON
     """
-    response_queue = _response_queues.get(client_id)
+    with _response_queues_lock:
+        response_queue = _response_queues.get(client_id)
     if response_queue:
         response_queue.put(message)
     else:

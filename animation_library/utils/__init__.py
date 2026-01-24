@@ -35,6 +35,9 @@ from .file_utils import (
     get_unique_path,
 )
 
+# Coordinate utilities
+from .coordinate_utils import CoordinateConverter
+
 __all__ = [
     'composite_image_on_gradient_colors',
     'create_vertical_gradient',
@@ -74,4 +77,6 @@ __all__ = [
     'safe_remove_tree',
     'ensure_parent_exists',
     'get_unique_path',
+    # Coordinate utilities
+    'CoordinateConverter',
 ]

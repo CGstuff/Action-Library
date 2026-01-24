@@ -118,6 +118,8 @@ class ComparisonWidget(QWidget):
         self._play_icon = colorize_white_svg(IconLoader.get("play"), icon_color)
         self._pause_icon = colorize_white_svg(IconLoader.get("pause"), icon_color)
         self._loop_icon = colorize_white_svg(IconLoader.get("loop"), icon_color)
+        self._prev_icon = colorize_white_svg(IconLoader.get("arrow_left"), icon_color)
+        self._next_icon = colorize_white_svg(IconLoader.get("arrow_right"), icon_color)
 
     def _build_ui(self):
         """Build the comparison UI."""
@@ -419,6 +421,7 @@ class ComparisonWidget(QWidget):
                 progress = int((frame / self._total_frames) * 1000)
                 self._progress_slider.setValue(progress)
             self._progress_slider.blockSignals(False)
+
         self._frame_label.setText(f"{frame} / {self._total_frames}")
 
     def _cycle_speed(self):
@@ -453,10 +456,40 @@ class ComparisonWidget(QWidget):
             self._stop_playback()
             self._seek_both(self._current_frame - 1)
 
+    def _get_union_annotation_frames(self) -> list:
+        """Get sorted union of annotation frames from both videos."""
+        frames_a = set(self._column_a.annotation_frames)
+        frames_b = set(self._column_b.annotation_frames)
+        return sorted(frames_a | frames_b)
+
+    def _navigate_to_prev_annotation(self):
+        """Navigate to previous annotated frame (union of both videos)."""
+        union_frames = self._get_union_annotation_frames()
+        if not union_frames:
+            return
+
+        prev_frames = [f for f in union_frames if f < self._current_frame]
+        if prev_frames:
+            self._stop_playback()
+            self._seek_both(max(prev_frames))
+
+    def _navigate_to_next_annotation(self):
+        """Navigate to next annotated frame (union of both videos)."""
+        union_frames = self._get_union_annotation_frames()
+        if not union_frames:
+            return
+
+        next_frames = [f for f in union_frames if f > self._current_frame]
+        if next_frames:
+            self._stop_playback()
+            self._seek_both(min(next_frames))
+
     def keyPressEvent(self, event: QKeyEvent):
         """
         Handle playback keyboard shortcuts.
 
+        A = Previous annotation (union of both videos)
+        D = Next annotation (union of both videos)
         K = pause
         L = forward play
         Left arrow = step back 1 frame
@@ -464,6 +497,18 @@ class ComparisonWidget(QWidget):
         Space = toggle play/pause
         """
         key = event.key()
+
+        # A = Previous annotation
+        if key == Qt.Key.Key_A:
+            self._navigate_to_prev_annotation()
+            event.accept()
+            return
+
+        # D = Next annotation
+        if key == Qt.Key.Key_D:
+            self._navigate_to_next_annotation()
+            event.accept()
+            return
 
         # K = Pause
         if key == Qt.Key.Key_K:
@@ -506,6 +551,48 @@ class ComparisonWidget(QWidget):
         self._total_frames = 0
         self._progress_slider.setValue(0)
         self._frame_label.setText("0 / 0")
+
+    # ==================== Public API for external control ====================
+
+    def navigate_prev_annotation(self):
+        """Public method to navigate to previous annotation."""
+        self._navigate_to_prev_annotation()
+
+    def navigate_next_annotation(self):
+        """Public method to navigate to next annotation."""
+        self._navigate_to_next_annotation()
+
+    def set_annotations_visible(self, visible: bool):
+        """Show or hide annotations on both columns."""
+        if self._column_a:
+            self._column_a.set_canvas_visible(visible)
+        if self._column_b:
+            self._column_b.set_canvas_visible(visible)
+
+    def set_hold_enabled(self, enabled: bool):
+        """Enable or disable hold mode on both columns."""
+        if self._column_a:
+            self._column_a.set_hold_enabled(enabled)
+        if self._column_b:
+            self._column_b.set_hold_enabled(enabled)
+
+    def set_ghost_enabled(self, enabled: bool):
+        """Enable or disable ghost mode on both columns."""
+        if self._column_a:
+            self._column_a.set_ghost_enabled(enabled)
+        if self._column_b:
+            self._column_b.set_ghost_enabled(enabled)
+
+    def set_ghost_settings(self, settings: dict):
+        """Set ghost settings on both columns."""
+        if self._column_a:
+            self._column_a.set_ghost_settings(settings)
+        if self._column_b:
+            self._column_b.set_ghost_settings(settings)
+
+    def get_annotation_frames(self) -> list:
+        """Get union of all annotation frames from both columns."""
+        return self._get_union_annotation_frames()
 
 
 __all__ = ['ComparisonWidget']

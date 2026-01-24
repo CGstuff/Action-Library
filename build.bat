@@ -47,6 +47,18 @@ if exist "dist" (
     echo       Removed: dist/
 )
 
+REM Detect Version
+echo.
+echo [1.5/4] Detecting Version...
+git describe --tags --abbrev=0 > animation_library\version.txt
+set /p APP_VERSION=<animation_library\version.txt
+if "%APP_VERSION%"=="" (
+    echo WARNING: No git tags found. Using default version.
+    if exist animation_library\version.txt del animation_library\version.txt
+) else (
+    echo       Detected version: %APP_VERSION%
+)
+
 REM Run PyInstaller
 echo.
 echo [2/4] Running PyInstaller...
@@ -94,6 +106,12 @@ echo   folder to the new location.
 echo.
 ) > "dist\ActionLibrary\README.txt"
 echo       Created: dist/ActionLibrary/README.txt
+
+REM Cleanup version file
+if exist animation_library\version.txt (
+    del animation_library\version.txt
+    echo       Cleaned up version file.
+)
 
 REM Done
 echo.

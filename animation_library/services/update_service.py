@@ -3,7 +3,6 @@ import logging
 import urllib.request
 import urllib.error
 from typing import Tuple, Optional, Dict, Any
-from packaging import version as pkg_version  # We might need to bundle this or use simple parsing
 
 from ..config import Config
 

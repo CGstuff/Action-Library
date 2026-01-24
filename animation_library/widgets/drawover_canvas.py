@@ -14,94 +14,45 @@ Provides drawing tools for annotating video frames with:
 import math
 import uuid as uuid_lib
 from enum import Enum
-from typing import Optional, List, Dict, Tuple, Any
+from typing import Optional, List, Dict, Tuple
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem,
     QGraphicsPathItem, QGraphicsLineItem, QGraphicsRectItem,
-    QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsPolygonItem,
-    QWidget
+    QGraphicsEllipseItem, QGraphicsTextItem,
+    QGraphicsItemGroup, QWidget
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF, QLineF
+from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF, QEvent
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QPainterPath,
-    QPolygonF, QFont, QCursor, QPixmap, QTransform,
-    QUndoStack, QUndoCommand
+    QFont, QCursor, QUndoStack, QTabletEvent
 )
+
+# Import from extracted modules
+from ..utils.coordinate_utils import CoordinateConverter
+from .drawover.undo_commands import AddStrokeCommand, RemoveStrokeCommand
+from .drawover.stroke_renderer import (
+    add_arrow_head_to_path,
+    render_brush_stroke_to_group,
+    create_item_from_stroke
+)
+from .drawover.stroke_serializer import simplify_points, scale_stroke, uv_stroke_to_screen
+from .drawover.ghost_renderer import GhostRenderer
 
 
 class DrawingTool(Enum):
     """Available drawing tools."""
     NONE = 0      # Passthrough mode
-    PEN = 1       # Freehand drawing
-    LINE = 2      # Straight line
-    ARROW = 3     # Arrow with head
-    RECT = 4      # Rectangle
-    CIRCLE = 5    # Ellipse
-    TEXT = 6      # Text annotation
-    ERASER = 7    # Remove strokes
-    SELECT = 8    # Select/move strokes
+    PEN = 1       # Freehand drawing (thin, fixed-width strokes)
+    BRUSH = 2     # Variable thickness with pressure sensitivity
+    LINE = 3      # Straight line
+    ARROW = 4     # Arrow with head
+    RECT = 5      # Rectangle
+    CIRCLE = 6    # Ellipse
+    TEXT = 7      # Text annotation
+    ERASER = 8    # Remove strokes
 
-
-# ==================== Undo Commands ====================
-
-class AddStrokeCommand(QUndoCommand):
-    """Undo command for adding a stroke."""
-
-    def __init__(self, canvas: 'DrawoverCanvas', item: QGraphicsItem, stroke_data: Dict):
-        super().__init__("Add Stroke")
-        self._canvas = canvas
-        self._item = item
-        self._stroke_data = stroke_data
-
-    def redo(self):
-        if self._item.scene() is None:
-            self._canvas._scene.addItem(self._item)
-
-    def undo(self):
-        if self._item.scene() is not None:
-            self._canvas._scene.removeItem(self._item)
-
-
-class RemoveStrokeCommand(QUndoCommand):
-    """Undo command for removing a stroke."""
-
-    def __init__(self, canvas: 'DrawoverCanvas', item: QGraphicsItem, stroke_data: Dict):
-        super().__init__("Remove Stroke")
-        self._canvas = canvas
-        self._item = item
-        self._stroke_data = stroke_data
-
-    def redo(self):
-        if self._item.scene() is not None:
-            self._canvas._scene.removeItem(self._item)
-
-    def undo(self):
-        if self._item.scene() is None:
-            self._canvas._scene.addItem(self._item)
-
-
-class ClearFrameCommand(QUndoCommand):
-    """Undo command for clearing all strokes."""
-
-    def __init__(self, canvas: 'DrawoverCanvas', items: List[Tuple[QGraphicsItem, Dict]]):
-        super().__init__("Clear Frame")
-        self._canvas = canvas
-        self._items = items  # List of (item, stroke_data) tuples
-
-    def redo(self):
-        for item, _ in self._items:
-            if item.scene() is not None:
-                self._canvas._scene.removeItem(item)
-
-    def undo(self):
-        for item, _ in self._items:
-            if item.scene() is None:
-                self._canvas._scene.addItem(item)
-
-
-# ==================== Canvas ====================
 
 class DrawoverCanvas(QGraphicsView):
     """
@@ -113,6 +64,7 @@ class DrawoverCanvas(QGraphicsView):
     - Stroke-level data tracking
     - Export to JSON format
     - Import from JSON format
+    - Ghost/onion skin rendering for neighboring frames
     """
 
     # Signals
@@ -127,6 +79,7 @@ class DrawoverCanvas(QGraphicsView):
     DEFAULT_BRUSH_SIZE = 3
     MIN_BRUSH_SIZE = 1
     MAX_BRUSH_SIZE = 30
+    GHOST_OPACITY = 0.4
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -135,7 +88,13 @@ class DrawoverCanvas(QGraphicsView):
         self._current_tool = DrawingTool.NONE
         self._current_color = QColor(self.DEFAULT_COLOR)
         self._brush_size = self.DEFAULT_BRUSH_SIZE
+        self._opacity = 1.0
         self._undo_stack = QUndoStack()
+
+        # Pressure sensitivity (for tablet/stylus support)
+        self._current_pressure = 1.0
+        self._tablet_device_down = False
+        self._using_tablet = False
 
         # Drawing state
         self._is_drawing = False
@@ -145,6 +104,10 @@ class DrawoverCanvas(QGraphicsView):
         self._start_pos: Optional[QPointF] = None
         self._current_author = ''
 
+        # Brush tool state (for circle stamping)
+        self._last_brush_point: Optional[QPointF] = None
+        self._last_brush_pressure: float = 1.0
+
         # Stroke tracking
         self._stroke_items: Dict[str, QGraphicsItem] = {}  # stroke_id -> item
         self._item_data: Dict[int, Dict] = {}  # item id -> stroke_data (UV coordinates)
@@ -152,10 +115,9 @@ class DrawoverCanvas(QGraphicsView):
         # Read-only mode (for compare view)
         self._read_only = False
 
-        # Video content rect (for coordinate conversion)
-        # This defines the actual video area within the canvas
-        # Coordinates are stored as normalized UV (0-1) relative to this rect
-        self._video_rect: Optional[QRectF] = None
+        # Use composition for coordinate conversion and ghost rendering
+        self._coord = CoordinateConverter()
+        self._ghost = GhostRenderer(self._scene)
 
         self._setup_view()
 
@@ -171,6 +133,9 @@ class DrawoverCanvas(QGraphicsView):
         self.setStyleSheet("background: transparent; border: none;")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMouseTracking(True)
+
+        # Enable tablet tracking for pressure sensitivity
+        self.setAttribute(Qt.WidgetAttribute.WA_TabletTracking, True)
 
         # Disable scroll wheel zoom
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
@@ -198,6 +163,14 @@ class DrawoverCanvas(QGraphicsView):
         self._brush_size = max(self.MIN_BRUSH_SIZE, min(self.MAX_BRUSH_SIZE, value))
 
     @property
+    def opacity(self) -> float:
+        return self._opacity
+
+    @opacity.setter
+    def opacity(self, value: float):
+        self._opacity = max(0.0, min(1.0, value))
+
+    @property
     def read_only(self) -> bool:
         return self._read_only
 
@@ -214,75 +187,34 @@ class DrawoverCanvas(QGraphicsView):
     # ==================== Video Rect & Coordinate Conversion ====================
 
     def set_video_rect(self, rect: QRectF):
-        """
-        Set the video content rectangle within the canvas.
-
-        All drawing coordinates are normalized relative to this rect.
-        This should be called whenever the video display area changes.
-
-        Args:
-            rect: The video content area in canvas coordinates
-        """
-        self._video_rect = rect
-        # Update scene rect to match video rect for proper coordinate mapping
+        """Set the video content rectangle within the canvas."""
+        self._coord.set_video_rect(rect)
         if rect:
             self._scene.setSceneRect(rect)
 
     def get_video_rect(self) -> Optional[QRectF]:
         """Get the current video content rectangle."""
-        return self._video_rect
+        return self._coord.get_video_rect()
 
     def _get_effective_rect(self) -> QRectF:
         """Get the effective drawing area (video rect or full canvas)."""
-        if self._video_rect and self._video_rect.isValid():
-            return self._video_rect
-        # Fallback to full canvas
-        return QRectF(0, 0, self.width(), self.height())
+        return self._coord.get_effective_rect(self.width(), self.height())
 
     def _screen_to_uv(self, screen_pos: QPointF) -> List[float]:
-        """
-        Convert screen coordinates to normalized UV (0-1) coordinates.
-
-        Args:
-            screen_pos: Position in screen/scene coordinates
-
-        Returns:
-            [u, v] where u and v are in range 0-1
-        """
-        rect = self._get_effective_rect()
-        if rect.width() <= 0 or rect.height() <= 0:
-            return [0.0, 0.0]
-
-        u = (screen_pos.x() - rect.x()) / rect.width()
-        v = (screen_pos.y() - rect.y()) / rect.height()
-        return [u, v]
+        """Convert screen coordinates to normalized UV (0-1) coordinates."""
+        return self._coord.screen_to_uv(screen_pos, self.width(), self.height())
 
     def _uv_to_screen(self, uv: List[float]) -> QPointF:
-        """
-        Convert normalized UV (0-1) coordinates to screen coordinates.
-
-        Args:
-            uv: [u, v] where u and v are in range 0-1
-
-        Returns:
-            Position in screen/scene coordinates
-        """
-        rect = self._get_effective_rect()
-        x = rect.x() + uv[0] * rect.width()
-        y = rect.y() + uv[1] * rect.height()
-        return QPointF(x, y)
+        """Convert normalized UV (0-1) coordinates to screen coordinates."""
+        return self._coord.uv_to_screen(uv, self.width(), self.height())
 
     def _is_inside_video_rect(self, pos: QPointF) -> bool:
         """Check if position is inside the video content area."""
-        rect = self._get_effective_rect()
-        return rect.contains(pos)
+        return self._coord.is_inside_rect(pos, self.width(), self.height())
 
     def _clamp_to_video_rect(self, pos: QPointF) -> QPointF:
         """Clamp position to video content area boundaries."""
-        rect = self._get_effective_rect()
-        x = max(rect.left(), min(rect.right(), pos.x()))
-        y = max(rect.top(), min(rect.bottom(), pos.y()))
-        return QPointF(x, y)
+        return self._coord.clamp_to_rect(pos, self.width(), self.height())
 
     # ==================== Tool Management ====================
 
@@ -291,11 +223,14 @@ class DrawoverCanvas(QGraphicsView):
         if self._read_only and tool != DrawingTool.NONE:
             return
 
+        # Skip if tool hasn't changed (avoids unnecessary focus grab)
+        if tool == self._current_tool:
+            return
+
         self._current_tool = tool
         self.setCursor(self._get_tool_cursor(tool))
 
         if tool == DrawingTool.NONE:
-            # Passthrough mode - let events go to parent
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         else:
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
@@ -305,38 +240,89 @@ class DrawoverCanvas(QGraphicsView):
         """Get cursor for tool."""
         if tool == DrawingTool.NONE:
             return QCursor(Qt.CursorShape.ArrowCursor)
-        elif tool == DrawingTool.PEN:
-            return QCursor(Qt.CursorShape.CrossCursor)
-        elif tool == DrawingTool.LINE:
-            return QCursor(Qt.CursorShape.CrossCursor)
-        elif tool == DrawingTool.ARROW:
-            return QCursor(Qt.CursorShape.CrossCursor)
-        elif tool == DrawingTool.RECT:
-            return QCursor(Qt.CursorShape.CrossCursor)
-        elif tool == DrawingTool.CIRCLE:
+        elif tool in (DrawingTool.PEN, DrawingTool.BRUSH, DrawingTool.LINE,
+                      DrawingTool.ARROW, DrawingTool.RECT, DrawingTool.CIRCLE):
             return QCursor(Qt.CursorShape.CrossCursor)
         elif tool == DrawingTool.TEXT:
             return QCursor(Qt.CursorShape.IBeamCursor)
         elif tool == DrawingTool.ERASER:
             return QCursor(Qt.CursorShape.PointingHandCursor)
-        elif tool == DrawingTool.SELECT:
-            return QCursor(Qt.CursorShape.ArrowCursor)
         return QCursor(Qt.CursorShape.ArrowCursor)
 
     def set_author(self, author: str):
         """Set current author for new strokes."""
         self._current_author = author
 
+    # ==================== Event Interception (for Tablet Support) ====================
+
+    def event(self, event):
+        """Intercept events at QEvent level to properly handle tablet input."""
+        event_type = event.type()
+
+        if event_type in (QEvent.Type.TabletPress, QEvent.Type.TabletMove,
+                          QEvent.Type.TabletRelease, QEvent.Type.TabletEnterProximity,
+                          QEvent.Type.TabletLeaveProximity):
+            self._handle_tablet_event(event)
+            return True
+
+        return super().event(event)
+
+    # ==================== Tablet Events (Pressure Sensitivity) ====================
+
+    def _handle_tablet_event(self, event: QTabletEvent):
+        """Handle tablet/stylus input with pressure sensitivity."""
+        event_type = event.type()
+
+        if event_type == QEvent.Type.TabletEnterProximity:
+            self._using_tablet = True
+            return
+        elif event_type == QEvent.Type.TabletLeaveProximity:
+            self._using_tablet = False
+            self._tablet_device_down = False
+            return
+
+        self._current_pressure = event.pressure()
+
+        local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
+        pos = self.mapToScene(local_pos)
+
+        if event_type == QEvent.Type.TabletPress:
+            self._using_tablet = True
+            self._tablet_device_down = True
+
+            if self._read_only or self._current_tool == DrawingTool.NONE:
+                return
+            if not self._is_inside_video_rect(pos):
+                return
+            pos = self._clamp_to_video_rect(pos)
+            self._start_drawing(pos)
+
+        elif event_type == QEvent.Type.TabletMove:
+            if self._tablet_device_down and self._is_drawing and self._current_tool != DrawingTool.NONE:
+                pos = self._clamp_to_video_rect(pos)
+                self._continue_drawing(pos)
+
+        elif event_type == QEvent.Type.TabletRelease:
+            self._tablet_device_down = False
+            if self._is_drawing:
+                pos = self._clamp_to_video_rect(pos)
+                self._finish_drawing(pos)
+            self._current_pressure = 1.0
+
     # ==================== Mouse Events ====================
 
     def mousePressEvent(self, event):
+        if self._tablet_device_down:
+            event.ignore()
+            return
+
+        self._current_pressure = 1.0
         if self._read_only or self._current_tool == DrawingTool.NONE:
             super().mousePressEvent(event)
             return
 
         if event.button() == Qt.MouseButton.LeftButton:
             pos = self.mapToScene(event.pos())
-            # Only start drawing if inside video rect
             if not self._is_inside_video_rect(pos):
                 super().mousePressEvent(event)
                 return
@@ -347,9 +333,13 @@ class DrawoverCanvas(QGraphicsView):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        if self._tablet_device_down:
+            event.ignore()
+            return
+
+        self._current_pressure = 1.0
         if self._is_drawing and self._current_tool != DrawingTool.NONE:
             pos = self.mapToScene(event.pos())
-            # Clamp to video rect while drawing
             pos = self._clamp_to_video_rect(pos)
             self._continue_drawing(pos)
             event.accept()
@@ -357,6 +347,10 @@ class DrawoverCanvas(QGraphicsView):
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self._tablet_device_down:
+            event.ignore()
+            return
+
         if self._is_drawing and event.button() == Qt.MouseButton.LeftButton:
             pos = self.mapToScene(event.pos())
             pos = self._clamp_to_video_rect(pos)
@@ -375,6 +369,8 @@ class DrawoverCanvas(QGraphicsView):
 
         if self._current_tool == DrawingTool.PEN:
             self._start_pen(pos)
+        elif self._current_tool == DrawingTool.BRUSH:
+            self._start_brush(pos)
         elif self._current_tool == DrawingTool.LINE:
             self._start_line(pos)
         elif self._current_tool == DrawingTool.ARROW:
@@ -393,14 +389,16 @@ class DrawoverCanvas(QGraphicsView):
         """Continue current stroke."""
         if self._current_tool == DrawingTool.PEN:
             self._continue_pen(pos)
+        elif self._current_tool == DrawingTool.BRUSH:
+            self._continue_brush(pos)
         elif self._current_tool == DrawingTool.LINE:
             self._update_line(pos)
         elif self._current_tool == DrawingTool.ARROW:
             self._update_arrow(pos)
         elif self._current_tool == DrawingTool.RECT:
-            self._update_rect(pos)
+            self._update_shape_bounds(pos)
         elif self._current_tool == DrawingTool.CIRCLE:
-            self._update_circle(pos)
+            self._update_shape_bounds(pos)
         elif self._current_tool == DrawingTool.ERASER:
             self._erase_at(pos)
 
@@ -420,6 +418,9 @@ class DrawoverCanvas(QGraphicsView):
         self._current_path = None
         self._current_points = []
         self._start_pos = None
+        self._last_brush_point = None
+        self._last_brush_pressure = 1.0
+
         self.drawing_finished.emit()
 
     # ==================== Pen Tool ====================
@@ -441,6 +442,78 @@ class DrawoverCanvas(QGraphicsView):
             self._current_points.append([pos.x(), pos.y()])
             self._current_item.setPath(self._current_path)
 
+    # ==================== Brush Tool (Pressure Sensitive) ====================
+
+    def _start_brush(self, pos: QPointF):
+        """Start pressure-sensitive brush drawing using circle stamping."""
+        self._current_item = QGraphicsItemGroup()
+        self._scene.addItem(self._current_item)
+
+        self._current_points = [[pos.x(), pos.y(), self._current_pressure]]
+        self._last_brush_point = pos
+        self._last_brush_pressure = self._current_pressure
+
+        self._stamp_brush_circle(pos, self._current_pressure)
+
+    def _continue_brush(self, pos: QPointF):
+        """Continue pressure-sensitive brush drawing with circle stamping."""
+        if not self._current_item or not self._last_brush_point:
+            return
+
+        self._current_points.append([pos.x(), pos.y(), self._current_pressure])
+
+        self._interpolate_brush_stamps(
+            self._last_brush_point, self._last_brush_pressure,
+            pos, self._current_pressure
+        )
+
+        self._last_brush_point = pos
+        self._last_brush_pressure = self._current_pressure
+
+    def _stamp_brush_circle(self, pos: QPointF, pressure: float):
+        """Stamp a single filled circle at the given position."""
+        diameter = max(1.0, self._brush_size * pressure)
+        radius = diameter / 2.0
+
+        ellipse = QGraphicsEllipseItem(
+            pos.x() - radius,
+            pos.y() - radius,
+            diameter,
+            diameter
+        )
+
+        color = QColor(self._current_color)
+        pressure_opacity = self._opacity * pressure
+        color.setAlphaF(max(0.05, pressure_opacity))
+        ellipse.setBrush(QBrush(color))
+        ellipse.setPen(QPen(Qt.PenStyle.NoPen))
+
+        self._current_item.addToGroup(ellipse)
+
+    def _interpolate_brush_stamps(self, p1: QPointF, pressure1: float,
+                                   p2: QPointF, pressure2: float):
+        """Interpolate circles between two points to create smooth strokes."""
+        dx = p2.x() - p1.x()
+        dy = p2.y() - p1.y()
+        distance = math.sqrt(dx * dx + dy * dy)
+
+        if distance < 0.1:
+            self._stamp_brush_circle(p2, pressure2)
+            return
+
+        avg_pressure = (pressure1 + pressure2) / 2.0
+        avg_diameter = max(1.0, self._brush_size * avg_pressure)
+        spacing = max(1.0, avg_diameter * 0.25)
+
+        num_stamps = max(1, int(distance / spacing))
+
+        for i in range(1, num_stamps + 1):
+            t = i / num_stamps
+            x = p1.x() + dx * t
+            y = p1.y() + dy * t
+            pressure = pressure1 + (pressure2 - pressure1) * t
+            self._stamp_brush_circle(QPointF(x, y), pressure)
+
     # ==================== Line Tool ====================
 
     def _start_line(self, pos: QPointF):
@@ -461,7 +534,6 @@ class DrawoverCanvas(QGraphicsView):
 
     def _start_arrow(self, pos: QPointF):
         """Start arrow drawing."""
-        # Use path item for arrow (line + head)
         self._current_path = QPainterPath()
         self._current_path.moveTo(pos)
         self._current_path.lineTo(pos)
@@ -477,25 +549,8 @@ class DrawoverCanvas(QGraphicsView):
             path.moveTo(self._start_pos)
             path.lineTo(pos)
 
-            # Arrow head
             head_size = max(12, self._brush_size * 3)
-            line = QLineF(self._start_pos, pos)
-            if line.length() > 0:
-                angle = math.atan2(-line.dy(), line.dx())
-
-                p1 = pos + QPointF(
-                    math.cos(angle + math.pi * 0.8) * head_size,
-                    -math.sin(angle + math.pi * 0.8) * head_size
-                )
-                p2 = pos + QPointF(
-                    math.cos(angle - math.pi * 0.8) * head_size,
-                    -math.sin(angle - math.pi * 0.8) * head_size
-                )
-
-                path.moveTo(pos)
-                path.lineTo(p1)
-                path.moveTo(pos)
-                path.lineTo(p2)
+            add_arrow_head_to_path(path, self._start_pos, pos, head_size)
 
             self._current_item.setPath(path)
 
@@ -507,15 +562,6 @@ class DrawoverCanvas(QGraphicsView):
         self._current_item.setPen(self._create_pen())
         self._scene.addItem(self._current_item)
 
-    def _update_rect(self, pos: QPointF):
-        """Update rectangle size."""
-        if self._current_item and self._start_pos:
-            x = min(self._start_pos.x(), pos.x())
-            y = min(self._start_pos.y(), pos.y())
-            w = abs(pos.x() - self._start_pos.x())
-            h = abs(pos.y() - self._start_pos.y())
-            self._current_item.setRect(x, y, w, h)
-
     # ==================== Circle Tool ====================
 
     def _start_circle(self, pos: QPointF):
@@ -524,8 +570,8 @@ class DrawoverCanvas(QGraphicsView):
         self._current_item.setPen(self._create_pen())
         self._scene.addItem(self._current_item)
 
-    def _update_circle(self, pos: QPointF):
-        """Update ellipse size."""
+    def _update_shape_bounds(self, pos: QPointF):
+        """Update rect/ellipse bounds from start_pos to pos."""
         if self._current_item and self._start_pos:
             x = min(self._start_pos.x(), pos.x())
             y = min(self._start_pos.y(), pos.y())
@@ -587,48 +633,68 @@ class DrawoverCanvas(QGraphicsView):
 
     # ==================== Helpers ====================
 
+    def _get_current_width(self) -> int:
+        """Get stroke width based on tool and pressure."""
+        if self._current_tool == DrawingTool.PEN:
+            return 2  # Fixed thin width for pen
+        elif self._current_tool == DrawingTool.BRUSH:
+            return max(1, int(self._brush_size * self._current_pressure))
+        else:
+            return self._brush_size
+
     def _create_pen(self) -> QPen:
-        """Create pen with current settings."""
-        pen = QPen(self._current_color, self._brush_size)
+        """Create pen with current settings including opacity and tool-specific width."""
+        color = QColor(self._current_color)
+        color.setAlphaF(self._opacity)
+
+        width = self._get_current_width()
+
+        pen = QPen(color, width)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         return pen
 
     def _finalize_stroke(self, text: str = '') -> Optional[Dict]:
-        """
-        Create stroke data from current item.
-
-        All coordinates are stored as normalized UV (0-1) relative to video rect.
-        """
+        """Create stroke data from current item (UV coordinates)."""
         if not self._current_item:
             return None
 
         stroke_id = f"stroke_{uuid_lib.uuid4().hex[:8]}"
         now = datetime.utcnow().isoformat() + 'Z'
 
-        # Get video rect for normalization
         rect = self._get_effective_rect()
         rect_size = min(rect.width(), rect.height()) if rect.width() > 0 else 1
 
-        # Store width as normalized value (relative to smaller dimension)
         normalized_width = self._brush_size / rect_size if rect_size > 0 else 0.005
 
         stroke_data = {
             'id': stroke_id,
             'color': self._current_color.name(),
-            'opacity': self._current_color.alphaF(),
-            'width': normalized_width,  # Normalized stroke width
-            'width_px': self._brush_size,  # Keep original for reference
+            'opacity': self._opacity,
+            'width': normalized_width,
+            'width_px': self._brush_size,
             'created_at': now,
             'author': self._current_author,
-            'format': 'uv'  # Mark as UV coordinates
+            'format': 'uv'
         }
 
         if self._current_tool == DrawingTool.PEN:
             stroke_data['type'] = 'path'
             stroke_data['tool'] = 'pen'
-            # Simplify and convert to UV
-            simplified = self._simplify_points(self._current_points)
+            simplified = simplify_points(self._current_points)
+            stroke_data['points'] = [
+                self._screen_to_uv(QPointF(p[0], p[1])) for p in simplified
+            ]
+
+        elif self._current_tool == DrawingTool.BRUSH:
+            stroke_data['type'] = 'brush_path'
+            stroke_data['tool'] = 'brush'
+            stroke_data['points_with_pressure'] = [
+                [*self._screen_to_uv(QPointF(p[0], p[1])), p[2] if len(p) > 2 else 1.0]
+                for p in self._current_points
+            ]
+            points_2d = [[p[0], p[1]] for p in self._current_points]
+            simplified = simplify_points(points_2d)
             stroke_data['points'] = [
                 self._screen_to_uv(QPointF(p[0], p[1])) for p in simplified
             ]
@@ -644,18 +710,15 @@ class DrawoverCanvas(QGraphicsView):
             stroke_data['type'] = 'arrow'
             stroke_data['tool'] = 'arrow'
             stroke_data['start'] = self._screen_to_uv(self._start_pos)
-            # Get end from last point in path
             path = self._current_item.path()
             end_pt = path.elementAt(1)
             stroke_data['end'] = self._screen_to_uv(QPointF(end_pt.x, end_pt.y))
-            # Normalize head size
             stroke_data['head_size'] = max(12, self._brush_size * 3) / rect_size
 
         elif self._current_tool == DrawingTool.RECT:
             stroke_data['type'] = 'rect'
             stroke_data['tool'] = 'rect'
             item_rect = self._current_item.rect()
-            # Convert bounds to UV: [u1, v1, width_uv, height_uv]
             top_left = self._screen_to_uv(QPointF(item_rect.x(), item_rect.y()))
             bottom_right = self._screen_to_uv(QPointF(item_rect.right(), item_rect.bottom()))
             stroke_data['bounds'] = [
@@ -685,72 +748,62 @@ class DrawoverCanvas(QGraphicsView):
             stroke_data['text'] = text
             stroke_data['font_size'] = max(12, self._brush_size * 2) / rect_size
 
-        # Track the item
         self._stroke_items[stroke_id] = self._current_item
         self._item_data[id(self._current_item)] = stroke_data
         self._current_item.setData(0, stroke_id)
 
         return stroke_data
 
-    def _simplify_points(self, points: List[List[float]], epsilon: float = 1.5) -> List[List[float]]:
-        """Simplify path using Ramer-Douglas-Peucker algorithm."""
-        if len(points) < 3:
-            return points
+    # ==================== Ghost/Onion Skin ====================
 
-        def perpendicular_distance(point, start, end):
-            if start == end:
-                return math.sqrt((point[0] - start[0])**2 + (point[1] - start[1])**2)
+    def clear_ghost_strokes(self):
+        """Remove all ghost strokes from the canvas."""
+        self._ghost.clear()
 
-            n = abs((end[1] - start[1]) * point[0] - (end[0] - start[0]) * point[1] +
-                   end[0] * start[1] - end[1] * start[0])
-            d = math.sqrt((end[1] - start[1])**2 + (end[0] - start[0])**2)
-            return n / d if d > 0 else 0
+    def has_ghost_strokes(self) -> bool:
+        """Check if there are any ghost strokes rendered."""
+        return len(self._ghost._ghost_items) > 0
 
-        start, end = points[0], points[-1]
-        max_dist = 0
-        max_idx = 0
-
-        for i in range(1, len(points) - 1):
-            dist = perpendicular_distance(points[i], start, end)
-            if dist > max_dist:
-                max_dist = dist
-                max_idx = i
-
-        if max_dist > epsilon:
-            left = self._simplify_points(points[:max_idx + 1], epsilon)
-            right = self._simplify_points(points[max_idx:], epsilon)
-            return left[:-1] + right
-        else:
-            return [start, end]
+    def add_ghost_strokes(
+        self,
+        strokes: List[Dict],
+        tint_color: QColor,
+        opacity: float = 0.4,
+        source_canvas_size: Tuple[int, int] = None
+    ):
+        """Add ghost strokes from another frame with tinting."""
+        rect_size = self._coord.get_rect_size(self.width(), self.height())
+        self._ghost.add_strokes(
+            strokes=strokes,
+            tint_color=tint_color,
+            opacity=opacity,
+            canvas_width=self.width(),
+            canvas_height=self.height(),
+            source_canvas_size=source_canvas_size,
+            uv_to_screen=self._uv_to_screen,
+            rect_size=rect_size
+        )
 
     # ==================== Data Import/Export ====================
 
     def clear(self):
-        """Clear all strokes."""
+        """Clear all strokes (including ghost strokes)."""
+        self.clear_ghost_strokes()
         self._scene.clear()
         self._stroke_items.clear()
         self._item_data.clear()
         self._undo_stack.clear()
 
     def import_strokes(self, strokes: List[Dict], source_canvas_size: Tuple[int, int] = None):
-        """
-        Import strokes from data.
-
-        Handles both UV-normalized strokes (new format) and legacy absolute pixel strokes.
-
-        Args:
-            strokes: List of stroke dictionaries
-            source_canvas_size: Original canvas size for legacy strokes (ignored for UV format)
-        """
+        """Import strokes from data."""
         self.clear()
 
+        rect_size = self._coord.get_rect_size(self.width(), self.height())
+
         for stroke in strokes:
-            # Check if stroke uses UV format (new) or legacy pixel format
             if stroke.get('format') == 'uv':
-                # Convert UV coordinates to current screen coordinates
-                screen_stroke = self._uv_stroke_to_screen(stroke)
+                screen_stroke = uv_stroke_to_screen(stroke, self._uv_to_screen, rect_size)
             else:
-                # Legacy format - use old scaling logic for backward compatibility
                 current_w = self.width()
                 current_h = self.height()
                 if source_canvas_size and source_canvas_size[0] > 0 and source_canvas_size[1] > 0:
@@ -759,78 +812,15 @@ class DrawoverCanvas(QGraphicsView):
                 else:
                     scale_x = 1.0
                     scale_y = 1.0
-                screen_stroke = self._scale_stroke(stroke, scale_x, scale_y)
+                screen_stroke = scale_stroke(stroke, scale_x, scale_y)
 
-            item = self._create_item_from_stroke(screen_stroke)
+            item = create_item_from_stroke(screen_stroke)
             if item:
                 self._scene.addItem(item)
                 stroke_id = stroke.get('id', '')
                 self._stroke_items[stroke_id] = item
-                # Store original UV data for export (not screen coordinates)
                 self._item_data[id(item)] = stroke
                 item.setData(0, stroke_id)
-
-    def _uv_stroke_to_screen(self, stroke: Dict) -> Dict:
-        """
-        Convert UV-normalized stroke to screen coordinates for rendering.
-
-        Args:
-            stroke: Stroke data with UV coordinates
-
-        Returns:
-            Stroke data with screen coordinates
-        """
-        screen_stroke = stroke.copy()
-        stroke_type = stroke.get('type', 'path')
-        rect = self._get_effective_rect()
-        rect_size = min(rect.width(), rect.height()) if rect.width() > 0 else 1
-
-        # Convert normalized width to pixels
-        normalized_width = stroke.get('width', 0.005)
-        screen_stroke['width'] = normalized_width * rect_size
-
-        if stroke_type == 'path':
-            points = stroke.get('points', [])
-            screen_stroke['points'] = [
-                [self._uv_to_screen(p).x(), self._uv_to_screen(p).y()]
-                for p in points
-            ]
-
-        elif stroke_type == 'line':
-            start = stroke.get('start', [0.5, 0.5])
-            end = stroke.get('end', [0.5, 0.5])
-            start_pt = self._uv_to_screen(start)
-            end_pt = self._uv_to_screen(end)
-            screen_stroke['start'] = [start_pt.x(), start_pt.y()]
-            screen_stroke['end'] = [end_pt.x(), end_pt.y()]
-
-        elif stroke_type == 'arrow':
-            start = stroke.get('start', [0.5, 0.5])
-            end = stroke.get('end', [0.5, 0.5])
-            start_pt = self._uv_to_screen(start)
-            end_pt = self._uv_to_screen(end)
-            screen_stroke['start'] = [start_pt.x(), start_pt.y()]
-            screen_stroke['end'] = [end_pt.x(), end_pt.y()]
-            screen_stroke['head_size'] = stroke.get('head_size', 0.02) * rect_size
-
-        elif stroke_type == 'rect' or stroke_type == 'ellipse':
-            bounds = stroke.get('bounds', [0.25, 0.25, 0.5, 0.5])
-            top_left = self._uv_to_screen([bounds[0], bounds[1]])
-            # bounds[2] and bounds[3] are width/height in UV space
-            bottom_right = self._uv_to_screen([bounds[0] + bounds[2], bounds[1] + bounds[3]])
-            screen_stroke['bounds'] = [
-                top_left.x(), top_left.y(),
-                bottom_right.x() - top_left.x(),
-                bottom_right.y() - top_left.y()
-            ]
-
-        elif stroke_type == 'text':
-            position = stroke.get('position', [0.5, 0.5])
-            pos_pt = self._uv_to_screen(position)
-            screen_stroke['position'] = [pos_pt.x(), pos_pt.y()]
-            screen_stroke['font_size'] = int(stroke.get('font_size', 0.02) * rect_size)
-
-        return screen_stroke
 
     def export_strokes(self) -> List[Dict]:
         """Export current strokes to data (UV format)."""
@@ -841,159 +831,11 @@ class DrawoverCanvas(QGraphicsView):
         return (self.width(), self.height())
 
     def refresh_strokes(self):
-        """
-        Redraw all strokes with current video rect.
-
-        Call this when the video rect changes (resize, layout change, etc.)
-        to ensure strokes are rendered at correct positions.
-        """
-        # Get current stroke data (UV format)
+        """Redraw all strokes with current video rect."""
         strokes = list(self._item_data.values())
         if not strokes:
             return
-
-        # Re-import to update screen positions
-        # Save undo stack state
-        can_undo = self._undo_stack.canUndo()
-
         self.import_strokes(strokes)
-
-        # Undo stack is cleared by import, which is fine for redraw
-
-    def _scale_stroke(self, stroke: Dict, scale_x: float, scale_y: float) -> Dict:
-        """Scale stroke coordinates by given factors."""
-        if scale_x == 1.0 and scale_y == 1.0:
-            return stroke
-
-        scaled = stroke.copy()
-        stroke_type = stroke.get('type', 'path')
-
-        if stroke_type == 'path':
-            points = stroke.get('points', [])
-            scaled['points'] = [[p[0] * scale_x, p[1] * scale_y] for p in points]
-
-        elif stroke_type == 'line':
-            start = stroke.get('start', [0, 0])
-            end = stroke.get('end', [0, 0])
-            scaled['start'] = [start[0] * scale_x, start[1] * scale_y]
-            scaled['end'] = [end[0] * scale_x, end[1] * scale_y]
-
-        elif stroke_type == 'arrow':
-            start = stroke.get('start', [0, 0])
-            end = stroke.get('end', [0, 0])
-            scaled['start'] = [start[0] * scale_x, start[1] * scale_y]
-            scaled['end'] = [end[0] * scale_x, end[1] * scale_y]
-            scaled['head_size'] = stroke.get('head_size', 12) * min(scale_x, scale_y)
-
-        elif stroke_type == 'rect' or stroke_type == 'ellipse':
-            bounds = stroke.get('bounds', [0, 0, 100, 100])
-            scaled['bounds'] = [
-                bounds[0] * scale_x,
-                bounds[1] * scale_y,
-                bounds[2] * scale_x,
-                bounds[3] * scale_y
-            ]
-
-        elif stroke_type == 'text':
-            position = stroke.get('position', [0, 0])
-            scaled['position'] = [position[0] * scale_x, position[1] * scale_y]
-            scaled['font_size'] = int(stroke.get('font_size', 14) * min(scale_x, scale_y))
-
-        # Scale stroke width
-        scaled['width'] = stroke.get('width', 3) * min(scale_x, scale_y)
-
-        return scaled
-
-    def _create_item_from_stroke(self, stroke: Dict) -> Optional[QGraphicsItem]:
-        """Create graphics item from stroke data."""
-        stroke_type = stroke.get('type', 'path')
-        color = QColor(stroke.get('color', '#FF5722'))
-        opacity = stroke.get('opacity', 1.0)
-        color.setAlphaF(opacity)
-        width = stroke.get('width', 3)
-
-        pen = QPen(color, width)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-
-        if stroke_type == 'path':
-            points = stroke.get('points', [])
-            if len(points) >= 2:
-                path = QPainterPath()
-                path.moveTo(points[0][0], points[0][1])
-                for point in points[1:]:
-                    path.lineTo(point[0], point[1])
-                item = QGraphicsPathItem(path)
-                item.setPen(pen)
-                return item
-
-        elif stroke_type == 'line':
-            start = stroke.get('start', [0, 0])
-            end = stroke.get('end', [0, 0])
-            item = QGraphicsLineItem(start[0], start[1], end[0], end[1])
-            item.setPen(pen)
-            return item
-
-        elif stroke_type == 'arrow':
-            start = stroke.get('start', [0, 0])
-            end = stroke.get('end', [0, 0])
-            head_size = stroke.get('head_size', 12)
-
-            path = QPainterPath()
-            start_pt = QPointF(start[0], start[1])
-            end_pt = QPointF(end[0], end[1])
-
-            path.moveTo(start_pt)
-            path.lineTo(end_pt)
-
-            line = QLineF(start_pt, end_pt)
-            if line.length() > 0:
-                angle = math.atan2(-line.dy(), line.dx())
-                p1 = end_pt + QPointF(
-                    math.cos(angle + math.pi * 0.8) * head_size,
-                    -math.sin(angle + math.pi * 0.8) * head_size
-                )
-                p2 = end_pt + QPointF(
-                    math.cos(angle - math.pi * 0.8) * head_size,
-                    -math.sin(angle - math.pi * 0.8) * head_size
-                )
-                path.moveTo(end_pt)
-                path.lineTo(p1)
-                path.moveTo(end_pt)
-                path.lineTo(p2)
-
-            item = QGraphicsPathItem(path)
-            item.setPen(pen)
-            return item
-
-        elif stroke_type == 'rect':
-            bounds = stroke.get('bounds', [0, 0, 100, 100])
-            item = QGraphicsRectItem(bounds[0], bounds[1], bounds[2], bounds[3])
-            item.setPen(pen)
-            if stroke.get('fill', False):
-                item.setBrush(QBrush(color))
-            return item
-
-        elif stroke_type == 'ellipse':
-            bounds = stroke.get('bounds', [0, 0, 100, 100])
-            item = QGraphicsEllipseItem(bounds[0], bounds[1], bounds[2], bounds[3])
-            item.setPen(pen)
-            if stroke.get('fill', False):
-                item.setBrush(QBrush(color))
-            return item
-
-        elif stroke_type == 'text':
-            position = stroke.get('position', [0, 0])
-            text = stroke.get('text', '')
-            font_size = stroke.get('font_size', 14)
-
-            item = QGraphicsTextItem(text)
-            item.setPos(position[0], position[1])
-            item.setDefaultTextColor(color)
-            item.setFont(QFont('Arial', font_size))
-            return item
-
-        return None
 
     # ==================== Resize ====================
 

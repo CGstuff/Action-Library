@@ -26,6 +26,12 @@ class ANIMLIB_OT_capture_pose(Operator):
     _timer = None
     _state = None
     _context_data = None
+    _start_time = None
+    _last_activity_time = None
+
+    # Timeout configuration (in seconds)
+    MODAL_TIMEOUT = 300  # 5 minutes total timeout
+    STATE_TIMEOUT = 60   # 1 minute per state (watchdog)
 
     def invoke(self, context, event):
         """Start the modal capture operation"""
@@ -53,6 +59,11 @@ class ANIMLIB_OT_capture_pose(Operator):
             'wm': wm
         }
 
+        # Initialize timeout tracking
+        import time
+        self._start_time = time.time()
+        self._last_activity_time = time.time()
+
         # Add timer for modal updates (runs every 0.1 seconds)
         self._timer = wm.event_timer_add(0.1, window=context.window)
         wm.modal_handler_add(self)
@@ -69,6 +80,25 @@ class ANIMLIB_OT_capture_pose(Operator):
         # Only process on timer events
         if event.type != 'TIMER':
             return {'PASS_THROUGH'}
+
+        import time
+
+        # Timeout watchdog - prevent indefinite hangs
+        current_time = time.time()
+
+        # Check total operation timeout
+        if self._start_time and (current_time - self._start_time) > self.MODAL_TIMEOUT:
+            logger.error(f"Pose capture timed out after {self.MODAL_TIMEOUT}s")
+            self.report({'ERROR'}, "Capture timed out - operation took too long")
+            self.cleanup(context)
+            return {'CANCELLED'}
+
+        # Check state timeout (watchdog for stuck states)
+        if self._last_activity_time and (current_time - self._last_activity_time) > self.STATE_TIMEOUT:
+            logger.error(f"Pose capture stuck in state '{self._state}' for {self.STATE_TIMEOUT}s")
+            self.report({'ERROR'}, f"Capture stuck in '{self._state}' - cancelling")
+            self.cleanup(context)
+            return {'CANCELLED'}
 
         wm = self._context_data['wm']
         scene = self._context_data['scene']
@@ -90,6 +120,7 @@ class ANIMLIB_OT_capture_pose(Operator):
 
                 self._context_data['rig_type'] = rig_type
                 self._state = 'DETERMINE_NAME'
+                self._last_activity_time = time.time()  # Reset watchdog
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'DETERMINE_NAME':
@@ -100,6 +131,7 @@ class ANIMLIB_OT_capture_pose(Operator):
 
                 self._context_data['pose_name'] = pose_name
                 self._state = 'CREATE_ACTION'
+                self._last_activity_time = time.time()  # Reset watchdog
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'CREATE_ACTION':
@@ -115,6 +147,7 @@ class ANIMLIB_OT_capture_pose(Operator):
 
                 self._context_data['action'] = action
                 self._state = 'SAVE_POSE'
+                self._last_activity_time = time.time()  # Reset watchdog
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'SAVE_POSE':
@@ -134,6 +167,7 @@ class ANIMLIB_OT_capture_pose(Operator):
                     return {'CANCELLED'}
 
                 self._state = 'CLEANUP'
+                self._last_activity_time = time.time()  # Reset watchdog
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'CLEANUP':
@@ -180,6 +214,8 @@ class ANIMLIB_OT_capture_pose(Operator):
         # Clear state
         self._state = None
         self._context_data = None
+        self._start_time = None
+        self._last_activity_time = None
 
     def cancel(self, context):
         """Called when user cancels (ESC key)"""

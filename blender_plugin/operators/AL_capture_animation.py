@@ -41,6 +41,12 @@ class ANIMLIB_OT_capture_animation(Operator):
     _timer = None
     _state = None
     _context_data = None
+    _start_time = None
+    _last_activity_time = None
+
+    # Timeout configuration (in seconds)
+    MODAL_TIMEOUT = 300  # 5 minutes total timeout
+    STATE_TIMEOUT = 60   # 1 minute per state (watchdog)
 
     def invoke(self, context, event):
         """Start the modal capture operation"""
@@ -74,6 +80,11 @@ class ANIMLIB_OT_capture_animation(Operator):
             'wm': wm
         }
 
+        # Initialize timeout tracking
+        import time
+        self._start_time = time.time()
+        self._last_activity_time = time.time()
+
         # Add timer for modal updates (runs every 0.1 seconds)
         self._timer = wm.event_timer_add(0.1, window=context.window)
         wm.modal_handler_add(self)
@@ -92,6 +103,25 @@ class ANIMLIB_OT_capture_animation(Operator):
         # Only process on timer events
         if event.type != 'TIMER':
             return {'PASS_THROUGH'}
+
+        import time
+
+        # Timeout watchdog - prevent indefinite hangs
+        current_time = time.time()
+
+        # Check total operation timeout
+        if self._start_time and (current_time - self._start_time) > self.MODAL_TIMEOUT:
+            logger.error(f"Capture operation timed out after {self.MODAL_TIMEOUT}s")
+            self.report({'ERROR'}, "Capture timed out - operation took too long")
+            self.cleanup(context)
+            return {'CANCELLED'}
+
+        # Check state timeout (watchdog for stuck states)
+        if self._last_activity_time and (current_time - self._last_activity_time) > self.STATE_TIMEOUT:
+            logger.error(f"Capture stuck in state '{self._state}' for {self.STATE_TIMEOUT}s")
+            self.report({'ERROR'}, f"Capture stuck in '{self._state}' - cancelling")
+            self.cleanup(context)
+            return {'CANCELLED'}
 
         wm = self._context_data['wm']
         scene = self._context_data['scene']
@@ -116,6 +146,7 @@ class ANIMLIB_OT_capture_animation(Operator):
                 # Store rig type and move to next state
                 self._context_data['rig_type'] = rig_type
                 self._state = 'CHECK_LIBRARY_SOURCE'
+                self._last_activity_time = time.time()  # Reset watchdog
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'CHECK_LIBRARY_SOURCE':
@@ -134,6 +165,7 @@ class ANIMLIB_OT_capture_animation(Operator):
                 if scene.animlib_is_versioning:
                     logger.debug("Already in versioning mode, skipping dialog")
                     self._state = 'DETERMINE_NAME'
+                    self._last_activity_time = time.time()  # Reset watchdog
                     return {'RUNNING_MODAL'}
 
                 # If action came from library, validate metadata is still current
@@ -173,10 +205,12 @@ class ANIMLIB_OT_capture_animation(Operator):
 
                     # Wait for dialog result in next state
                     self._state = 'WAIT_FOR_DIALOG'
+                    self._last_activity_time = time.time()  # Reset watchdog
                     return {'RUNNING_MODAL'}
                 else:
                     # Not a library action, proceed normally
                     self._state = 'DETERMINE_NAME'
+                    self._last_activity_time = time.time()  # Reset watchdog
                     return {'RUNNING_MODAL'}
 
             elif self._state == 'WAIT_FOR_DIALOG':
@@ -185,7 +219,8 @@ class ANIMLIB_OT_capture_animation(Operator):
                 result, result_data = ANIMLIB_OT_version_choice.get_result()
 
                 if result is None:
-                    # Dialog still open, wait
+                    # Dialog still open, wait (but reset watchdog - user interaction in progress)
+                    self._last_activity_time = time.time()
                     return {'RUNNING_MODAL'}
                 elif result == 'CANCELLED':
                     # User cancelled, abort capture
@@ -196,6 +231,7 @@ class ANIMLIB_OT_capture_animation(Operator):
                     # User made a choice, proceed
                     # Scene properties already set by the dialog
                     self._state = 'DETERMINE_NAME'
+                    self._last_activity_time = time.time()  # Reset watchdog
                     return {'RUNNING_MODAL'}
 
             elif self._state == 'DETERMINE_NAME':
@@ -261,6 +297,7 @@ class ANIMLIB_OT_capture_animation(Operator):
 
                 self._context_data['animation_name'] = animation_name
                 self._state = 'CHECK_COLLISION'
+                self._last_activity_time = time.time()  # Reset watchdog
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'CHECK_COLLISION':
@@ -271,6 +308,7 @@ class ANIMLIB_OT_capture_animation(Operator):
                 # Skip collision check if we're already creating a version
                 if is_versioning:
                     self._state = 'SAVE_ACTION'
+                    self._last_activity_time = time.time()  # Reset watchdog
                     return {'RUNNING_MODAL'}
 
                 # Get base name and check if folder exists
@@ -295,6 +333,7 @@ class ANIMLIB_OT_capture_animation(Operator):
                         return {'CANCELLED'}
 
                 self._state = 'SAVE_ACTION'
+                self._last_activity_time = time.time()  # Reset watchdog
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'SAVE_ACTION':
@@ -335,6 +374,7 @@ class ANIMLIB_OT_capture_animation(Operator):
                 self._context_data['saved_metadata'] = saved_metadata
 
                 self._state = 'CLEANUP'
+                self._last_activity_time = time.time()  # Reset watchdog
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'CLEANUP':
@@ -397,6 +437,8 @@ class ANIMLIB_OT_capture_animation(Operator):
         # Clear state
         self._state = None
         self._context_data = None
+        self._start_time = None
+        self._last_activity_time = None
 
     def cancel(self, context):
         """Called when user cancels (ESC key)"""
@@ -762,15 +804,26 @@ class ANIMLIB_OT_capture_animation(Operator):
                             version_files[version_label] = []
                         version_files[version_label].append(f)
 
-                # Move each version's files to cold storage
+                # Move each version's files to cold storage with transaction-like rollback
+                # Track all successful moves for potential rollback
+                completed_moves = []  # List of (source, dest) tuples
+                move_failed = False
+
                 for version_label, files in version_files.items():
+                    if move_failed:
+                        break
+
                     cold_folder = library_dir / "_versions" / safe_base_name / version_label
                     cold_folder.mkdir(parents=True, exist_ok=True)
 
                     for f in files:
+                        if move_failed:
+                            break
+
                         dest = cold_folder / f.name
                         try:
                             shutil.move(str(f), str(dest))
+                            completed_moves.append((str(dest), str(f)))  # Store for rollback
                             logger.info(f"Moved to cold storage: {f.name} -> {version_label}/")
 
                             # Update JSON files to set is_latest = 0 (no longer latest)
@@ -785,7 +838,19 @@ class ANIMLIB_OT_capture_animation(Operator):
                                 except Exception as je:
                                     logger.warning(f"Failed to update is_latest in {dest.name}: {je}")
                         except Exception as e:
-                            logger.warning(f"Failed to move {f.name}: {e}")
+                            logger.error(f"Failed to move {f.name}: {e}")
+                            move_failed = True
+                            break
+
+                # Rollback if any move failed
+                if move_failed and completed_moves:
+                    logger.warning(f"Rolling back {len(completed_moves)} cold storage moves due to failure")
+                    for src, dest in reversed(completed_moves):
+                        try:
+                            shutil.move(src, dest)
+                            logger.info(f"Rollback: moved {Path(src).name} back to hot storage")
+                        except Exception as re:
+                            logger.error(f"Rollback failed for {Path(src).name}: {re}")
 
             # Files use animation name (with version) for clarity: walk_cycle_v001.blend
             blend_path = animation_folder / f"{safe_anim_name}.blend"
@@ -1100,8 +1165,8 @@ class ANIMLIB_OT_capture_animation(Operator):
                         for png_file in png_files:
                             try:
                                 os.remove(png_file)
-                            except:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"Could not remove temp PNG {png_file}: {e}")
                     else:
                         logger.warning("No PNG frames rendered")
 
@@ -1181,8 +1246,8 @@ class ANIMLIB_OT_capture_animation(Operator):
                 scene.frame_start = original_start
                 scene.frame_end = original_end
                 scene.frame_current = original_frame
-            except:
-                pass
+            except Exception as restore_err:
+                logger.debug(f"Could not restore timeline state: {restore_err}")
     
     def setup_viewport_for_preview(self, scene, prefs, transparent_bg=False):
         """Configure viewport shading for preview rendering and return settings to restore

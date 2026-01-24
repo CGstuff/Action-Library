@@ -16,9 +16,9 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QMessageBox, QApplication, QSizePolicy, QSplitter, QWidget,
-    QFrame
+    QFrame, QProgressDialog
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QObject, QRunnable, QThreadPool
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QObject, QRunnable, QThreadPool, QThread
 from PyQt6.QtGui import QColor, QPixmap, QImage, QIcon
 
 from ...config import Config
@@ -26,7 +26,11 @@ from ...services.database_service import get_database_service
 from ...services.notes_database import get_notes_database
 from ...services.permissions import DrawoverPermissions
 from ...services.drawover_storage import get_drawover_storage, get_drawover_cache
+from ...services.annotated_export_service import (
+    find_ffmpeg, get_reviews_folder, generate_export_filename
+)
 from ...utils.icon_loader import IconLoader
+from .version_history.export_manager import AnnotatedExportWorker
 from ...utils.icon_utils import colorize_white_svg
 from ...themes.theme_manager import get_theme_manager
 from ..video_preview_widget import VideoPreviewWidget
@@ -116,17 +120,36 @@ class VersionHistoryDialog(QDialog):
         self._total_frames: int = 0
         self._review_notes: List[Dict] = []
 
-        # Drawover state
+        # Drawover state (always-on mode - no toggle needed)
         self._drawover_storage = get_drawover_storage()
         self._drawover_cache = get_drawover_cache()
-        self._drawover_enabled = False
         self._current_drawover_frame: int = -1
+        self._annotation_frames: List[int] = []  # Cached list of frames with annotations
+
+        # Display mode state
+        self._hide_annotations = False
+        self._hold_enabled = False
+        self._ghost_enabled = False
+        self._ghost_settings = {
+            'before_frames': 2,
+            'after_frames': 2,
+            'before_color': QColor("#FF5555"),
+            'after_color': QColor("#55FF55"),
+            'sketches_only': True  # Default: only show ghost from frames with sketches
+        }
+        # Track if current displayed strokes are from Hold mode (don't save these)
+        self._strokes_from_hold = False
 
         # Studio Mode state
         self._is_studio_mode: bool = self._notes_db.is_studio_mode()
         self._current_user: str = self._notes_db.get_current_user()
         self._current_user_role: str = self._get_current_user_role()
         self._show_deleted: bool = False  # Toggle state
+
+        # Export state
+        self._export_worker: Optional[AnnotatedExportWorker] = None
+        self._export_progress: Optional[QProgressDialog] = None
+        self._export_output_path: Optional[str] = None
 
         self._configure_window()
         self._apply_theme_styles()
@@ -249,11 +272,12 @@ class VersionHistoryDialog(QDialog):
         # Main splitter: Table | Video | Notes (fixed, not draggable)
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.setChildrenCollapsible(False)
-        self._splitter.setHandleWidth(1)  # Minimal handle, just a line
+        self._splitter.setHandleWidth(6)  # Draggable handle
 
         # ===== LEFT: Version table =====
         self._table_container = QWidget()
-        self._table_container.setFixedWidth(self.TABLE_WIDTH_NORMAL)
+        self._table_container.setMinimumWidth(150)
+        self._table_container.setMaximumWidth(500)
         table_layout = QVBoxLayout(self._table_container)
         table_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -318,45 +342,32 @@ class VersionHistoryDialog(QDialog):
         center_layout.setContentsMargins(8, 0, 8, 0)
         center_layout.setSpacing(4)
 
-        # Preview header
+        # Preview header (compact - just version info)
         preview_header = QHBoxLayout()
         self._preview_info_label = QLabel("Select a version to preview")
         self._preview_info_label.setStyleSheet("font-size: 12px; color: #888;")
         preview_header.addWidget(self._preview_info_label)
         preview_header.addStretch()
+        center_layout.addLayout(preview_header)
 
-        # Done annotating button (shown only when in annotate mode)
-        self._done_annotate_btn = QPushButton("Done Annotating")
-        self._done_annotate_btn.setFixedHeight(24)
-        self._done_annotate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._done_annotate_btn.setToolTip("Exit annotation mode")
-        self._done_annotate_btn.clicked.connect(self._exit_drawover_mode)
-        self._done_annotate_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #FF5722;
-                border: 1px solid #FF5722;
-                border-radius: 0px;
-                padding: 2px 10px;
-                color: white;
-                font-size: 11px;
-            }
-            QPushButton:hover { background-color: #E64A19; border-color: #E64A19; }
-        """)
-        self._done_annotate_btn.hide()  # Hidden by default, shown in annotate mode
-        preview_header.addWidget(self._done_annotate_btn)
-
-        # Annotation toolbar (hidden until annotate mode)
-        from ..annotation_toolbar import AnnotationToolbar
+        # Annotation toolbar (drawing tools - above video)
+        from ..annotation_toolbar import AnnotationToolbar, GhostSettingsPopup
         self._annotation_toolbar = AnnotationToolbar()
         self._annotation_toolbar.tool_changed.connect(self._on_tool_selected)
         self._annotation_toolbar.color_changed.connect(self._on_draw_color_changed)
+        self._annotation_toolbar.brush_size_changed.connect(self._on_brush_size_changed)
+        self._annotation_toolbar.opacity_changed.connect(self._on_opacity_changed)
         self._annotation_toolbar.undo_clicked.connect(self._on_drawover_undo)
         self._annotation_toolbar.redo_clicked.connect(self._on_drawover_redo)
         self._annotation_toolbar.clear_clicked.connect(self._on_drawover_clear)
-        self._annotation_toolbar.hide()
-        preview_header.addWidget(self._annotation_toolbar)
+        self._annotation_toolbar.delete_all_clicked.connect(self._on_drawover_delete_all)
+        self._annotation_toolbar.hide()  # Show when version is selected
+        center_layout.addWidget(self._annotation_toolbar)
 
-        center_layout.addLayout(preview_header)
+        # Ghost settings popup (shared)
+        self._ghost_popup = GhostSettingsPopup(self)
+        self._ghost_popup.settings_changed.connect(self._on_ghost_settings_changed)
+        self._ghost_popup.ghost_toggled.connect(self._on_ghost_toggled)
 
         # Video preview with drawover overlay (using stacked widget approach)
         from PyQt6.QtWidgets import QStackedLayout
@@ -385,7 +396,9 @@ class VersionHistoryDialog(QDialog):
         # Drawover canvas (overlay - will be positioned over video)
         self._drawover_canvas = DrawoverCanvas()
         self._drawover_canvas.set_author(self._current_user)
+        self._drawover_canvas.drawing_started.connect(self._on_drawing_started)
         self._drawover_canvas.drawing_modified.connect(self._on_drawover_modified)
+        self._drawover_canvas.drawing_finished.connect(self._on_drawing_finished)
         self._drawover_canvas.read_only = True
         self._drawover_canvas.set_tool(DrawingTool.NONE)
         self._drawover_canvas.hide()  # Hidden until version selected
@@ -434,12 +447,14 @@ class VersionHistoryDialog(QDialog):
         self._frame_timeline.frame_clicked.connect(self._on_timeline_frame_clicked)
         self._frame_timeline.frame_dragged.connect(self._on_timeline_frame_clicked)
         self._frame_timeline.marker_clicked.connect(self._on_marker_clicked)
+        self._frame_timeline.annotation_marker_clicked.connect(self._on_annotation_marker_clicked)
         timeline_row.addWidget(self._frame_timeline, 1)
 
         center_layout.addLayout(timeline_row)
 
         # Connect video frame changes to timeline
         self._video_preview.frame_changed.connect(self._on_video_frame_changed)
+        self._video_preview.playback_state_changed.connect(self._on_playback_state_changed)
 
         self._splitter.addWidget(self._center_widget)
 
@@ -454,7 +469,6 @@ class VersionHistoryDialog(QDialog):
 
         # Connect notes panel signals
         self._notes_panel.note_clicked.connect(self._on_note_clicked)
-        self._notes_panel.annotate_requested.connect(self._on_annotate_requested)
         self._notes_panel.note_added.connect(self._on_note_added)
         self._notes_panel.note_resolved.connect(self._on_note_resolve_toggled)
         self._notes_panel.note_deleted.connect(self._on_note_delete_requested)
@@ -468,11 +482,8 @@ class VersionHistoryDialog(QDialog):
         self._comparison_widget.hide()
         self._splitter.addWidget(self._comparison_widget)
 
-        # Disable splitter handles (no dragging - fixed layout)
-        for i in range(self._splitter.count()):
-            handle = self._splitter.handle(i)
-            if handle:
-                handle.setEnabled(False)
+        # Set initial splitter sizes (table, video, notes)
+        self._splitter.setSizes([self.TABLE_WIDTH_NORMAL, 800, 320])
         layout.addWidget(self._splitter, 1)
 
         # Bottom buttons
@@ -492,6 +503,22 @@ class VersionHistoryDialog(QDialog):
         self._compare_btn = QPushButton("Compare")
         self._compare_btn.clicked.connect(self._toggle_compare_mode)
         btn_layout.addWidget(self._compare_btn)
+
+        self._export_annotations_btn = QPushButton("Export with Annotations")
+        self._export_annotations_btn.setEnabled(False)
+        self._export_annotations_btn.setToolTip("Export video with annotations burned in as MP4")
+        self._export_annotations_btn.clicked.connect(self._on_export_with_annotations)
+        btn_layout.addWidget(self._export_annotations_btn)
+
+        # Add separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("background: #444;")
+        sep.setFixedWidth(2)
+        btn_layout.addWidget(sep)
+
+        # Display options: Prev | Next | Hide | Hold | Ghost
+        self._build_display_options_buttons(btn_layout)
 
         btn_layout.addStretch()
 
@@ -609,20 +636,31 @@ class VersionHistoryDialog(QDialog):
             self._set_latest_btn.setEnabled(not is_latest)
             self._apply_btn.setEnabled(True)
 
+            # Enable export button if preview video exists
+            preview_path = self._versions[row].get('preview_path', '')
+            has_preview = preview_path and Path(preview_path).exists()
+            self._export_annotations_btn.setEnabled(has_preview)
+
             self._update_preview(row)
         else:
             self._selected_uuid = None
             self._selected_version_label = None
             self._set_latest_btn.setEnabled(False)
             self._apply_btn.setEnabled(False)
+            self._export_annotations_btn.setEnabled(False)
             self._video_preview.clear()
             self._preview_info_label.setText("Select a version to preview")
             self._frame_timeline.set_total_frames(1)
+            self._frame_timeline.set_annotation_frames([])
             self._clear_notes()
-            # Clear drawover
+            # Clear drawover and hide toolbar/display options
             self._drawover_canvas.clear()
             self._drawover_canvas.hide()
+            self._annotation_toolbar.hide()
+            # Display options are in bottom bar now
             self._current_drawover_frame = -1
+            self._annotation_frames = []
+            self._strokes_from_hold = False
 
     def _update_preview(self, row: int):
         if row < 0 or row >= len(self._versions):
@@ -657,21 +695,130 @@ class VersionHistoryDialog(QDialog):
         self._frame_timeline.set_total_frames(max(1, self._total_frames))
         self._frame_timeline.set_current_frame(0)
 
-        # Reset annotate mode when switching versions
-        self._drawover_enabled = False
-        self._done_annotate_btn.hide()
-        self._annotation_toolbar.hide()
-
-        # Setup drawover canvas for this version (view-only mode for existing annotations)
+        # Always-on annotation mode - show toolbar, canvas, and display options
+        self._annotation_toolbar.show()
+        # Display options are in bottom bar now
         self._current_drawover_frame = -1  # Reset to force load
-        self._drawover_canvas.read_only = True
-        self._drawover_canvas.set_tool(DrawingTool.NONE)
+        self._strokes_from_hold = False
+
+        # Canvas is always editable (always-on mode)
+        self._drawover_canvas.read_only = False
+        self._drawover_canvas.set_tool(DrawingTool.PEN)
+        self._drawover_canvas.color = self._annotation_toolbar.current_color
+        self._annotation_toolbar.set_tool(DrawingTool.PEN)
+
         self._position_drawover_canvas()
         self._drawover_canvas.show()
         self._load_drawover_for_frame(0)
 
-        # Load review notes
+        # Load review notes and annotation markers
         self._load_review_notes()
+        self._load_annotation_markers()
+
+    def _build_display_options_buttons(self, layout: QHBoxLayout):
+        """Add display options buttons to the bottom bar: Prev | Next | Hide | Hold | Ghost."""
+        from PyQt6.QtWidgets import QPushButton
+        from PyQt6.QtCore import QSize
+
+        # Get theme icon color
+        theme = get_theme_manager().get_current_theme()
+        icon_color = theme.palette.header_icon_color if theme else "#e0e0e0"
+
+        # Button styles
+        btn_style = """
+            QPushButton { background: #2d2d2d; border: 1px solid #444; border-radius: 3px; padding: 4px 8px; }
+            QPushButton:hover { background: #3a3a3a; border-color: #555; }
+            QPushButton:disabled { background: #252525; border-color: #333; color: #666; }
+        """
+        toggle_style = """
+            QPushButton { background: #2d2d2d; border: 1px solid #444; border-radius: 3px; padding: 4px 8px; }
+            QPushButton:hover { background: #3a3a3a; border-color: #555; }
+            QPushButton:checked { background: #4CAF50; border-color: #4CAF50; }
+            QPushButton:disabled { background: #252525; border-color: #333; color: #666; }
+        """
+
+        def make_icon_btn(icon_name, tooltip, checkable=False, style=btn_style):
+            btn = QPushButton()
+            btn.setFixedSize(32, 28)
+            btn.setToolTip(tooltip)
+            btn.setStyleSheet(style)
+            btn.setCheckable(checkable)
+            icon_path = IconLoader.get(icon_name)
+            btn.setIcon(colorize_white_svg(icon_path, icon_color))
+            btn.setIconSize(QSize(18, 18))
+            return btn
+
+        # Previous annotation button
+        self._prev_ann_btn = make_icon_btn("arrow_left", "Previous annotation (A)")
+        self._prev_ann_btn.setEnabled(False)
+        self._prev_ann_btn.clicked.connect(self._on_prev_annotation)
+        layout.addWidget(self._prev_ann_btn)
+
+        # Next annotation button
+        self._next_ann_btn = make_icon_btn("arrow_right", "Next annotation (D)")
+        self._next_ann_btn.setEnabled(False)
+        self._next_ann_btn.clicked.connect(self._on_next_annotation)
+        layout.addWidget(self._next_ann_btn)
+
+        # Hide button (eye icon, toggle)
+        self._hide_btn = make_icon_btn("eye", "Hide annotations (V)", checkable=True, style=toggle_style)
+        self._hide_btn.toggled.connect(self._on_hide_toggled)
+        layout.addWidget(self._hide_btn)
+
+        # Hold button (toggle)
+        self._hold_btn = make_icon_btn("hold_frames", "Hold frames forward (H)", checkable=True, style=toggle_style)
+        self._hold_btn.toggled.connect(self._on_hold_toggled)
+        layout.addWidget(self._hold_btn)
+
+        # Ghost button - CLICK opens popup with settings
+        self._ghost_btn = make_icon_btn("ghost", "Ghost/Onion skin settings (G)", checkable=True, style=toggle_style)
+        self._ghost_btn.clicked.connect(self._on_ghost_btn_clicked)
+        layout.addWidget(self._ghost_btn)
+
+    def _on_ghost_btn_clicked(self, checked: bool):
+        """Handle ghost button click - always show popup for settings."""
+        # Calculate popup position to appear ABOVE the button
+        # Get the popup's size hint first by showing it briefly
+        self._ghost_popup.adjustSize()
+        popup_height = self._ghost_popup.sizeHint().height()
+
+        # Position popup above the button
+        button_top_left = self._ghost_btn.mapToGlobal(self._ghost_btn.rect().topLeft())
+        global_pos = button_top_left
+        global_pos.setY(button_top_left.y() - popup_height - 4)  # 4px gap
+
+        self._ghost_popup.exec(global_pos)
+
+        # Update state based on popup settings
+        settings = self._ghost_popup.get_settings()
+        enabled = settings.get('enabled', False)
+        self._ghost_btn.setChecked(enabled)
+        self._ghost_enabled = enabled
+        if enabled:
+            self._ghost_settings = settings
+        # Reload frame to apply ghost
+        self._load_drawover_for_frame(self._current_drawover_frame)
+
+    def _update_nav_buttons(self):
+        """Update prev/next annotation button states."""
+        # In compare mode, use comparison widget's annotation frames
+        if self._compare_mode and self._comparison_widget.isVisible():
+            annotation_frames = self._comparison_widget.get_annotation_frames()
+            current = self._comparison_widget._current_frame
+        else:
+            annotation_frames = self._annotation_frames
+            current = self._video_preview.current_frame if hasattr(self._video_preview, 'current_frame') else 0
+
+        if not annotation_frames:
+            self._prev_ann_btn.setEnabled(False)
+            self._next_ann_btn.setEnabled(False)
+            return
+
+        has_prev = any(f < current for f in annotation_frames)
+        has_next = any(f > current for f in annotation_frames)
+
+        self._prev_ann_btn.setEnabled(has_prev)
+        self._next_ann_btn.setEnabled(has_next)
 
     def _load_playback_icons(self):
         """Load media control icons matching video preview widget."""
@@ -691,7 +838,10 @@ class VersionHistoryDialog(QDialog):
         # Update notes panel current frame
         self._notes_panel.set_current_frame(frame)
 
-        # Load drawover for new frame (show annotations even when not editing)
+        # Update navigation buttons
+        self._update_nav_buttons()
+
+        # Load drawover for new frame
         if frame != self._current_drawover_frame:
             self._load_drawover_for_frame(frame)
 
@@ -701,6 +851,20 @@ class VersionHistoryDialog(QDialog):
             self._play_btn.setIcon(self._pause_icon)
         else:
             self._play_btn.setIcon(self._play_icon)
+
+    def _on_playback_state_changed(self, is_playing: bool):
+        """Handle playback state changes - update UI and canvas state."""
+        # Update play button icon
+        if is_playing:
+            self._play_btn.setIcon(self._pause_icon)
+            # Make canvas transparent during playback
+            self._drawover_canvas.read_only = True
+            self._drawover_canvas.set_tool(DrawingTool.NONE)
+        else:
+            self._play_btn.setIcon(self._play_icon)
+            # Re-enable drawing when paused
+            self._drawover_canvas.read_only = False
+            self._drawover_canvas.set_tool(DrawingTool.PEN)
 
     def _on_play_clicked(self):
         """Toggle video playback."""
@@ -724,6 +888,29 @@ class VersionHistoryDialog(QDialog):
         if hasattr(self._video_preview, 'seek_to_frame'):
             self._video_preview.seek_to_frame(frame)
         self._frame_timeline.set_current_frame(frame)
+
+    def _on_annotation_marker_clicked(self, frame: int):
+        """Handle click on annotation marker - seek to frame and load annotation."""
+        if hasattr(self._video_preview, 'seek_to_frame'):
+            self._video_preview.seek_to_frame(frame)
+        self._frame_timeline.set_current_frame(frame)
+        self._load_drawover_for_frame(frame)
+
+    def _load_annotation_markers(self):
+        """Load frames with annotations for timeline display and navigation."""
+        if not self._selected_uuid or not self._selected_version_label:
+            self._frame_timeline.set_annotation_frames([])
+            self._annotation_frames = []
+            self._update_nav_buttons()
+            return
+
+        frames = self._drawover_storage.list_frames_with_drawovers(
+            self._selected_uuid, self._selected_version_label
+        )
+        self._annotation_frames = frames
+        self._frame_timeline.set_annotation_frames(frames)
+        # Update navigation buttons
+        self._update_nav_buttons()
 
     # ==================== Review Notes ====================
 
@@ -788,40 +975,93 @@ class VersionHistoryDialog(QDialog):
         # Update timeline playhead
         self._frame_timeline.set_current_frame(frame)
 
-    def _on_annotate_requested(self, frame: int, note_id: int):
-        """
-        Handle request to annotate a specific frame.
+    # ==================== New Display Feature Handlers ====================
 
-        Jumps to the frame and enters annotate mode.
-        """
-        # Seek to frame
-        if hasattr(self._video_preview, 'seek_to_frame'):
-            self._video_preview.seek_to_frame(frame)
-        self._frame_timeline.set_current_frame(frame)
+    def _on_prev_annotation(self):
+        """Jump to previous annotated frame."""
+        # In compare mode, delegate to comparison widget
+        if self._compare_mode and self._comparison_widget.isVisible():
+            self._comparison_widget.navigate_prev_annotation()
+            self._update_nav_buttons()
+            return
 
-        # Enter annotation mode for this frame
-        self._enter_drawover_mode_for_frame(frame)
+        current = self._video_preview.current_frame if hasattr(self._video_preview, 'current_frame') else 0
+        prev_frames = [f for f in self._annotation_frames if f < current]
+        if prev_frames:
+            prev_frame = max(prev_frames)
+            self._video_preview.seek_to_frame(prev_frame)
+            self._frame_timeline.set_current_frame(prev_frame)
 
-    def _enter_drawover_mode_for_frame(self, frame: int):
-        """Enter annotation/drawover mode for a specific frame."""
-        # Pause video
-        if self._video_preview.is_playing:
-            self._video_preview.toggle_playback()
-            self._update_play_button_icon()
+    def _on_next_annotation(self):
+        """Jump to next annotated frame."""
+        # In compare mode, delegate to comparison widget
+        if self._compare_mode and self._comparison_widget.isVisible():
+            self._comparison_widget.navigate_next_annotation()
+            self._update_nav_buttons()
+            return
 
-        # Enable drawover mode
-        self._drawover_enabled = True
-        self._done_annotate_btn.show()
-        self._annotation_toolbar.show()
+        current = self._video_preview.current_frame if hasattr(self._video_preview, 'current_frame') else 0
+        next_frames = [f for f in self._annotation_frames if f > current]
+        if next_frames:
+            next_frame = min(next_frames)
+            self._video_preview.seek_to_frame(next_frame)
+            self._frame_timeline.set_current_frame(next_frame)
 
-        # Position canvas and show it
-        self._position_drawover_canvas()
-        self._drawover_canvas.show()
-        self._drawover_canvas.read_only = False
-        self._drawover_canvas.set_tool(DrawingTool.PEN)
+    def _on_hide_toggled(self, hidden: bool):
+        """Toggle annotation visibility."""
+        self._hide_annotations = hidden
+        # Update button icon
+        theme = get_theme_manager().get_current_theme()
+        icon_color = theme.palette.header_icon_color if theme else "#e0e0e0"
+        icon_name = "eye_off" if hidden else "eye"
+        self._hide_btn.setIcon(colorize_white_svg(IconLoader.get(icon_name), icon_color))
 
-        # Load existing drawover for this frame if any
-        self._load_drawover_for_frame(frame)
+        # In compare mode, delegate to comparison widget
+        if self._compare_mode and self._comparison_widget.isVisible():
+            self._comparison_widget.set_annotations_visible(not hidden)
+            return
+
+        if hidden:
+            self._drawover_canvas.hide()
+        else:
+            self._drawover_canvas.show()
+            # Reload current frame to show annotations
+            self._load_drawover_for_frame(self._current_drawover_frame)
+
+    def _on_hold_toggled(self, enabled: bool):
+        """Toggle hold mode (persist annotations forward)."""
+        self._hold_enabled = enabled
+        # In compare mode, delegate to comparison widget
+        if self._compare_mode and self._comparison_widget.isVisible():
+            self._comparison_widget.set_hold_enabled(enabled)
+            return
+        # Reload current frame to apply hold logic
+        self._load_drawover_for_frame(self._current_drawover_frame)
+
+    def _on_ghost_settings_changed(self, settings: dict):
+        """Handle ghost settings change."""
+        self._ghost_settings = settings
+        enabled = settings.get('enabled', False)
+        self._ghost_enabled = enabled
+        self._ghost_btn.setChecked(enabled)
+        # In compare mode, delegate to comparison widget
+        if self._compare_mode and self._comparison_widget.isVisible():
+            self._comparison_widget.set_ghost_settings(settings)
+            self._comparison_widget.set_ghost_enabled(enabled)
+            return
+        # Reload current frame to apply changes
+        self._load_drawover_for_frame(self._current_drawover_frame)
+
+    def _on_ghost_toggled(self, enabled: bool):
+        """Handle ghost enable/disable toggle."""
+        self._ghost_enabled = enabled
+        self._ghost_btn.setChecked(enabled)
+        # In compare mode, delegate to comparison widget
+        if self._compare_mode and self._comparison_widget.isVisible():
+            self._comparison_widget.set_ghost_enabled(enabled)
+            return
+        # Reload current frame to show/hide ghost
+        self._load_drawover_for_frame(self._current_drawover_frame)
 
     def _on_note_resolve_toggled(self, note_id: int, new_resolved: bool):
         """Toggle note resolved status."""
@@ -910,12 +1150,12 @@ class VersionHistoryDialog(QDialog):
             self._enter_compare_mode()
 
     def _enter_compare_mode(self):
-        # Exit drawover mode if active
-        if self._drawover_enabled:
-            self._exit_drawover_mode()
-
-        # Hide drawover canvas in compare mode
+        # Save current drawover and hide canvas/toolbar/display options in compare mode
+        if not self._strokes_from_hold:
+            self._save_current_drawover()
         self._drawover_canvas.hide()
+        self._annotation_toolbar.hide()
+        # Display options are in bottom bar now
 
         self._compare_mode = True
         self._compare_selections = []
@@ -933,7 +1173,7 @@ class VersionHistoryDialog(QDialog):
 
         # Hide notes panel and shrink table
         self._notes_panel.hide()
-        self._table_container.setFixedWidth(self.TABLE_WIDTH_COMPARE)
+        self._table_container.setMaximumWidth(self.TABLE_WIDTH_COMPARE)
 
     def _exit_compare_mode(self):
         self._compare_mode = False
@@ -950,8 +1190,15 @@ class VersionHistoryDialog(QDialog):
         self._center_widget.show()
         self._notes_panel.show()
 
-        # Restore table width
-        self._table_container.setFixedWidth(self.TABLE_WIDTH_NORMAL)
+        # Restore table width constraints
+        self._table_container.setMaximumWidth(500)
+
+        # Restore annotation toolbar, display options, and canvas if version was selected
+        if self._selected_uuid:
+            self._annotation_toolbar.show()
+            # Display options are in bottom bar now
+            self._drawover_canvas.show()
+            self._load_drawover_for_frame(self._current_drawover_frame)
 
     def _on_compare_selection_changed(self):
         try:
@@ -986,8 +1233,8 @@ class VersionHistoryDialog(QDialog):
                 self._center_widget.show()
                 count_needed = 2 - len(self._compare_selections)
                 self._preview_info_label.setText(f"Select {count_needed} more version(s)")
-        except Exception as e:
-            print(f"Compare error: {e}")
+        except Exception:
+            pass  # Silent fail for compare mode selection changes
 
     def _show_comparison(self):
         if len(self._compare_selections) != 2:
@@ -1015,45 +1262,9 @@ class VersionHistoryDialog(QDialog):
             self._center_widget.hide()
             self._comparison_widget.show()
             self._comparison_widget.set_versions(version_a, version_b, notes_a, notes_b)
+            self._update_nav_buttons()
 
-    # ==================== Drawover Mode ====================
-
-    def _enter_drawover_mode(self):
-        """Enable drawover annotation mode."""
-        self._drawover_enabled = True
-        self._done_annotate_btn.show()
-        self._annotation_toolbar.show()
-
-        # Position drawover canvas over video
-        self._position_drawover_canvas()
-
-        # Show canvas and set default tool (enable editing)
-        self._drawover_canvas.show()
-        self._drawover_canvas.read_only = False
-        self._drawover_canvas.set_tool(DrawingTool.PEN)
-        self._drawover_canvas.color = self._annotation_toolbar.current_color
-        self._annotation_toolbar.set_tool(DrawingTool.PEN)
-
-        # Pause video while annotating
-        if self._video_preview.is_playing:
-            self._video_preview.toggle_playback()
-            self._update_play_button_icon()
-
-        # Load drawover for current frame
-        self._load_drawover_for_frame(self._video_preview.current_frame)
-
-    def _exit_drawover_mode(self):
-        """Disable drawover annotation mode."""
-        # Save current frame's drawover before exiting
-        self._save_current_drawover()
-
-        self._drawover_enabled = False
-        self._done_annotate_btn.hide()
-        self._annotation_toolbar.hide()
-
-        # Reload frame to update canvas visibility (only show if has saved annotations)
-        current_frame = self._video_preview.current_frame
-        self._load_drawover_for_frame(current_frame)
+    # ==================== Drawover Canvas Positioning ====================
 
     def _position_drawover_canvas(self):
         """
@@ -1099,17 +1310,63 @@ class VersionHistoryDialog(QDialog):
         self._drawover_canvas.refresh_strokes()
 
     def _load_drawover_for_frame(self, frame: int):
-        """Load drawover data for a specific frame."""
+        """Load drawover data for a specific frame with Hold and Ghost support."""
         if not self._selected_uuid or not self._selected_version_label:
             return
 
-        # Save previous frame's drawover first (only if in edit mode)
-        if self._drawover_enabled and self._current_drawover_frame >= 0 and self._current_drawover_frame != frame:
-            self._save_current_drawover()
+        # Save previous frame's drawover first (only if strokes were NOT from Hold)
+        if self._current_drawover_frame >= 0 and self._current_drawover_frame != frame:
+            if not self._strokes_from_hold:
+                self._save_current_drawover()
 
         self._current_drawover_frame = frame
+        self._strokes_from_hold = False  # Reset flag
 
-        # Check cache first
+        # Handle Hide mode - just hide canvas
+        if self._hide_annotations:
+            self._drawover_canvas.hide()
+            return
+
+        # Reposition canvas to match current video rect
+        self._position_drawover_canvas()
+
+        # Clear ghost strokes first
+        self._drawover_canvas.clear_ghost_strokes()
+
+        # Load strokes for current frame (or held frame if Hold enabled)
+        strokes, canvas_size, from_hold = self._get_strokes_for_frame(frame)
+        self._strokes_from_hold = from_hold
+
+        # Import main strokes to canvas
+        source_size = tuple(canvas_size) if canvas_size else None
+        self._drawover_canvas.import_strokes(strokes, source_size)
+
+        # Handle Ghost mode - add ghost strokes from neighboring frames
+        if self._ghost_enabled:
+            self._add_ghost_strokes_for_frame(frame)
+
+        # Always show canvas (always-on mode)
+        self._drawover_canvas.show()
+        # Only enable drawing when video is NOT playing
+        if not self._video_preview.is_playing:
+            self._drawover_canvas.read_only = False
+            self._drawover_canvas.set_tool(DrawingTool.PEN)
+        else:
+            # During playback, make canvas transparent for mouse events
+            self._drawover_canvas.read_only = True
+            self._drawover_canvas.set_tool(DrawingTool.NONE)
+
+        # Update undo/redo button states
+        self._update_drawover_buttons()
+
+    def _get_strokes_for_frame(self, frame: int) -> tuple:
+        """
+        Get strokes for a frame, with Hold mode support.
+
+        Returns (strokes, canvas_size, from_hold) tuple.
+        from_hold is True if strokes came from a previous frame via Hold mode.
+        """
+        # Check cache first for current frame
         cached = self._drawover_cache.get(
             self._selected_uuid,
             self._selected_version_label,
@@ -1119,53 +1376,142 @@ class VersionHistoryDialog(QDialog):
         if cached:
             strokes = cached.get('strokes', [])
             canvas_size = cached.get('canvas_size')
-        else:
-            # Load from storage
-            data = self._drawover_storage.load_drawover(
+            if strokes:
+                return strokes, canvas_size, False  # Not from hold
+
+        # Load from storage
+        data = self._drawover_storage.load_drawover(
+            self._selected_uuid,
+            self._selected_version_label,
+            frame
+        )
+        if data:
+            strokes = data.get('strokes', [])
+            canvas_size = data.get('canvas_size')
+            self._drawover_cache.put(
                 self._selected_uuid,
                 self._selected_version_label,
-                frame
+                frame,
+                data
             )
-            if data:
-                strokes = data.get('strokes', [])
-                canvas_size = data.get('canvas_size')
-                self._drawover_cache.put(
+            if strokes:
+                return strokes, canvas_size, False  # Not from hold
+
+        # If Hold enabled and no strokes for current frame, search backwards
+        if self._hold_enabled and self._annotation_frames:
+            # Find the nearest previous frame with annotations
+            prev_frames = [f for f in self._annotation_frames if f < frame]
+            if prev_frames:
+                held_frame = max(prev_frames)
+                cached = self._drawover_cache.get(
                     self._selected_uuid,
                     self._selected_version_label,
-                    frame,
-                    data
+                    held_frame
                 )
-            else:
-                strokes = []
-                canvas_size = None
+                if cached:
+                    return cached.get('strokes', []), cached.get('canvas_size'), True  # From hold
 
-        # Reposition canvas to match current video rect
-        self._position_drawover_canvas()
+                data = self._drawover_storage.load_drawover(
+                    self._selected_uuid,
+                    self._selected_version_label,
+                    held_frame
+                )
+                if data:
+                    strokes = data.get('strokes', [])
+                    canvas_size = data.get('canvas_size')
+                    self._drawover_cache.put(
+                        self._selected_uuid,
+                        self._selected_version_label,
+                        held_frame,
+                        data
+                    )
+                    return strokes, canvas_size, True  # From hold
 
-        # Import strokes to canvas
-        source_size = tuple(canvas_size) if canvas_size else None
-        self._drawover_canvas.import_strokes(strokes, source_size)
+        return [], None, False
 
-        # Control canvas visibility based on mode and data
-        if self._drawover_enabled:
-            # In annotate mode - always show canvas (editable)
-            self._drawover_canvas.show()
-            self._drawover_canvas.read_only = False
-        elif strokes:
-            # Not in annotate mode but has saved annotations - show read-only
-            self._drawover_canvas.show()
-            self._drawover_canvas.read_only = True
-            self._drawover_canvas.set_tool(DrawingTool.NONE)
+    def _add_ghost_strokes_for_frame(self, frame: int):
+        """Add ghost/onion skin strokes from neighboring frames."""
+        before_count = self._ghost_settings.get('before_frames', 2)
+        after_count = self._ghost_settings.get('after_frames', 2)
+        before_color = self._ghost_settings.get('before_color', QColor("#FF5555"))
+        after_color = self._ghost_settings.get('after_color', QColor("#55FF55"))
+        sketches_only = self._ghost_settings.get('sketches_only', True)
+
+        if sketches_only:
+            # "Consider only sketches" mode - only show ghost from frames that have annotations
+            if not self._annotation_frames:
+                return
+
+            # Find annotation frames before current frame
+            before_frames = sorted([f for f in self._annotation_frames if f < frame], reverse=True)
+            before_frames = before_frames[:before_count]
+
+            # Find annotation frames after current frame
+            after_frames = sorted([f for f in self._annotation_frames if f > frame])
+            after_frames = after_frames[:after_count]
         else:
-            # No annotations and not in annotate mode - hide canvas
-            self._drawover_canvas.hide()
+            # "Consider all frames" mode - show ghost from exactly N frames before/after
+            # even if those frames don't have annotations
+            before_frames = [frame - i for i in range(1, before_count + 1) if frame - i >= 0]
+            after_frames = [frame + i for i in range(1, after_count + 1) if frame + i < self._total_frames]
 
-        # Update undo/redo button states
-        self._update_drawover_buttons()
+        # Add ghost strokes for "before" frames (red tint)
+        for idx, ghost_frame in enumerate(before_frames):
+            strokes, canvas_size = self._load_strokes_from_storage(ghost_frame)
+            if strokes:
+                # Opacity decreases with distance
+                distance = idx + 1
+                opacity = 0.5 / distance
+                self._drawover_canvas.add_ghost_strokes(
+                    strokes, before_color, opacity,
+                    tuple(canvas_size) if canvas_size else None
+                )
+
+        # Add ghost strokes for "after" frames (green tint)
+        for idx, ghost_frame in enumerate(after_frames):
+            strokes, canvas_size = self._load_strokes_from_storage(ghost_frame)
+            if strokes:
+                # Opacity decreases with distance
+                distance = idx + 1
+                opacity = 0.5 / distance
+                self._drawover_canvas.add_ghost_strokes(
+                    strokes, after_color, opacity,
+                    tuple(canvas_size) if canvas_size else None
+                )
+
+    def _load_strokes_from_storage(self, frame: int) -> tuple:
+        """Load strokes from storage (with caching)."""
+        cached = self._drawover_cache.get(
+            self._selected_uuid,
+            self._selected_version_label,
+            frame
+        )
+        if cached:
+            return cached.get('strokes', []), cached.get('canvas_size')
+
+        data = self._drawover_storage.load_drawover(
+            self._selected_uuid,
+            self._selected_version_label,
+            frame
+        )
+        if data:
+            self._drawover_cache.put(
+                self._selected_uuid,
+                self._selected_version_label,
+                frame,
+                data
+            )
+            return data.get('strokes', []), data.get('canvas_size')
+
+        return [], None
 
     def _save_current_drawover(self):
         """Save current frame's drawover to storage."""
         if self._current_drawover_frame < 0 or not self._selected_uuid or not self._selected_version_label:
+            return
+
+        # CRITICAL: Never save strokes that came from Hold mode (they belong to another frame)
+        if self._strokes_from_hold:
             return
 
         strokes = self._drawover_canvas.export_strokes()
@@ -1217,9 +1563,28 @@ class VersionHistoryDialog(QDialog):
                     ','.join(authors)
                 )
 
+                # Update annotation markers on timeline
+                self._load_annotation_markers()
+
+    def _on_drawing_started(self):
+        """Handle drawing start - clear held strokes if drawing on a held frame."""
+        # If starting to draw on a held frame, clear the canvas first
+        # User wants to create a fresh annotation, not include the held strokes
+        if self._strokes_from_hold:
+            self._drawover_canvas.clear()
+            self._strokes_from_hold = False
+
     def _on_drawover_modified(self):
         """Handle drawover canvas modification."""
         self._update_drawover_buttons()
+
+    def _on_drawing_finished(self):
+        """Handle stroke completion - save immediately and update timeline markers."""
+        # Save current annotation immediately
+        self._save_current_drawover()
+
+        # Update timeline markers to show the new annotation
+        self._load_annotation_markers()
 
     def _on_tool_selected(self, tool: DrawingTool):
         """Handle tool selection from compact toolbar."""
@@ -1228,6 +1593,14 @@ class VersionHistoryDialog(QDialog):
     def _on_draw_color_changed(self, color: QColor):
         """Handle color change from ColorPicker widget."""
         self._drawover_canvas.color = color
+
+    def _on_brush_size_changed(self, size: int):
+        """Handle brush size slider change."""
+        self._drawover_canvas.brush_size = size
+
+    def _on_opacity_changed(self, opacity: float):
+        """Handle opacity slider change."""
+        self._drawover_canvas.opacity = opacity
 
     def _on_drawover_undo(self):
         """Undo last stroke."""
@@ -1240,48 +1613,48 @@ class VersionHistoryDialog(QDialog):
         self._update_drawover_buttons()
 
     def _on_drawover_clear(self):
-        """Clear all strokes on current frame."""
+        """Clear all strokes on current frame - immediate, no confirmation."""
         from PyQt6.QtWidgets import QMessageBox
-        reply = QMessageBox.question(
-            self,
-            "Clear Annotations",
-            "Clear all annotations on this frame?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            # Check permissions for clearing in studio mode
-            if self._is_studio_mode:
-                strokes = self._drawover_canvas.export_strokes()
-                has_others = any(
-                    s.get('author', '') and s.get('author') != self._current_user
-                    for s in strokes
+
+        # If showing held strokes from another frame, can't clear
+        if self._strokes_from_hold:
+            return
+
+        # Check if there are any strokes to clear
+        strokes = self._drawover_canvas.export_strokes()
+        if not strokes:
+            return
+
+        # Check permissions for clearing in studio mode
+        if self._is_studio_mode:
+            has_others = any(
+                s.get('author', '') and s.get('author') != self._current_user
+                for s in strokes
+            )
+            if not DrawoverPermissions.can_clear_frame(
+                self._is_studio_mode,
+                self._current_user_role,
+                has_others
+            ):
+                QMessageBox.warning(
+                    self,
+                    "Permission Denied",
+                    "You don't have permission to clear annotations from other users."
                 )
-                if not DrawoverPermissions.can_clear_frame(
-                    self._is_studio_mode,
-                    self._current_user_role,
-                    has_others
-                ):
-                    QMessageBox.warning(
-                        self,
-                        "Permission Denied",
-                        "You don't have permission to clear annotations from other users."
-                    )
-                    return
+                return
 
-            self._drawover_canvas.clear()
-            self._update_drawover_buttons()
+        # Clear from storage
+        if self._selected_uuid and self._selected_version_label:
+            soft_delete = DrawoverPermissions.use_soft_delete(self._is_studio_mode)
+            success = self._drawover_storage.clear_frame(
+                self._selected_uuid,
+                self._selected_version_label,
+                self._current_drawover_frame,
+                soft_delete=soft_delete,
+                deleted_by=self._current_user
+            )
 
-            # Clear from storage
-            if self._selected_uuid and self._selected_version_label:
-                soft_delete = DrawoverPermissions.use_soft_delete(self._is_studio_mode)
-                self._drawover_storage.clear_frame(
-                    self._selected_uuid,
-                    self._selected_version_label,
-                    self._current_drawover_frame,
-                    soft_delete=soft_delete,
-                    deleted_by=self._current_user
-                )
-
+            if success:
                 # Invalidate cache for this frame
                 self._drawover_cache.invalidate(
                     self._selected_uuid,
@@ -1300,20 +1673,333 @@ class VersionHistoryDialog(QDialog):
                         self._current_user_role
                     )
 
+                # Update annotation markers on timeline
+                self._load_annotation_markers()
+
+        # Clear canvas
+        self._drawover_canvas.clear()
+        self._drawover_canvas.update()
+        self._update_drawover_buttons()
+
     def _update_drawover_buttons(self):
         """Update undo/redo button enabled states."""
         if hasattr(self, '_annotation_toolbar'):
             self._annotation_toolbar.set_undo_enabled(self._drawover_canvas.undo_stack.canUndo())
             self._annotation_toolbar.set_redo_enabled(self._drawover_canvas.undo_stack.canRedo())
 
+    def _on_drawover_delete_all(self):
+        """Delete ALL annotations on ALL frames - nuclear option."""
+        if not self._selected_uuid or not self._selected_version_label:
+            QMessageBox.information(
+                self,
+                "No Version Selected",
+                "Please select a version first."
+            )
+            return
+
+        # Get all frames with annotations
+        frames = self._drawover_storage.list_frames_with_drawovers(
+            self._selected_uuid,
+            self._selected_version_label
+        )
+
+        if not frames:
+            QMessageBox.information(
+                self,
+                "No Annotations",
+                "This version has no annotations to delete."
+            )
+            return
+
+        # Show serious warning
+        reply = QMessageBox.warning(
+            self,
+            "DELETE ALL ANNOTATIONS",
+            f"⚠️ WARNING: You are about to DELETE ALL {len(frames)} annotation(s) "
+            f"on ALL frames for this version.\n\n"
+            f"Affected frames: {', '.join(str(f) for f in frames[:10])}"
+            f"{'...' if len(frames) > 10 else ''}\n\n"
+            f"This action cannot be undone!\n\n"
+            f"Are you absolutely sure?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No  # Default to No
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # Second confirmation for extra safety
+        reply2 = QMessageBox.critical(
+            self,
+            "FINAL CONFIRMATION",
+            f"This will PERMANENTLY delete all {len(frames)} annotations.\n\n"
+            "Type 'DELETE' in your mind and click Yes to confirm.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply2 != QMessageBox.StandardButton.Yes:
+            return
+
+        # Delete all annotations
+        deleted_count = 0
+        failed_count = 0
+
+        for frame in frames:
+            # Use hard delete (not soft delete) for nuclear option
+            success = self._drawover_storage.delete_drawover(
+                self._selected_uuid,
+                self._selected_version_label,
+                frame
+            )
+            if success:
+                deleted_count += 1
+                # Invalidate cache
+                self._drawover_cache.invalidate(
+                    self._selected_uuid,
+                    self._selected_version_label,
+                    frame
+                )
+            else:
+                failed_count += 1
+
+        # Clear current canvas
+        self._drawover_canvas.clear()
+        self._update_drawover_buttons()
+
+        # Update timeline markers
+        self._load_annotation_markers()
+
+        # Show result
+        if failed_count == 0:
+            QMessageBox.information(
+                self,
+                "Annotations Deleted",
+                f"Successfully deleted all {deleted_count} annotations."
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "Partial Success",
+                f"Deleted {deleted_count} annotations, but {failed_count} failed to delete."
+            )
+
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts for annotation features."""
+        if not event.modifiers():
+            key = event.key()
+
+            # A - Previous annotation
+            if key == Qt.Key.Key_A:
+                if self._selected_uuid and self._prev_ann_btn.isEnabled():
+                    self._on_prev_annotation()
+                    return
+
+            # D - Next annotation
+            elif key == Qt.Key.Key_D:
+                if self._selected_uuid and self._next_ann_btn.isEnabled():
+                    self._on_next_annotation()
+                    return
+
+            # V - Toggle visibility (hide)
+            elif key == Qt.Key.Key_V:
+                if self._selected_uuid:
+                    self._hide_btn.setChecked(not self._hide_annotations)
+                    return
+
+            # H - Toggle hold mode
+            elif key == Qt.Key.Key_H:
+                if self._selected_uuid:
+                    self._hold_btn.setChecked(not self._hold_enabled)
+                    return
+
+            # G - Toggle ghost/onion skin
+            elif key == Qt.Key.Key_G:
+                if self._selected_uuid:
+                    self._ghost_btn.setChecked(not self._ghost_enabled)
+                    return
+
+            # P - Pen tool
+            elif key == Qt.Key.Key_P:
+                if self._selected_uuid and not self._strokes_from_hold:
+                    self._annotation_toolbar.set_tool(DrawingTool.PEN)
+                    self._drawover_canvas.set_tool(DrawingTool.PEN)
+                    return
+
+            # B - Brush tool (pressure sensitive)
+            elif key == Qt.Key.Key_B:
+                if self._selected_uuid and not self._strokes_from_hold:
+                    self._annotation_toolbar.set_tool(DrawingTool.BRUSH)
+                    self._drawover_canvas.set_tool(DrawingTool.BRUSH)
+                    return
+
+            # L - Line tool
+            elif key == Qt.Key.Key_L:
+                if self._selected_uuid and not self._strokes_from_hold:
+                    self._annotation_toolbar.set_tool(DrawingTool.LINE)
+                    self._drawover_canvas.set_tool(DrawingTool.LINE)
+                    return
+
+            # R - Rectangle tool
+            elif key == Qt.Key.Key_R:
+                if self._selected_uuid and not self._strokes_from_hold:
+                    self._annotation_toolbar.set_tool(DrawingTool.RECT)
+                    self._drawover_canvas.set_tool(DrawingTool.RECT)
+                    return
+
+            # C - Circle tool
+            elif key == Qt.Key.Key_C:
+                if self._selected_uuid and not self._strokes_from_hold:
+                    self._annotation_toolbar.set_tool(DrawingTool.CIRCLE)
+                    self._drawover_canvas.set_tool(DrawingTool.CIRCLE)
+                    return
+
+        super().keyPressEvent(event)
+
     def closeEvent(self, event):
-        # Save any pending drawover changes
-        if self._drawover_enabled:
+        # Save any pending drawover changes (only if not from Hold mode)
+        if not self._strokes_from_hold:
             self._save_current_drawover()
+
+        # Cancel any running export
+        if self._export_worker and self._export_worker.isRunning():
+            self._export_worker.cancel()
+            self._export_worker.wait(2000)
 
         self._video_preview.clear()
         self._comparison_widget.clear()
         super().closeEvent(event)
+
+    # ==================== Export with Annotations ====================
+
+    def _on_export_with_annotations(self):
+        """Handle Export with Annotations button click."""
+        if not self._selected_uuid or not self._selected_version_label:
+            QMessageBox.warning(self, "Error", "No version selected.")
+            return
+
+        # Get the selected version info
+        selected_version = None
+        for v in self._versions:
+            if v.get('uuid') == self._selected_uuid:
+                selected_version = v
+                break
+
+        if not selected_version:
+            QMessageBox.warning(self, "Error", "Could not find selected version.")
+            return
+
+        # Check for preview video
+        preview_path = selected_version.get('preview_path', '')
+        if not preview_path or not Path(preview_path).exists():
+            QMessageBox.warning(
+                self, "No Preview",
+                "This version does not have a preview video to export."
+            )
+            return
+
+        # Check for FFmpeg
+        if not find_ffmpeg():
+            QMessageBox.warning(
+                self, "FFmpeg Required",
+                "FFmpeg is required to export video with annotations.\n\n"
+                "Please install FFmpeg:\n"
+                "1. Download from https://ffmpeg.org/download.html\n"
+                "2. Add the 'bin' folder to your system PATH\n"
+                "3. Restart the application"
+            )
+            return
+
+        # Generate output filename
+        animation_name = selected_version.get('name', 'animation')
+        filename = generate_export_filename(animation_name, self._selected_version_label)
+        output_path = str(get_reviews_folder() / filename)
+        self._export_output_path = output_path
+
+        # Get FPS
+        fps = selected_version.get('fps', 24) or 24
+
+        # Create progress dialog
+        self._export_progress = QProgressDialog(
+            "Preparing export...", "Cancel", 0, 100, self
+        )
+        self._export_progress.setWindowTitle("Exporting with Annotations")
+        self._export_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._export_progress.setMinimumDuration(0)
+        self._export_progress.setValue(0)
+        self._export_progress.canceled.connect(self._on_export_cancelled)
+
+        # Create and start worker
+        self._export_worker = AnnotatedExportWorker(
+            video_path=preview_path,
+            output_path=output_path,
+            animation_uuid=self._selected_uuid,
+            version_label=self._selected_version_label,
+            fps=fps,
+            parent=self
+        )
+        self._export_worker.progress.connect(self._on_export_progress)
+        self._export_worker.finished.connect(self._on_export_finished)
+        self._export_worker.start()
+
+    def _on_export_progress(self, current: int, total: int, message: str):
+        """Handle export progress update."""
+        if self._export_progress:
+            if total > 0:
+                percent = int((current / total) * 100)
+                self._export_progress.setValue(percent)
+                self._export_progress.setLabelText(message)
+            else:
+                # Indeterminate progress (encoding phase)
+                self._export_progress.setRange(0, 0)
+                self._export_progress.setLabelText(message)
+
+    def _on_export_cancelled(self):
+        """Handle export cancellation."""
+        if self._export_worker:
+            self._export_worker.cancel()
+
+    def _on_export_finished(self, success: bool, message: str):
+        """Handle export completion."""
+        # Close progress dialog
+        if self._export_progress:
+            self._export_progress.close()
+            self._export_progress = None
+
+        if success:
+            # Show success dialog with option to open folder
+            import subprocess
+            import sys
+
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Information)
+            msg_box.setWindowTitle("Export Complete")
+            msg_box.setText("Video exported successfully!")
+            msg_box.setInformativeText(f"Saved to:\n{self._export_output_path}")
+
+            open_btn = msg_box.addButton("Open Folder", QMessageBox.ButtonRole.ActionRole)
+            msg_box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+
+            msg_box.exec()
+
+            if msg_box.clickedButton() == open_btn:
+                # Open containing folder
+                folder_path = str(Path(self._export_output_path).parent)
+                if sys.platform == 'win32':
+                    subprocess.run(['explorer', '/select,', self._export_output_path], check=False)
+                elif sys.platform == 'darwin':
+                    subprocess.run(['open', '-R', self._export_output_path], check=False)
+                else:
+                    subprocess.run(['xdg-open', folder_path], check=False)
+        else:
+            if "cancelled" not in message.lower():
+                QMessageBox.critical(
+                    self, "Export Failed",
+                    f"Failed to export video:\n\n{message}"
+                )
+
+        self._export_worker = None
+        self._export_output_path = None
 
 
 __all__ = ['VersionHistoryDialog']

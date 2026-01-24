@@ -14,6 +14,8 @@ Uses the protocol package for consistent message building and validation.
 import json
 import logging
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -86,14 +88,21 @@ class BlenderService:
         self._init_queue_dir()
 
     def _cleanup_old_queue_files(self):
-        """Remove old-style queue files (apply_*.json with timestamps)"""
+        """Remove stale queue files older than 1 hour"""
         try:
-            old_files = [f for f in self._queue_dir.glob("apply_*.json")
-                        if f.name != self.APPLY_FILE]
-            for file in old_files:
-                file.unlink()
-        except Exception:
-            pass  # Silently ignore cleanup errors
+            import time
+            cutoff_time = time.time() - 3600  # 1 hour ago
+
+            for file in self._queue_dir.glob("apply_*.json"):
+                try:
+                    # Check file age
+                    if file.stat().st_mtime < cutoff_time:
+                        file.unlink()
+                        logger.debug(f"Removed stale queue file: {file.name}")
+                except Exception as e:
+                    logger.debug(f"Could not remove old queue file {file}: {e}")
+        except Exception as e:
+            logger.debug(f"Error during queue cleanup: {e}")
 
     def queue_apply_animation(
         self,
@@ -158,16 +167,26 @@ class BlenderService:
         animation_name: str,
         options: dict
     ) -> bool:
-        """File-based fallback for animation application"""
+        """File-based fallback for animation application.
+
+        Uses timestamped unique filenames to prevent overwrites on rapid clicks.
+        Format: apply_{timestamp}_{uuid}.json
+        """
         try:
-            apply_file = self._queue_dir / self.APPLY_FILE
+            # Generate unique filename with timestamp to prevent overwrites
+            timestamp = int(time.time() * 1000)  # Millisecond precision
+            unique_id = str(uuid.uuid4())[:8]  # Short unique suffix
+            apply_file = self._queue_dir / f"apply_{timestamp}_{unique_id}.json"
 
             # Build message using protocol (adds type, timestamp automatically)
             request_data = build_apply_animation(animation_id, animation_name, options)
             request_data['status'] = MessageStatus.PENDING
 
-            with open(apply_file, 'w') as f:
+            # Atomic write: write to temp file, then rename
+            temp_file = apply_file.with_suffix('.tmp')
+            with open(temp_file, 'w') as f:
                 json.dump(request_data, f, indent=2)
+            temp_file.rename(apply_file)
 
             logger.debug(f"Wrote queue file: {apply_file}")
             return True
@@ -228,16 +247,26 @@ class BlenderService:
         blend_file_path: str,
         mirror: bool = False
     ) -> bool:
-        """File-based fallback for pose application"""
+        """File-based fallback for pose application.
+
+        Uses timestamped unique filenames to prevent overwrites on rapid clicks.
+        Format: apply_{timestamp}_{uuid}.json
+        """
         try:
-            apply_file = self._queue_dir / self.APPLY_FILE
+            # Generate unique filename with timestamp to prevent overwrites
+            timestamp = int(time.time() * 1000)  # Millisecond precision
+            unique_id = str(uuid.uuid4())[:8]  # Short unique suffix
+            apply_file = self._queue_dir / f"apply_{timestamp}_{unique_id}.json"
 
             # Build message using protocol (adds type, timestamp automatically)
             request_data = build_apply_pose(pose_id, pose_name, blend_file_path, mirror)
             request_data['status'] = MessageStatus.PENDING
 
-            with open(apply_file, 'w') as f:
+            # Atomic write: write to temp file, then rename
+            temp_file = apply_file.with_suffix('.tmp')
+            with open(temp_file, 'w') as f:
                 json.dump(request_data, f, indent=2)
+            temp_file.rename(apply_file)
 
             logger.debug(f"Wrote pose queue file: {apply_file}")
             return True
@@ -248,25 +277,29 @@ class BlenderService:
 
     def get_queue_size(self) -> int:
         """
-        Check if there's a pending request
+        Count pending requests in queue.
 
         Returns:
-            1 if pending request exists, 0 otherwise
+            Number of pending apply_*.json files
         """
         try:
-            apply_file = self._queue_dir / self.APPLY_FILE
-            return 1 if apply_file.exists() else 0
+            # Count all apply_*.json files (new timestamped pattern)
+            apply_files = list(self._queue_dir.glob("apply_*.json"))
+            return len(apply_files)
         except Exception:
             return 0
 
     def clear_queue(self):
-        """Clear pending request"""
+        """Clear all pending requests"""
         try:
-            apply_file = self._queue_dir / self.APPLY_FILE
-            if apply_file.exists():
-                apply_file.unlink()
-        except Exception:
-            pass  # Silently ignore clear errors
+            # Remove all apply_*.json files (new timestamped pattern)
+            for apply_file in self._queue_dir.glob("apply_*.json"):
+                try:
+                    apply_file.unlink()
+                except Exception as e:
+                    logger.warning(f"Failed to remove queue file {apply_file}: {e}")
+        except Exception as e:
+            logger.warning(f"Error clearing queue: {e}")
 
     def get_queue_directory(self) -> Path:
         """

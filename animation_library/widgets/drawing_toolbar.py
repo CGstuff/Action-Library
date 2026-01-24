@@ -13,13 +13,14 @@ from typing import Optional, List
 
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QSlider,
-    QLabel, QFrame, QButtonGroup, QColorDialog, QToolTip,
-    QSizePolicy, QMenu
+    QLabel, QFrame, QButtonGroup, QColorDialog
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QPoint
-from PyQt6.QtGui import QColor, QIcon, QPixmap, QPainter, QCursor
+from PyQt6.QtCore import Qt, pyqtSignal, QSize
+from PyQt6.QtGui import QColor, QIcon, QPixmap, QPainter
+from PyQt6.QtSvg import QSvgRenderer
 
 from .drawover_canvas import DrawingTool
+from ..utils.icon_loader import IconLoader
 
 
 class ColorButton(QPushButton):
@@ -27,10 +28,12 @@ class ColorButton(QPushButton):
 
     color_changed = pyqtSignal(QColor)
 
-    def __init__(self, color: QColor, parent: Optional[QWidget] = None):
+    def __init__(self, color: QColor, circular: bool = False, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._color = color
-        self.setFixedSize(28, 28)
+        self._circular = circular
+        self._size = 24 if circular else 28
+        self.setFixedSize(self._size, self._size)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._update_style()
         self.clicked.connect(self._on_clicked)
@@ -45,20 +48,68 @@ class ColorButton(QPushButton):
         self._update_style()
 
     def _update_style(self):
-        self.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {self._color.name()};
-                border: 2px solid #555;
-                border-radius: 0px;
-            }}
-            QPushButton:hover {{
-                border-color: #888;
-            }}
-            QPushButton:checked {{
-                border-color: #fff;
-                border-width: 3px;
-            }}
-        """)
+        if self._circular:
+            # Use colored circle icon for circular buttons
+            self._update_circle_icon()
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent;
+                    border: none;
+                }}
+                QPushButton:hover {{
+                    background: rgba(255, 255, 255, 0.1);
+                }}
+            """)
+        else:
+            # Square color swatch
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {self._color.name()};
+                    border: 2px solid #555;
+                    border-radius: 0px;
+                }}
+                QPushButton:hover {{
+                    border-color: #888;
+                }}
+                QPushButton:checked {{
+                    border-color: #fff;
+                    border-width: 3px;
+                }}
+            """)
+
+    def _update_circle_icon(self):
+        """Create a colored circle icon."""
+        # Load and colorize the circle SVG
+        icon_path = IconLoader.get("color_circle")
+        if not icon_path:
+            return
+
+        # Create pixmap and render SVG with color replacement
+        pixmap = QPixmap(self._size, self._size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        renderer = QSvgRenderer(icon_path)
+        painter = QPainter(pixmap)
+
+        # Render the SVG
+        renderer.render(painter)
+        painter.end()
+
+        # Now colorize - replace the white fill with our color
+        image = pixmap.toImage()
+        for y in range(image.height()):
+            for x in range(image.width()):
+                pixel = image.pixelColor(x, y)
+                if pixel.alpha() > 0:
+                    # Check if it's the white fill (not the gray border)
+                    if pixel.red() > 200 and pixel.green() > 200 and pixel.blue() > 200:
+                        # Replace white with our color, keep alpha
+                        new_color = QColor(self._color)
+                        new_color.setAlpha(pixel.alpha())
+                        image.setPixelColor(x, y, new_color)
+
+        self.setIcon(QIcon(QPixmap.fromImage(image)))
+        self.setIconSize(QSize(self._size, self._size))
 
     def _on_clicked(self):
         self.color_changed.emit(self._color)
@@ -69,17 +120,13 @@ class ColorPicker(QWidget):
 
     color_changed = pyqtSignal(QColor)
 
+    # Simple 5-color preset palette for annotations
     PRESET_COLORS = [
-        '#FF5722',  # Orange (default)
-        '#F44336',  # Red
-        '#E91E63',  # Pink
-        '#9C27B0',  # Purple
-        '#2196F3',  # Blue
-        '#00BCD4',  # Cyan
-        '#4CAF50',  # Green
-        '#FFEB3B',  # Yellow
-        '#FFFFFF',  # White
-        '#000000',  # Black
+        ('#F44336', 'Red'),
+        ('#FFEB3B', 'Yellow'),
+        ('#4CAF50', 'Green'),
+        ('#000000', 'Black'),
+        ('#FFFFFF', 'White'),
     ]
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -94,23 +141,21 @@ class ColorPicker(QWidget):
 
         # Current color display button (opens color dialog)
         self._current_btn = QPushButton()
-        self._current_btn.setFixedSize(32, 32)
+        self._current_btn.setFixedSize(28, 28)  # Square main picker
         self._current_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._current_btn.setToolTip("Current color - Click to open color picker")
         self._current_btn.clicked.connect(self._open_color_dialog)
         self._update_current_button()
         layout.addWidget(self._current_btn)
 
-        # Separator
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet("background: #555; max-width: 1px;")
-        layout.addWidget(sep)
+        # Spacer between main picker and presets
+        layout.addSpacing(8)
 
-        # Preset color buttons
+        # Preset color buttons (circular to differentiate from main picker)
         self._preset_buttons: List[ColorButton] = []
-        for color_hex in self.PRESET_COLORS:
-            btn = ColorButton(QColor(color_hex))
+        for color_hex, color_name in self.PRESET_COLORS:
+            btn = ColorButton(QColor(color_hex), circular=True)
+            btn.setToolTip(color_name)
             btn.color_changed.connect(self._on_preset_clicked)
             self._preset_buttons.append(btn)
             layout.addWidget(btn)

@@ -151,11 +151,19 @@ class DrawoverStorage:
             return False
 
     def has_drawover(self, animation_uuid: str, version: str, frame: int) -> bool:
-        """Check if a frame has drawover data."""
-        return self.get_drawover_path(animation_uuid, version, frame).exists()
+        """Check if a frame has actual strokes (not just soft-deleted)."""
+        path = self.get_drawover_path(animation_uuid, version, frame)
+        if not path.exists():
+            return False
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return bool(data.get('strokes', []))
+        except (json.JSONDecodeError, IOError):
+            return False
 
     def list_frames_with_drawovers(self, animation_uuid: str, version: str) -> List[int]:
-        """Get list of frames that have drawovers."""
+        """Get list of frames that have actual strokes (not soft-deleted)."""
         drawover_dir = self.get_drawover_dir(animation_uuid, version)
         if not drawover_dir.exists():
             return []
@@ -165,8 +173,15 @@ class DrawoverStorage:
             try:
                 # Extract frame number from filename (f0125.json -> 125)
                 frame_str = path.stem[1:]  # Remove 'f' prefix
-                frames.append(int(frame_str))
-            except ValueError:
+                frame_num = int(frame_str)
+
+                # Check if the file actually has strokes (not just soft-deleted)
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    strokes = data.get('strokes', [])
+                    if strokes:  # Only include if there are actual strokes
+                        frames.append(frame_num)
+            except (ValueError, json.JSONDecodeError, IOError):
                 continue
 
         return sorted(frames)
@@ -312,8 +327,20 @@ class DrawoverStorage:
         deleted_by: str = ''
     ) -> bool:
         """Clear all strokes on a frame."""
+        print(f"[DEBUG Storage.clear_frame] uuid={animation_uuid}, version={version}, frame={frame}")
+        print(f"[DEBUG Storage.clear_frame] soft_delete={soft_delete}, deleted_by={deleted_by}")
+
+        path = self.get_drawover_path(animation_uuid, version, frame)
+        print(f"[DEBUG Storage.clear_frame] JSON path: {path}")
+        print(f"[DEBUG Storage.clear_frame] Path exists: {path.exists()}")
+
         data = self.load_drawover(animation_uuid, version, frame)
+        print(f"[DEBUG Storage.clear_frame] Loaded data: {data is not None}")
+        if data:
+            print(f"[DEBUG Storage.clear_frame] Strokes in data: {len(data.get('strokes', []))}")
+
         if not data:
+            print("[DEBUG Storage.clear_frame] No data found - returning True (nothing to clear)")
             return True  # Nothing to clear
 
         if soft_delete:
@@ -332,12 +359,15 @@ class DrawoverStorage:
                 data['deleted_strokes'].append(deleted_entry)
 
         data['strokes'] = []
+        print(f"[DEBUG Storage.clear_frame] Strokes after clear: {len(data['strokes'])}")
 
         # Save
         path = self.get_drawover_path(animation_uuid, version, frame)
         try:
+            print(f"[DEBUG Storage.clear_frame] Saving to {path}...")
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
+            print("[DEBUG Storage.clear_frame] Saved successfully")
 
             # Invalidate cache
             png_path = self.get_png_cache_path(animation_uuid, version, frame)
@@ -403,13 +433,20 @@ class DrawoverStorage:
         painter = QPainter(image)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Scale factor if canvas size differs from output size
+        # Check if strokes use UV format (normalized 0-1 coordinates)
+        # or legacy pixel coordinates
         canvas_size = data.get('canvas_size', [width, height])
-        scale_x = width / canvas_size[0]
-        scale_y = height / canvas_size[1]
 
         for stroke in data.get('strokes', []):
-            self._render_stroke(painter, stroke, scale_x, scale_y)
+            if stroke.get('format') == 'uv':
+                # UV format: coordinates are 0-1 normalized
+                # Scale directly from UV to output size
+                self._render_stroke_uv(painter, stroke, width, height)
+            else:
+                # Legacy pixel format: scale from canvas_size to output size
+                scale_x = width / canvas_size[0] if canvas_size[0] > 0 else 1
+                scale_y = height / canvas_size[1] if canvas_size[1] > 0 else 1
+                self._render_stroke(painter, stroke, scale_x, scale_y)
 
         painter.end()
         image.save(str(output_path), 'PNG')
@@ -514,6 +551,132 @@ class DrawoverStorage:
             painter.setFont(font)
 
             pos = QPointF(position[0] * scale_x, position[1] * scale_y)
+
+            if bg_color:
+                bg = QColor(bg_color)
+                bg.setAlphaF(stroke.get('opacity', 0.8))
+                metrics = painter.fontMetrics()
+                text_rect = metrics.boundingRect(text)
+                text_rect.moveTopLeft(pos.toPoint())
+                text_rect.adjust(-4, -2, 4, 2)
+                painter.fillRect(text_rect, bg)
+
+            painter.setPen(color)
+            painter.drawText(pos, text)
+
+    def _render_stroke_uv(
+        self,
+        painter: QPainter,
+        stroke: Dict,
+        width: int,
+        height: int
+    ):
+        """
+        Render a single stroke from UV coordinates.
+
+        UV coordinates are normalized 0-1, where (0,0) is top-left
+        and (1,1) is bottom-right of the video frame.
+        """
+        stroke_type = stroke.get('type', 'path')
+        color = QColor(stroke.get('color', '#FF5722'))
+        opacity = stroke.get('opacity', 1.0)
+        color.setAlphaF(opacity)
+
+        # Width is stored normalized relative to min(width, height)
+        min_dim = min(width, height)
+        normalized_width = stroke.get('width', 0.005)
+        stroke_width = max(1, normalized_width * min_dim)
+
+        pen = QPen(color, stroke_width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+
+        if stroke_type == 'path':
+            points = stroke.get('points', [])
+            if len(points) >= 2:
+                path = QPainterPath()
+                # UV to pixel: multiply by dimensions
+                path.moveTo(points[0][0] * width, points[0][1] * height)
+                for point in points[1:]:
+                    path.lineTo(point[0] * width, point[1] * height)
+                painter.drawPath(path)
+
+        elif stroke_type == 'line':
+            start = stroke.get('start', [0, 0])
+            end = stroke.get('end', [0, 0])
+            painter.drawLine(
+                QPointF(start[0] * width, start[1] * height),
+                QPointF(end[0] * width, end[1] * height)
+            )
+
+        elif stroke_type == 'arrow':
+            start = stroke.get('start', [0, 0])
+            end = stroke.get('end', [0, 0])
+            # Head size is also normalized
+            head_size = stroke.get('head_size', 0.02) * min_dim
+
+            start_pt = QPointF(start[0] * width, start[1] * height)
+            end_pt = QPointF(end[0] * width, end[1] * height)
+            painter.drawLine(start_pt, end_pt)
+
+            # Draw arrow head
+            import math
+            line = QLineF(start_pt, end_pt)
+            if line.length() > 0:
+                angle = math.atan2(-line.dy(), line.dx())
+
+                p1 = end_pt + QPointF(
+                    math.cos(angle + math.pi * 0.8) * head_size,
+                    -math.sin(angle + math.pi * 0.8) * head_size
+                )
+                p2 = end_pt + QPointF(
+                    math.cos(angle - math.pi * 0.8) * head_size,
+                    -math.sin(angle - math.pi * 0.8) * head_size
+                )
+
+                painter.drawLine(end_pt, p1)
+                painter.drawLine(end_pt, p2)
+
+        elif stroke_type == 'rect':
+            bounds = stroke.get('bounds', [0, 0, 0.5, 0.5])
+            fill = stroke.get('fill', False)
+            # bounds are [u, v, width_uv, height_uv]
+            rect = QRectF(
+                bounds[0] * width,
+                bounds[1] * height,
+                bounds[2] * width,
+                bounds[3] * height
+            )
+            if fill:
+                painter.fillRect(rect, color)
+            else:
+                painter.drawRect(rect)
+
+        elif stroke_type == 'ellipse':
+            bounds = stroke.get('bounds', [0, 0, 0.5, 0.5])
+            fill = stroke.get('fill', False)
+            rect = QRectF(
+                bounds[0] * width,
+                bounds[1] * height,
+                bounds[2] * width,
+                bounds[3] * height
+            )
+            if fill:
+                painter.setBrush(color)
+            painter.drawEllipse(rect)
+
+        elif stroke_type == 'text':
+            position = stroke.get('position', [0, 0])
+            text = stroke.get('text', '')
+            # Font size is normalized
+            font_size = int(stroke.get('font_size', 0.02) * min_dim)
+            bg_color = stroke.get('background', None)
+
+            font = QFont('Arial', max(8, font_size))
+            painter.setFont(font)
+
+            pos = QPointF(position[0] * width, position[1] * height)
 
             if bg_color:
                 bg = QColor(bg_color)

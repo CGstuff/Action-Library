@@ -55,6 +55,10 @@ class IconLoader:
 
         # Drawing tools
         "pen": "pen.svg",
+        "brush": "brush.svg",
+        "brush_size": "brush_size.svg",
+        "opacity": "opacity.svg",
+        "color_circle": "color_circle.svg",
         "line": "line.svg",
         "arrow_draw": "arrow_draw.svg",
         "rectangle": "rectangle.svg",
@@ -63,6 +67,14 @@ class IconLoader:
         "undo": "undo.svg",
         "redo": "redo.svg",
         "clear": "clear.svg",
+
+        # Annotation display controls
+        "arrow_left": "arrow_left.svg",
+        "eye": "eye.svg",
+        "eye_off": "eye_off.svg",
+        "hold_frames": "hold_frames.svg",
+        "ghost": "ghost.svg",
+        "delete_all": "delete_all.svg",
 
         # Review notes
         "approve": "approve.svg",

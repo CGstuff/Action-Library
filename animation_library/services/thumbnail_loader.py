@@ -21,7 +21,7 @@ class ThumbnailLoadSignals(QObject):
     """Signals for ThumbnailLoadTask"""
 
     load_complete = pyqtSignal(str, str, QImage, float)  # uuid, cache_key, image, elapsed_ms
-    load_failed = pyqtSignal(str, str)  # uuid, error_message
+    load_failed = pyqtSignal(str, str, str)  # uuid, cache_key, error_message
 
 
 class ThumbnailLoadTask(QRunnable):
@@ -66,6 +66,7 @@ class ThumbnailLoadTask(QRunnable):
             if source_image is None:
                 self.signals.load_failed.emit(
                     self.animation_uuid,
+                    self.cache_key,
                     f"Failed to load image: {self.thumbnail_path}"
                 )
                 return
@@ -102,6 +103,7 @@ class ThumbnailLoadTask(QRunnable):
         except Exception as e:
             self.signals.load_failed.emit(
                 self.animation_uuid,
+                self.cache_key,
                 f"Thumbnail load error: {e}"
             )
 
@@ -229,14 +231,11 @@ class ThumbnailLoader(QObject):
 
         self._log_performance()
 
-    def _on_load_failed(self, uuid: str, error_message: str):
+    def _on_load_failed(self, uuid: str, cache_key: str, error_message: str):
         """Handle failed thumbnail load"""
 
-        # Remove from pending (use cache key pattern)
-        # Since we don't have cache_key here, remove by UUID pattern
-        to_remove = [key for key in self.pending_requests if uuid in key]
-        for key in to_remove:
-            self.pending_requests.discard(key)
+        # Remove from pending using the exact cache key
+        self.pending_requests.discard(cache_key)
 
         # Emit failure signal
         self.thumbnail_failed.emit(uuid, error_message)

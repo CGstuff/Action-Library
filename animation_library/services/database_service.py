@@ -6,6 +6,9 @@ Delegates to focused repository modules in services/database/
 """
 
 import logging
+import json
+import tempfile
+import os
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
 from contextlib import contextmanager
@@ -13,6 +16,42 @@ from contextlib import contextmanager
 from ..config import Config
 
 logger = logging.getLogger(__name__)
+
+
+def _atomic_json_write(file_path: Path, data: dict) -> bool:
+    """
+    Write JSON data atomically using temp file + rename pattern.
+
+    This prevents data corruption if the process crashes mid-write.
+    The rename operation is atomic on most filesystems.
+
+    Args:
+        file_path: Path to the JSON file
+        data: Dictionary to write as JSON
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Create temp file in same directory (for same filesystem atomic rename)
+        dir_path = file_path.parent
+        fd, temp_path = tempfile.mkstemp(suffix='.tmp', dir=str(dir_path))
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            # Atomic rename (same filesystem)
+            os.replace(temp_path, str(file_path))
+            return True
+        except Exception:
+            # Clean up temp file on error
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
+    except Exception as e:
+        logger.warning(f"Atomic JSON write failed for {file_path}: {e}")
+        return False
 
 # Import from modular database package
 from .database import (
@@ -183,9 +222,9 @@ class DatabaseService:
 
         This keeps the JSON file in sync with the database, which is important
         for version inheritance when creating new versions in Blender.
-        """
-        import json
 
+        Uses atomic write (temp file + rename) to prevent corruption.
+        """
         try:
             # Get animation to find JSON file path
             animation = self.animations.get_by_uuid(animation_uuid)
@@ -213,16 +252,14 @@ class DatabaseService:
                 except json.JSONDecodeError:
                     data['tags'] = [t.strip() for t in tags.split(',') if t.strip()]
 
-            # Write back
-            with open(json_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
+            # Write back atomically
+            return _atomic_json_write(json_file, data)
 
-            return True
         except json.JSONDecodeError as e:
-            logger.warning(f"Invalid JSON in {json_file}: {e}")
+            logger.warning(f"Invalid JSON in {json_path}: {e}")
             return False
         except IOError as e:
-            logger.warning(f"Could not update tags in {json_file}: {e}")
+            logger.warning(f"Could not update tags in {json_path}: {e}")
             return False
         except Exception as e:
             logger.warning(f"Failed to sync tags to JSON: {e}")
@@ -232,12 +269,13 @@ class DatabaseService:
                          naming_fields: dict = None,
                          naming_template: str = None) -> bool:
         """
-        Rename animation - updates folder, files, and database.
+        Rename animation - updates folder, files, and database atomically.
 
         This method:
         1. Renames the folder on disk (if base name changes)
         2. Renames all files inside (.blend, .json, .webm, .png)
         3. Updates database with new name and file paths
+        4. Rolls back file changes if database update fails
 
         Args:
             uuid: Animation UUID
@@ -308,6 +346,11 @@ class DatabaseService:
                         raise
             return False
 
+        # Track completed operations for rollback
+        completed_renames = []  # List of (new_path, old_path) tuples for rollback
+        folder_renamed = False
+        original_folder = old_folder
+
         try:
             # Handle folder rename if base name changed
             if old_base != new_base:
@@ -320,6 +363,7 @@ class DatabaseService:
 
                 # Rename folder with retry
                 rename_with_retry(old_folder, new_folder)
+                folder_renamed = True
             else:
                 # Base name same, folder stays the same
                 new_folder = old_folder
@@ -332,21 +376,24 @@ class DatabaseService:
                 new_file = new_folder / f"{safe_new}{ext}"
                 if old_file.exists() and old_file != new_file:
                     rename_with_retry(old_file, new_file)
+                    completed_renames.append((new_file, old_file))
                 new_paths[key] = str(new_file)
 
-            # Update JSON file content with new name
+            # Update JSON file content with new name (atomic write)
             json_path = Path(new_paths.get('json_file_path', ''))
+            original_json_content = None
             if json_path.exists():
                 try:
                     with open(json_path, 'r', encoding='utf-8') as f:
-                        json_data = json.load(f)
+                        original_json_content = f.read()
+                        json_data = json.loads(original_json_content)
                     json_data['name'] = new_name
                     if naming_fields:
                         json_data['naming_fields'] = naming_fields
                     if naming_template:
                         json_data['naming_template'] = naming_template
-                    with open(json_path, 'w', encoding='utf-8') as f:
-                        json.dump(json_data, f, indent=2, ensure_ascii=False)
+                    # Use atomic write to prevent corruption
+                    _atomic_json_write(json_path, json_data)
                 except json.JSONDecodeError as e:
                     logger.warning(f"Invalid JSON in {json_path}: {e}")
                 except IOError as e:
@@ -359,17 +406,77 @@ class DatabaseService:
             if naming_template:
                 updates['naming_template'] = naming_template
 
-            return self.animations.update(uuid, updates)
+            db_success = self.animations.update(uuid, updates)
+
+            if not db_success:
+                # Database update failed - rollback file operations
+                logger.error("Database update failed, rolling back file renames")
+                self._rollback_renames(
+                    completed_renames, folder_renamed, new_folder, original_folder,
+                    json_path, original_json_content
+                )
+                return False
+
+            return True
 
         except PermissionError as e:
             logger.error(f"Permission denied during rename: {e}")
+            self._rollback_renames(
+                completed_renames, folder_renamed, new_folder, original_folder,
+                None, None
+            )
             return False
         except OSError as e:
             logger.error(f"File operation failed during rename: {e}")
+            self._rollback_renames(
+                completed_renames, folder_renamed, new_folder, original_folder,
+                None, None
+            )
             return False
         except Exception as e:
             logger.error(f"Rename animation failed: {e}")
+            self._rollback_renames(
+                completed_renames, folder_renamed, new_folder, original_folder,
+                None, None
+            )
             return False
+
+    def _rollback_renames(self, completed_renames: list, folder_renamed: bool,
+                          new_folder: Path, original_folder: Path,
+                          json_path: Optional[Path], original_json_content: Optional[str]):
+        """
+        Rollback file rename operations after a failure.
+
+        Args:
+            completed_renames: List of (new_path, old_path) tuples to reverse
+            folder_renamed: Whether the folder was renamed
+            new_folder: The new folder path (to rename back)
+            original_folder: The original folder path
+            json_path: Path to JSON file if content was modified
+            original_json_content: Original JSON content to restore
+        """
+        # Restore JSON content first (before file renames)
+        if json_path and original_json_content:
+            try:
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    f.write(original_json_content)
+            except Exception as e:
+                logger.warning(f"Failed to restore JSON content: {e}")
+
+        # Reverse file renames (in reverse order)
+        for new_path, old_path in reversed(completed_renames):
+            try:
+                if new_path.exists():
+                    new_path.rename(old_path)
+            except Exception as e:
+                logger.warning(f"Failed to rollback rename {new_path} -> {old_path}: {e}")
+
+        # Reverse folder rename
+        if folder_renamed and new_folder.exists():
+            try:
+                new_folder.rename(original_folder)
+            except Exception as e:
+                logger.warning(f"Failed to rollback folder rename: {e}")
 
     def delete_animation(self, uuid: str) -> bool:
         """Delete animation by UUID."""
@@ -411,9 +518,9 @@ class DatabaseService:
 
         This keeps the JSON file in sync with the database, which is important
         for version inheritance when creating new versions in Blender.
-        """
-        import json
 
+        Uses atomic write (temp file + rename) to prevent corruption.
+        """
         try:
             # Get animation to find JSON file path
             animation = self.animations.get_by_uuid(animation_uuid)
@@ -448,16 +555,14 @@ class DatabaseService:
                     tags.append(folder_name)
                     data['tags'] = tags
 
-            # Write back
-            with open(json_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
+            # Write back atomically
+            return _atomic_json_write(json_file, data)
 
-            return True
         except json.JSONDecodeError as e:
-            logger.warning(f"Invalid JSON in {json_file}: {e}")
+            logger.warning(f"Invalid JSON in {json_path}: {e}")
             return False
         except IOError as e:
-            logger.warning(f"Could not update folder in {json_file}: {e}")
+            logger.warning(f"Could not update folder in {json_path}: {e}")
             return False
         except Exception as e:
             logger.warning(f"Failed to sync folder to JSON: {e}")

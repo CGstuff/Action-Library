@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Varying thickness stroke to represent brush size -->
+  <path d="M4 18 Q8 14, 12 12 Q16 10, 20 6" stroke-width="1"/>
+  <path d="M4 18 Q8 14, 12 12 Q16 10, 20 6" stroke-width="4" opacity="0.3"/>
+  <!-- Small and large circles to show size variation -->
+  <circle cx="5" cy="17" r="1.5" fill="#FFFFFF" stroke="none"/>
+  <circle cx="19" cy="7" r="3" fill="#FFFFFF" stroke="none"/>
+</svg>

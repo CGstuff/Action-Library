@@ -1,7 +1,7 @@
 """
 Review Notes Panel Widget
 
-Panel for displaying and managing frame-specific review notes.
+Panel for displaying and managing frame-specific review notes (text comments).
 
 Features:
 - Note list with NoteItemWidget items
@@ -45,7 +45,6 @@ class NoteItemWidget(QFrame):
     """
 
     clicked = pyqtSignal(int)  # frame
-    annotate_clicked = pyqtSignal(int, int)  # frame, note_id - jump to frame and enter annotate mode
     resolve_toggled = pyqtSignal(int, bool)  # note_id, new_resolved
     delete_requested = pyqtSignal(int)  # note_id
     restore_requested = pyqtSignal(int)  # note_id
@@ -273,7 +272,7 @@ class NoteItemWidget(QFrame):
             """)
 
     def _add_action_buttons(self, header, resolved: bool, author: str):
-        """Add annotate/resolve/delete/restore buttons based on permissions."""
+        """Add resolve/delete/restore buttons based on permissions."""
         btn_style = """
             QPushButton {
                 background-color: #3a3a3a;
@@ -284,27 +283,6 @@ class NoteItemWidget(QFrame):
             }
             QPushButton:hover { background-color: #4a4a4a; color: #aaa; }
         """
-
-        # Annotate button (not for deleted notes) - pen icon to enter annotate mode
-        if not self._is_deleted:
-            self._annotate_btn = QPushButton()
-            self._annotate_btn.setFixedSize(24, 24)
-            self._annotate_btn.setToolTip("Draw annotation on this frame")
-            self._annotate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._annotate_btn.clicked.connect(self._on_annotate)
-
-            # Use pen icon
-            pen_icon = IconLoader.get("pen")
-            self._annotate_btn.setIcon(colorize_white_svg(pen_icon, "#FF5722"))
-            self._annotate_btn.setIconSize(QSize(14, 14))
-            self._annotate_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #3a3a3a; border: 1px solid #555;
-                    border-radius: 0px;
-                }
-                QPushButton:hover { background-color: #4a3a35; border-color: #FF5722; }
-            """)
-            header.addWidget(self._annotate_btn)
 
         # Resolve button (not for deleted notes)
         if not self._is_deleted:
@@ -407,12 +385,6 @@ class NoteItemWidget(QFrame):
             QPushButton:hover { background-color: #4a4030; }
         """
 
-    def _on_annotate(self):
-        """Handle annotate button click - jump to frame and enter annotate mode."""
-        frame = self._note_data.get('frame', 0)
-        note_id = self._note_data.get('id', -1)
-        self.annotate_clicked.emit(frame, note_id)
-
     def _on_resolve_toggle(self):
         note_id = self._note_data.get('id', -1)
         current = self._note_data.get('resolved', False)
@@ -474,7 +446,6 @@ class ReviewNotesPanel(QWidget):
 
     Signals:
         note_clicked(int): frame number
-        annotate_requested(int, int): frame, note_id - enter annotate mode for this frame
         note_added(int, str): frame, text
         note_resolved(int, bool): note_id, resolved
         note_deleted(int): note_id
@@ -483,7 +454,6 @@ class ReviewNotesPanel(QWidget):
     """
 
     note_clicked = pyqtSignal(int)
-    annotate_requested = pyqtSignal(int, int)  # frame, note_id
     note_added = pyqtSignal(int, str)
     note_resolved = pyqtSignal(int, bool)
     note_deleted = pyqtSignal(int)
@@ -669,7 +639,6 @@ class ReviewNotesPanel(QWidget):
                 marker_index=marker_index
             )
             widget.clicked.connect(self.note_clicked.emit)
-            widget.annotate_clicked.connect(self.annotate_requested.emit)
             widget.resolve_toggled.connect(self.note_resolved.emit)
             widget.delete_requested.connect(self.note_deleted.emit)
             widget.restore_requested.connect(self.note_restored.emit)

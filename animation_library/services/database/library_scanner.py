@@ -85,7 +85,7 @@ class LibraryScanner:
 
         # Create fresh animation data - reset all metadata
         fresh_data = {
-            'uuid': new_uuid,
+            'id': new_uuid,  # Use 'id' to match Blender plugin format
             'app_version': '1.3.0',
             'name': animation_data.get('name', 'unknown'),
             # Fresh versioning

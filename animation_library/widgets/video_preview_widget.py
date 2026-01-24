@@ -654,6 +654,28 @@ class VideoPreviewWidget(QWidget):
             self._cv_cap = None
         self._is_playing = False
 
+    def closeEvent(self, event):
+        """
+        Handle widget close - stop timer and release video resources.
+
+        This prevents crashes when timer tries to update a deleted widget.
+        """
+        # Stop timer first to prevent callbacks during cleanup
+        self._cv_timer.stop()
+
+        # Cleanup video resources
+        self._cleanup_video()
+
+        # Disconnect theme signal to prevent callbacks after widget is deleted
+        try:
+            theme_manager = get_theme_manager()
+            theme_manager.theme_changed.disconnect(self._on_theme_changed)
+        except (TypeError, RuntimeError):
+            # Already disconnected or theme manager gone
+            pass
+
+        super().closeEvent(event)
+
     def _on_theme_changed(self, theme_name: str):
         """Reload icons when theme changes."""
         self._load_icons()
