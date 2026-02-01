@@ -327,6 +327,7 @@ class MainWindow(QMainWindow):
         self._track_connection(self._event_bus.folder_changed, self._on_folder_changed)
         self._track_connection(self._event_bus.settings_changed, self._on_settings_changed)
         self._track_connection(self._event_bus.animation_updated, self._on_animation_updated)
+        self._track_connection(self._event_bus.operation_mode_changed, self._on_operation_mode_changed)
 
     def _load_settings(self):
         """Load window and splitter settings"""
@@ -786,9 +787,14 @@ class MainWindow(QMainWindow):
 
         menu.addSeparator()
 
-        # Archive action
-        archive_action = menu.addAction("Move to Archive")
-        archive_action.triggered.connect(lambda: self._archive_animation(uuid))
+        # Delete/Archive action based on mode
+        from ..config import Config
+        if Config.is_solo_mode():
+            delete_action = menu.addAction("Delete")
+            delete_action.triggered.connect(lambda: self._instant_delete_animation(uuid))
+        else:
+            archive_action = menu.addAction("Move to Archive")
+            archive_action.triggered.connect(lambda: self._archive_animation(uuid))
 
         # Show menu at cursor position
         menu.exec(position)
@@ -824,6 +830,32 @@ class MainWindow(QMainWindow):
         # Use the archive trash controller
         self._archive_trash_ctrl.archive_animations([uuid])
 
+    def _instant_delete_animation(self, uuid: str):
+        """Instantly delete a single animation via context menu (Solo Mode)"""
+        animation = self._animation_model.get_animation_by_uuid(uuid)
+        name = animation.get('name', 'Unknown') if animation else 'Unknown'
+        
+        # Confirmation dialog
+        reply = QMessageBox.warning(
+            self,
+            "Delete Animation",
+            f"Permanently delete '{name}'?\n\nThis cannot be undone!",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # Clear metadata panel to release video file handles
+        self._metadata_panel.clear()
+
+        # Delete
+        success, message = self._archive_service.instant_delete(uuid)
+        if success:
+            self._animation_model.remove_animation(uuid)
+            self._status_bar.showMessage(f"Deleted '{name}'")
+        else:
+            self._event_bus.report_error("delete", message)
+
     def _on_search_text_changed(self, text: str):
         """Handle search text change"""
         self._filter_ctrl.set_search_text(text)
@@ -841,8 +873,58 @@ class MainWindow(QMainWindow):
             self._bulk_edit_toolbar.hide()
 
     def _on_archive_clicked(self):
-        """Handle archive button click - context-aware action based on current view"""
-        self._archive_trash_ctrl.handle_delete_action()
+        """Handle delete/archive button click - mode and context aware"""
+        from ..config import Config
+        
+        if Config.is_solo_mode():
+            # Solo mode: instant delete
+            self._instant_delete_selected()
+        else:
+            # Studio/Pipeline mode: archive (soft delete)
+            self._archive_trash_ctrl.handle_delete_action()
+
+    def _instant_delete_selected(self):
+        """Instantly delete selected animations (Solo Mode)"""
+        selected_uuids = self._animation_view.get_selected_uuids()
+        if not selected_uuids:
+            return
+
+        # Confirmation dialog
+        count = len(selected_uuids)
+        msg = (
+            f"Permanently delete {count} animation{'s' if count > 1 else ''}?\n\n"
+            "This cannot be undone!"
+        )
+        reply = QMessageBox.warning(
+            self,
+            "Delete Animation",
+            msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # Clear metadata panel to release video file handles
+        self._metadata_panel.clear()
+
+        # Delete each animation
+        deleted = 0
+        errors = []
+        for uuid in selected_uuids:
+            success, message = self._archive_service.instant_delete(uuid)
+            if success:
+                self._animation_model.remove_animation(uuid)
+                deleted += 1
+            else:
+                errors.append(message)
+
+        # Show result
+        if deleted > 0:
+            self._status_bar.showMessage(
+                f"Deleted {deleted} animation{'s' if deleted > 1 else ''}"
+            )
+        if errors:
+            self._event_bus.report_error("delete", f"Some items failed: {errors[0]}")
 
     def _on_restore_clicked(self):
         """Handle restore button click in bulk edit toolbar"""
@@ -955,6 +1037,14 @@ class MainWindow(QMainWindow):
         if setting_name == "hide_shortcut_toggles":
             # Update apply panel toggles visibility
             self._apply_panel.set_shortcut_toggles_visible(not value)
+
+    def _on_operation_mode_changed(self, mode: str):
+        """Handle operation mode change (solo/studio/pipeline)"""
+        # Refresh header toolbar button appearance
+        self._header_toolbar.refresh_mode()
+        
+        # Refresh folder tree to show/hide Archive and Trash virtual folders
+        self._folder_tree.refresh()
 
     def _on_folder_changed(self, folder_id: int):
         """Handle animations moved to different folder"""

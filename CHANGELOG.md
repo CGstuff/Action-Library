@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-02-01
+
+### Added
+
+- **Solo Mode Instant Delete**
+  - In Solo mode: Delete button permanently removes animations instantly (no archive staging)
+  - In Studio/Pipeline mode: Archive button soft-deletes to Archive folder (existing behavior)
+  - Context menu adapts: shows "Delete" in Solo mode, "Move to Archive" in Studio/Pipeline mode
+  - Archive and Trash virtual folders hidden in Solo mode (not needed)
+  - UI automatically updates when switching modes in Settings → Operation Mode
+
+- **Archived Animation Protection (Blender)**
+  - Blender addon now detects when source animation has been archived
+  - Blocks capture with clear error message: "Animation has been archived. Please save as a new animation with a different name."
+  - Prevents accidental overwrites of archived work in studio/pipeline workflows
+
+### Fixed
+
+- **Archive/Trash Folder Naming** - Archived and trashed animations now preserve their human-readable folder names (e.g., `walk_cycle/`) instead of being renamed to UUIDs. Collision handling adds `_2`, `_3` suffixes when needed.
+
+- **Settings Dialog Lag** - Removed unnecessary Blender verification on settings open. Previously spawned `blender.exe --version` every time, causing 1-3 second lag. Users can still click "Verify Blender" manually when needed.
+
+---
+
 ## [1.4.0] - 2026-01-24
 
 

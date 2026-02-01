@@ -154,15 +154,14 @@ class HeaderToolbar(QWidget):
         self._edit_mode_btn.setChecked(False)
         self._edit_mode_btn.setToolTip("Toggle Edit Mode")
 
-        # Archive button (icon-only) - soft delete to archive
+        # Delete/Archive button (icon-only)
+        # Solo mode: instant delete (trash icon)
+        # Studio/Pipeline mode: soft delete to archive (archive icon)
         self._delete_btn = QPushButton()
-        archive_icon_path = IconLoader.get("archive_icon")
-        archive_icon = colorize_white_svg(archive_icon_path, icon_color)
-        self._delete_btn.setIcon(archive_icon)
         self._delete_btn.setIconSize(QSize(24, 24))
         self._delete_btn.setFixedSize(40, 40)
         self._delete_btn.setEnabled(False)
-        self._delete_btn.setToolTip("Archive Selected (Del)")
+        self._update_delete_button_mode(icon_color)
 
         # About button (icon-only)
         self._about_btn = QPushButton()
@@ -318,6 +317,30 @@ class HeaderToolbar(QWidget):
         # Theme changes - reload icons with new color
         self._theme_manager.theme_changed.connect(self._on_theme_changed)
 
+    def _update_delete_button_mode(self, icon_color: str = None):
+        """
+        Update delete button icon and tooltip based on operation mode.
+        
+        Solo mode: trash icon, "Delete Selected"
+        Studio/Pipeline mode: archive icon, "Archive Selected"
+        """
+        if icon_color is None:
+            theme = self._theme_manager.get_current_theme()
+            icon_color = theme.palette.header_icon_color if theme else "#1a1a1a"
+        
+        if Config.is_solo_mode():
+            # Solo mode - instant delete
+            delete_icon_path = IconLoader.get("delete")
+            delete_icon = colorize_white_svg(delete_icon_path, icon_color)
+            self._delete_btn.setIcon(delete_icon)
+            self._delete_btn.setToolTip("Delete Selected (Del)")
+        else:
+            # Studio/Pipeline mode - archive (soft delete)
+            archive_icon_path = IconLoader.get("archive_icon")
+            archive_icon = colorize_white_svg(archive_icon_path, icon_color)
+            self._delete_btn.setIcon(archive_icon)
+            self._delete_btn.setToolTip("Archive Selected (Del)")
+
     def _on_theme_changed(self, theme_name: str):
         """Reload all icons when theme changes"""
         theme = self._theme_manager.get_current_theme()
@@ -342,8 +365,8 @@ class HeaderToolbar(QWidget):
         edit_icon = colorize_white_svg(IconLoader.get("edit"), icon_color)
         self._edit_mode_btn.setIcon(edit_icon)
 
-        archive_icon = colorize_white_svg(IconLoader.get("archive_icon"), icon_color)
-        self._delete_btn.setIcon(archive_icon)
+        # Update delete button based on mode
+        self._update_delete_button_mode(icon_color)
 
         about_icon = colorize_white_svg(IconLoader.get("al_icon"), icon_color)
         self._about_btn.setIcon(about_icon)
@@ -358,6 +381,10 @@ class HeaderToolbar(QWidget):
         self.style().unpolish(self)
         self.style().polish(self)
         self.update()
+
+    def refresh_mode(self):
+        """Refresh button appearance when operation mode changes."""
+        self._update_delete_button_mode()
 
     def _on_search_text_changed(self, text: str):
         """Handle search text change"""

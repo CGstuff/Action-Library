@@ -561,8 +561,16 @@ class StudioModeTab(QWidget):
         self._notes_db.set_setting('app_mode', mode)
         self._notes_db.set_setting('current_user', current_user)
         
+        # Also save to Config settings (for UI components that read from there)
+        from ...config import Config
+        Config.set_operation_mode(mode)
+        
         # Emit signal for any listeners
         self.mode_changed.emit(mode)
+        
+        # Emit via event bus for app-wide notification
+        from ...events.event_bus import get_event_bus
+        get_event_bus().operation_mode_changed.emit(mode)
 
 
 __all__ = ['StudioModeTab']

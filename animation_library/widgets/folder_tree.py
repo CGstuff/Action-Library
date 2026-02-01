@@ -214,16 +214,19 @@ class FolderTree(QTreeWidget):
         # Load user folders from database
         self._load_user_folders()
 
-        # Add separator before Archive and Trash
-        separator2 = QTreeWidgetItem(self)
-        separator2.setText(0, "─" * 20)
-        separator2.setFlags(Qt.ItemFlag.NoItemFlags)  # Not selectable
+        # Archive and Trash folders only in studio/pipeline mode
+        from ..config import Config
+        if not Config.is_solo_mode():
+            # Add separator before Archive and Trash
+            separator2 = QTreeWidgetItem(self)
+            separator2.setText(0, "─" * 20)
+            separator2.setFlags(Qt.ItemFlag.NoItemFlags)  # Not selectable
 
-        # Create Archive folder (first stage - soft delete)
-        self._create_archive_folder()
+            # Create Archive folder (first stage - soft delete)
+            self._create_archive_folder()
 
-        # Create Trash folder (second stage - hard delete staging)
-        self._create_trash_folder()
+            # Create Trash folder (second stage - hard delete staging)
+            self._create_trash_folder()
 
         # Select "Home" by default
         if self.topLevelItemCount() > 0:

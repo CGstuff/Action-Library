@@ -21,6 +21,34 @@ from .utils.path_utils import get_archive_folder, get_trash_folder
 logger = logging.getLogger(__name__)
 
 
+def _get_unique_folder_name(base_folder: Path, desired_name: str) -> Path:
+    """
+    Get a unique folder path, handling collisions by appending _2, _3, etc.
+
+    Args:
+        base_folder: Parent folder (e.g., .deleted/ or .trash/)
+        desired_name: Desired folder name
+
+    Returns:
+        Path to unique folder (may have suffix like _2, _3)
+    """
+    dest_folder = base_folder / desired_name
+    if not dest_folder.exists():
+        return dest_folder
+
+    # Collision - find unique name
+    counter = 2
+    while True:
+        dest_folder = base_folder / f"{desired_name}_{counter}"
+        if not dest_folder.exists():
+            return dest_folder
+        counter += 1
+        if counter > 1000:  # Safety limit
+            # Fall back to UUID suffix
+            import uuid
+            return base_folder / f"{desired_name}_{uuid.uuid4().hex[:8]}"
+
+
 class TrashService:
     """
     Service for managing trash operations (second stage - hard delete staging)
@@ -65,28 +93,24 @@ class TrashService:
             if not archive_folder:
                 return False, "Library path not configured"
 
-            # Source folder (.trash/{uuid}/)
+            # Source folder (.trash/{folder_name}/)
             source_folder = Path(trash_item['trash_folder_path'])
             if not source_folder.exists():
                 # Files gone - just clean up database
                 self._db.delete_from_trash(uuid)
                 return False, "Trash files not found"
 
-            # Destination folder (.deleted/{uuid}/)
-            dest_folder = archive_folder / uuid
-
-            # Handle existing archive item with same UUID
-            if dest_folder.exists():
-                return False, "Item already exists in archive"
+            # Destination folder - preserve folder name (.deleted/{folder_name}/)
+            dest_folder = _get_unique_folder_name(archive_folder, source_folder.name)
 
             # Move files back to archive
             shutil.move(str(source_folder), str(dest_folder))
 
-            # Update thumbnail path to new location
+            # Update thumbnail path to new location (find any .png file)
             thumbnail_path = None
-            new_thumb = dest_folder / f"{uuid}.png"
-            if new_thumb.exists():
-                thumbnail_path = str(new_thumb)
+            png_files = list(dest_folder.glob("*.png"))
+            if png_files:
+                thumbnail_path = str(png_files[0])
 
             # Add to archive table
             # Note: We only have minimal data from trash, so we reconstruct what we can

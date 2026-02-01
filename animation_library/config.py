@@ -23,7 +23,7 @@ class Config:
     if _version_file.exists():
         APP_VERSION: Final[str] = _version_file.read_text().strip()
     else:
-        APP_VERSION: Final[str] = "1.3.2"  # Fallback/Dev version
+        APP_VERSION: Final[str] = "1.4.1"  # Fallback/Dev version
 
     APP_AUTHOR: Final[str] = "CGstuff"
 
@@ -432,6 +432,87 @@ class Config:
             True if no library path is configured
         """
         return cls.load_library_path() is None
+
+    @classmethod
+    def is_solo_mode(cls) -> bool:
+        """
+        Check if app is in solo mode (vs studio/pipeline mode).
+        
+        Solo mode = instant delete, no archive/trash staging
+        Studio/Pipeline mode = soft delete with archive/trash
+        
+        Returns:
+            True if in solo mode, False for studio/pipeline
+        """
+        settings_file = cls.get_settings_file()
+        if settings_file.exists():
+            try:
+                import json
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    mode = settings.get('app_mode', 'solo')
+                    return mode == 'solo'
+            except Exception:
+                pass
+        return True  # Default to solo mode
+
+    @classmethod
+    def get_operation_mode(cls) -> str:
+        """
+        Get current operation mode.
+        
+        Returns:
+            'solo', 'studio', or 'pipeline'
+        """
+        settings_file = cls.get_settings_file()
+        if settings_file.exists():
+            try:
+                import json
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    mode = settings.get('app_mode', 'solo')
+                    if mode in ('solo', 'studio', 'pipeline'):
+                        return mode
+            except Exception:
+                pass
+        return 'solo'
+
+    @classmethod
+    def set_operation_mode(cls, mode: str) -> bool:
+        """
+        Set operation mode.
+        
+        Args:
+            mode: 'solo', 'studio', or 'pipeline'
+            
+        Returns:
+            True if saved successfully
+        """
+        if mode not in ('solo', 'studio', 'pipeline'):
+            return False
+        try:
+            import json
+            settings_file = cls.get_settings_file()
+            settings_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Load existing settings
+            settings = {}
+            if settings_file.exists():
+                try:
+                    with open(settings_file, 'r', encoding='utf-8') as f:
+                        settings = json.load(f)
+                except Exception:
+                    pass
+
+            # Update setting
+            settings['app_mode'] = mode
+
+            # Save back
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2)
+            return True
+        except Exception:
+            return False
 
     @classmethod
     def load_allow_hard_delete(cls) -> bool:

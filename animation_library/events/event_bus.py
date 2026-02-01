@@ -36,6 +36,9 @@ class EventBus(QObject):
     # Edit mode events
     edit_mode_changed = pyqtSignal(bool)  # enabled/disabled
 
+    # Operation mode events (solo/studio/pipeline)
+    operation_mode_changed = pyqtSignal(str)  # 'solo', 'studio', or 'pipeline'
+
     # Folder navigation events
     folder_selected = pyqtSignal(str)  # folder_name
     folder_changed = pyqtSignal(int)  # folder_id - emitted when animations moved to folder

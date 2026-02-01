@@ -176,6 +176,20 @@ class ANIMLIB_OT_capture_animation(Operator):
                     # Validate that the UUID still exists with the same name
                     # If animation was renamed in desktop app, metadata is stale
                     if source_uuid and source_name:
+                        # First check if the animation has been archived (studio/pipeline mode)
+                        # This must happen BEFORE validation, because archived animations
+                        # won't be found in the library and validation would fail
+                        if self._is_animation_archived(source_uuid):
+                            logger.warning(f"Animation '{source_name}' has been archived")
+                            self.report({'ERROR'},
+                                f"Animation '{source_name}' has been archived.\n"
+                                "Please save as a new animation with a different name."
+                            )
+                            # Clear library metadata so user can save as new
+                            self._clear_library_metadata(action)
+                            self.cleanup(context)
+                            return {'CANCELLED'}
+
                         is_valid = self._validate_library_metadata(source_uuid, source_name)
 
                         if not is_valid:
@@ -564,6 +578,68 @@ class ANIMLIB_OT_capture_animation(Operator):
         for prop in props_to_clear:
             if prop in action:
                 del action[prop]
+
+    def _is_animation_archived(self, uuid: str) -> bool:
+        """
+        Check if animation UUID exists in archive (.deleted folder).
+
+        This is used to block captures of animations that have been archived
+        in studio/pipeline mode. Users must save as a new animation instead.
+
+        Args:
+            uuid: The animation UUID to check
+
+        Returns:
+            True if UUID found in archive, False otherwise
+        """
+        from pathlib import Path
+        import json
+        from ..preferences import get_library_path
+
+        library_path = get_library_path()
+        if not library_path or not uuid:
+            return False
+
+        library_dir = Path(library_path)
+
+        # Check archive folder (.deleted/)
+        archive_dir = library_dir / ".deleted"
+        if not archive_dir.exists():
+            return False
+
+        # Search for JSON file with this UUID in archive folders
+        for anim_folder in archive_dir.iterdir():
+            if not anim_folder.is_dir():
+                continue
+
+            for json_file in anim_folder.glob("*.json"):
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+
+                    if data.get('id') == uuid or data.get('uuid') == uuid:
+                        return True
+                except Exception:
+                    continue
+
+        # Also check trash folder (.trash/) - animation might be pending deletion
+        trash_dir = library_dir / ".trash"
+        if trash_dir.exists():
+            for anim_folder in trash_dir.iterdir():
+                if not anim_folder.is_dir():
+                    continue
+
+                for json_file in anim_folder.glob("*.json"):
+                    try:
+                        with open(json_file, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+
+                        if data.get('id') == uuid or data.get('uuid') == uuid:
+                            return True
+                    except Exception:
+                        continue
+
+        return False
 
     def _collect_naming_fields(self, scene, naming_engine=None) -> dict:
         """

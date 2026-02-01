@@ -35,9 +35,8 @@ class BlenderIntegrationTab(QWidget):
 
         self._init_ui()
         
-        # Verify immediately if path exists
-        if self.blender_path:
-            self.verify_blender()
+        # Don't auto-verify on init - it spawns blender.exe which causes lag
+        # User can click "Verify Blender" if they want to check
 
     def _init_ui(self):
         """Initialize UI layout"""

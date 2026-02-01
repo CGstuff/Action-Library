@@ -29,6 +29,34 @@ from .utils.file_operations import (
 logger = logging.getLogger(__name__)
 
 
+def _get_unique_folder_name(base_folder: Path, desired_name: str) -> Path:
+    """
+    Get a unique folder path, handling collisions by appending _2, _3, etc.
+
+    Args:
+        base_folder: Parent folder (e.g., .deleted/ or .trash/)
+        desired_name: Desired folder name
+
+    Returns:
+        Path to unique folder (may have suffix like _2, _3)
+    """
+    dest_folder = base_folder / desired_name
+    if not dest_folder.exists():
+        return dest_folder
+
+    # Collision - find unique name
+    counter = 2
+    while True:
+        dest_folder = base_folder / f"{desired_name}_{counter}"
+        if not dest_folder.exists():
+            return dest_folder
+        counter += 1
+        if counter > 1000:  # Safety limit
+            # Fall back to UUID suffix
+            import uuid
+            return base_folder / f"{desired_name}_{uuid.uuid4().hex[:8]}"
+
+
 class ArchiveService:
     """
     Service for managing archive operations (first stage of deletion)
@@ -83,17 +111,8 @@ class ArchiveService:
                 self._db.delete_animation(uuid)
                 return True, "Animation removed (files were already missing)"
 
-            # Destination folder (.deleted/{uuid}/)
-            dest_folder = archive_folder / uuid
-
-            # Handle existing archive item with same UUID
-            if dest_folder.exists():
-                try:
-                    shutil.rmtree(dest_folder)
-                except PermissionError as e:
-                    logger.warning(f"Permission denied removing existing archive folder {dest_folder}: {e}")
-                except OSError as e:
-                    logger.warning(f"Could not remove existing archive folder {dest_folder}: {e}")
+            # Destination folder - preserve original folder name (.deleted/{folder_name}/)
+            dest_folder = _get_unique_folder_name(archive_folder, source_folder.name)
 
             # Get folder info for restoration
             folder_id = animation.get('folder_id')
@@ -111,11 +130,11 @@ class ArchiveService:
                 logger.warning(f"Some files couldn't be copied to archive: {failed_files}")
                 # Continue anyway - we'll archive what we can
 
-            # Update thumbnail path to new location
+            # Update thumbnail path to new location (find any .png file)
             thumbnail_path = None
-            new_thumb = dest_folder / "thumbnail.png"
-            if new_thumb.exists():
-                thumbnail_path = str(new_thumb)
+            png_files = list(dest_folder.glob("*.png"))
+            if png_files:
+                thumbnail_path = str(png_files[0])
 
             # Add to archive table
             archive_data = {
@@ -316,33 +335,24 @@ class ArchiveService:
             if not trash_folder:
                 return False, "Library path not configured"
 
-            # Source folder (.deleted/{uuid}/)
+            # Source folder (.deleted/{folder_name}/)
             source_folder = Path(archive_item['archive_folder_path'])
             if not source_folder.exists():
                 # Files gone - just clean up database
                 self._db.delete_from_archive(uuid)
                 return False, "Archive files not found"
 
-            # Destination folder (.trash/{uuid}/)
-            dest_folder = trash_folder / uuid
-
-            # Handle existing trash item with same UUID
-            if dest_folder.exists():
-                try:
-                    shutil.rmtree(dest_folder)
-                except PermissionError as e:
-                    logger.warning(f"Permission denied removing existing trash folder {dest_folder}: {e}")
-                except OSError as e:
-                    logger.warning(f"Could not remove existing trash folder {dest_folder}: {e}")
+            # Destination folder - preserve folder name (.trash/{folder_name}/)
+            dest_folder = _get_unique_folder_name(trash_folder, source_folder.name)
 
             # Move files to trash
             shutil.move(str(source_folder), str(dest_folder))
 
-            # Update thumbnail path to new location
+            # Update thumbnail path to new location (find any .png file)
             thumbnail_path = None
-            new_thumb = dest_folder / "thumbnail.png"
-            if new_thumb.exists():
-                thumbnail_path = str(new_thumb)
+            png_files = list(dest_folder.glob("*.png"))
+            if png_files:
+                thumbnail_path = str(png_files[0])
 
             # Add to trash table
             trash_data = {
@@ -367,6 +377,55 @@ class ArchiveService:
 
         except Exception as e:
             logger.error(f"Failed to move to trash: {e}")
+            return False, f"Error: {str(e)}"
+
+    def instant_delete(self, uuid: str) -> Tuple[bool, str]:
+        """
+        Permanently delete animation immediately (Solo Mode).
+        
+        Skips archive/trash staging and deletes files + database record directly.
+        Used in solo mode where users don't need audit trail.
+
+        Args:
+            uuid: Animation UUID to delete
+
+        Returns:
+            Tuple of (success, message)
+        """
+        try:
+            # Get animation data
+            animation = self._db.get_animation_by_uuid(uuid)
+            if not animation:
+                return False, "Animation not found"
+
+            # Get source folder from file paths
+            blend_path = animation.get('blend_file_path')
+            json_path = animation.get('json_file_path')
+            source_path = blend_path or json_path
+            
+            if source_path:
+                source_folder = Path(source_path).parent
+                
+                # Delete files if folder exists
+                if source_folder.exists():
+                    gc.collect()  # Release any Python file handles
+                    try:
+                        shutil.rmtree(source_folder)
+                        logger.info(f"Deleted folder: {source_folder}")
+                    except PermissionError as e:
+                        logger.warning(f"Permission denied deleting folder {source_folder}: {e}")
+                        # Continue to delete from database anyway
+                    except OSError as e:
+                        logger.warning(f"Could not delete folder {source_folder}: {e}")
+
+            # Remove from database
+            self._db.delete_animation(uuid)
+            
+            logger.info(f"Instant deleted animation '{animation.get('name')}'")
+            return True, "Animation deleted"
+
+        except Exception as e:
+            logger.error(f"Failed to instant delete animation: {e}")
             return False, f"Error: {str(e)}"
 
     def get_archive_items(self) -> List[Dict[str, Any]]:
