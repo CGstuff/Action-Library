@@ -39,6 +39,15 @@ class ANIMLIB_AddonPreferences(AddonPreferences, ANIMLIB_PreferencesProperties):
         row = col.row(align=True)
         row.prop(self, "preview_resolution_x")
         row.prop(self, "preview_resolution_y")
+        
+        # Camera settings
+        box.separator()
+        col = box.column(align=True)
+        col.prop(self, "preview_use_camera")
+        if self.preview_use_camera:
+            col.label(text="Renders from scene camera (if present)", icon='VIEW_CAMERA')
+        else:
+            col.label(text="Renders from current viewport angle", icon='VIEW3D')
 
         # Socket Communication Settings
         box = layout.box()
@@ -260,12 +269,14 @@ def get_preview_settings():
         return {
             'resolution_x': prefs.preview_resolution_x,
             'resolution_y': prefs.preview_resolution_y,
+            'use_camera': prefs.preview_use_camera,
         }
     except:
         # Return default settings if preferences not available
         return {
             'resolution_x': 640,
             'resolution_y': 640,
+            'use_camera': False,
         }
 
 

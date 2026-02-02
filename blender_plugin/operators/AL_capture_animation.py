@@ -1477,6 +1477,12 @@ class ANIMLIB_OT_capture_animation(Operator):
                                     continue
                             space.shading.studiolight_intensity = 1.0
 
+                            # Switch to camera view if enabled and camera exists
+                            use_camera = prefs.get('use_camera', False)
+                            if use_camera and scene.camera:
+                                space.region_3d.view_perspective = 'CAMERA'
+                                logger.debug(f"Switched to camera view: {scene.camera.name}")
+
                             return viewport_settings
                     break
             

@@ -87,6 +87,12 @@ class ANIMLIB_PreferencesProperties(PropertyGroup):
         min=240,
         max=1080
     )
+    
+    preview_use_camera: bpy.props.BoolProperty(
+        name="Use Scene Camera",
+        description="Render thumbnails/previews from scene camera instead of current viewport angle. Provides consistent framing if you have a camera set up",
+        default=False
+    )
 
     # Socket Communication Settings
     socket_port: bpy.props.IntProperty(

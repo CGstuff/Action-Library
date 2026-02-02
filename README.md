@@ -25,6 +25,19 @@
 
 ---
 
+## License clarification
+
+Earlier versions of this project (≤ 1.4) were published under the MIT License
+while using PyQt, which is distributed under GPL/commercial terms.
+
+This was an oversight.
+
+As of version 1.4.1, the project is licensed under GNU GPL v3.0 to ensure
+full license compatibility.
+
+No retroactive relicensing is implied.
+
+
 > **⚠️ Upgrading from v1.2 or earlier?**
 >
 > Version 1.3 includes a database overhaul that is **not backwards compatible**.
