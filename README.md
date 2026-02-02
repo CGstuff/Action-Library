@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-blue.svg" alt="License: GPL-3.0"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="Python 3.9+"></a>
   <a href="https://pypi.org/project/PyQt6/"><img src="https://img.shields.io/badge/PyQt-6.5+-green.svg" alt="PyQt6"></a>
   <a href="https://www.blender.org/"><img src="https://img.shields.io/badge/Blender-4.5--5.0+-orange.svg" alt="Blender 4.5-5.0+"></a>
@@ -27,7 +27,7 @@
 
 ## License clarification
 
-Earlier versions of this project (≤ 1.4) were published under the MIT License
+Earlier versions of this project (≤ 1.4) were published under the GPL License
 while using PyQt, which is distributed under GPL/commercial terms.
 
 This was an oversight.
@@ -152,4 +152,4 @@ For detailed architecture information, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
