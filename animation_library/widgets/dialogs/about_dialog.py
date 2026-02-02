@@ -160,7 +160,7 @@ class AboutDialog(QDialog):
         creator.setStyleSheet("font-size: 14px; font-weight: bold;")
         info_layout.addWidget(creator)
 
-        license_lbl = QLabel("Licensed under MIT License")
+        license_lbl = QLabel("Licensed under GPL-3.0")
         license_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         license_lbl.setStyleSheet("font-size: 13px;")
         info_layout.addWidget(license_lbl)
