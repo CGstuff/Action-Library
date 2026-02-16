@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.3] - 2026-02-16
+
+### Fixed
+
+- **AnimLib Import Path Rebasing** - Importing an `.animlib` archive from a different storage location no longer leaves stale absolute paths in the database or JSON files. All file paths (`blend_file_path`, `json_file_path`, `preview_path`, `thumbnail_path`) are now automatically rebased to the actual filesystem location during import and library rescan.
+
+- **Manual Library Copy Support** - Manually copying a library folder to a new location and rescanning now correctly updates all paths. Previously, the scanner trusted absolute paths from JSON files even when the files had moved.
+
+- **JSON Path Cleanup on Import** - After extracting an `.animlib` archive, JSON files on disk are rewritten with corrected paths so that future re-exports produce clean, portable archives.
+
+### Added
+
+- **Blender Addon: Sync Library Path from Desktop App** - New sync button in addon preferences reads the library path from the desktop app's config (`library_path.txt`), eliminating the need to manually set the same path in both places.
+
+- **Auto-Sync on First Load** - When the Blender addon has no library path configured, it automatically reads the path from the desktop app on file load (first-time setup convenience).
+
+---
+
 ## [1.4.2] - 2026-02-12
 
 ### Fixed
