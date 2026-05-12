@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.4] - 2026-05-13
+
+### Changed
+
+- **Settings UI Redesign** - Replaced the tabbed Settings dialog with a sidebar + stacked-page layout (Photoshop / Blender prefs style). Sidebar styling reacts live to theme changes.
+
+### Fixed
+
+- **Annotations Corrupted by Hidden Playback** - With annotations hidden, pressing Play overwrote every subsequent frame's drawover on disk with the previously-loaded frame's strokes. Hide mode now skips both the save and load paths, so the stale canvas state can't leak across frames.
+- **Erased Frames Not Persisting** - Erasing all strokes on a frame previously left the old data on disk and kept the timeline marker visible. The empty state is now written and the marker is cleared.
+- **Annotations Frozen During Compare-Mode Playback** - In side-by-side compare mode, drawovers stayed stuck on the entry frame as the video played. Per-frame annotations now refresh on every playback tick.
+- **Frame Timeline Off-By-One** - Clicking near the right edge of the frame ruler could return a frame whose marker rendered slightly to the left. Click and marker positions now round-trip symmetrically.
+- **Eraser Memory Leak** - Erased strokes left orphan entries in the canvas's internal data map across erase/undo cycles. Entries are now removed alongside the stroke.
+
+### Reliability
+
+- **Atomic Annotation Saves** - Drawover JSON files are now written via tempfile + atomic rename. A crash mid-write can no longer leave a truncated, unparseable file.
+- **Concurrent-Edit Safety** - All load-modify-write paths in the annotation storage layer are now guarded by a reentrant lock. Concurrent stroke add/remove on the same frame can no longer drop strokes through a lost-update race.
+- **Audit Log + Metadata in One Transaction** - Studio Mode's drawover audit log and the per-frame metadata table now update inside a single database transaction. They can no longer drift out of sync.
+- **Manifest Consistency** - The drawover manifest is now written before the PNG cache is invalidated, and a failed PNG delete no longer breaks the manifest.
+- **Restore Stroke Safety** - Restoring a soft-deleted stroke now stages the modified state locally before writing; a failed write can no longer leave a dangling deletion record.
+- **Thread-Safe Annotation Cache** - The in-memory drawover cache is now thread-safe.
+
+### Internal
+
+- Annotation storage and notes-database error reports moved from ad-hoc `print(...)` to logger calls; failures now surface in the log file with stack traces.
+- Removed leftover debug prints from the storage layer.
+- `datetime.utcnow()` (deprecated in Python 3.12+) replaced with `datetime.now(timezone.utc)` in annotation timestamp generation.
+
+---
+
 ## [1.4.3] - 2026-02-16
 
 ### Fixed
