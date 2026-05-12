@@ -29,7 +29,8 @@ from PyQt6.QtCore import pyqtSignal, Qt, QSize
 from PyQt6.QtGui import QKeyEvent
 
 from ..config import Config
-from ..services.permissions import NotePermissions
+# Permissions module removed (Option B Phase 4) — role gates replaced with
+# cross-author confirmation prompts; identity comes from Config.load_identity().
 from ..utils.icon_loader import IconLoader
 from ..utils.icon_utils import colorize_white_svg
 
@@ -121,25 +122,21 @@ class NoteItemWidget(QFrame):
             marker_badge.setToolTip(f"Timeline marker {self._marker_index}")
             header.addWidget(marker_badge)
 
-        # Author role badge (Studio Mode only, elevated roles)
-        if self._is_studio_mode and author_role and NotePermissions.is_elevated_role(author_role):
-            role_label = NotePermissions.get_role_label(author_role)
-            role_color = NotePermissions.get_role_color(author_role)
-            role_badge = QLabel(role_label.upper())
-            role_badge.setStyleSheet(f"""
-                QLabel {{
-                    background-color: {role_color};
-                    color: white;
-                    font-size: 9px;
-                    font-weight: bold;
-                    padding: 2px 6px;
-                    border-radius: 0px;
-                }}
-            """)
-            header.addWidget(role_badge)
-
-        # Author name (Studio Mode only)
+        # Author name with color-coded identity dot (Studio Mode only).
+        # The dot color is deterministic from the author name (same as
+        # the identity wizard's auto-color), so Bob's dot looks the same
+        # color on Alice's screen and Bob's screen without any sync.
         if self._is_studio_mode and author:
+            from ..services.identity import generate_color_from_name
+            author_color = generate_color_from_name(author)
+            author_dot = QLabel()
+            author_dot.setFixedSize(10, 10)
+            author_dot.setStyleSheet(
+                f"background-color: {author_color}; border-radius: 5px;"
+            )
+            author_dot.setToolTip(author)
+            header.addWidget(author_dot)
+
             author_label = QLabel(author)
             author_label.setStyleSheet("color: #888; font-size: 11px;")
             header.addWidget(author_label)
@@ -247,15 +244,9 @@ class NoteItemWidget(QFrame):
             self._edit_container.hide()
             layout.addWidget(self._edit_container)
 
-            # Double-click to edit
-            can_edit = NotePermissions.can_edit_note(
-                self._is_studio_mode,
-                self._current_user_role,
-                self._note_data.get('author', ''),
-                self._current_user
-            )
-            if can_edit:
-                self._note_label.mouseDoubleClickEvent = self._start_edit
+            # Double-click to edit. Cross-author confirmation lives in
+            # _start_edit (Option B Phase 4 — replaced role-based gate).
+            self._note_label.mouseDoubleClickEvent = self._start_edit
         else:
             self._edit_container = None
             self._edit_input = None
@@ -310,53 +301,44 @@ class NoteItemWidget(QFrame):
                 self._resolve_btn.setStyleSheet(btn_style)
             header.addWidget(self._resolve_btn)
 
-        # Delete button
+        # Delete button — always visible (Option B Phase 4). Cross-author
+        # confirmation prompt lives in _on_delete instead of a role gate.
         if not self._is_deleted:
-            can_delete = NotePermissions.can_delete_note(
-                self._is_studio_mode,
-                self._current_user_role,
-                author,
-                self._current_user
-            )
-            if can_delete:
-                self._delete_btn = QPushButton()
-                self._delete_btn.setFixedSize(24, 24)
-                self._delete_btn.setToolTip("Delete note")
-                self._delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                self._delete_btn.clicked.connect(self._on_delete)
-                # Use delete icon
-                delete_icon = IconLoader.get("delete")
-                self._delete_btn.setIcon(colorize_white_svg(delete_icon, "#888"))
-                self._delete_btn.setIconSize(QSize(14, 14))
-                self._delete_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #3a3a3a; border: 1px solid #555;
-                        border-radius: 0px;
-                    }
-                    QPushButton:hover { background-color: #4a3535; border-color: #aa5555; }
-                """)
-                header.addWidget(self._delete_btn)
+            self._delete_btn = QPushButton()
+            self._delete_btn.setFixedSize(24, 24)
+            self._delete_btn.setToolTip("Delete note")
+            self._delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._delete_btn.clicked.connect(self._on_delete)
+            # Use delete icon
+            delete_icon = IconLoader.get("delete")
+            self._delete_btn.setIcon(colorize_white_svg(delete_icon, "#888"))
+            self._delete_btn.setIconSize(QSize(14, 14))
+            self._delete_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #3a3a3a; border: 1px solid #555;
+                    border-radius: 0px;
+                }
+                QPushButton:hover { background-color: #4a3535; border-color: #aa5555; }
+            """)
+            header.addWidget(self._delete_btn)
 
-        # Restore button (deleted notes only)
+        # Restore button (deleted notes only) — always visible. Restore is
+        # the inverse of delete; if you can see a deleted note you can
+        # restore it. No cross-author prompt; restoring isn't destructive.
         if self._is_deleted:
-            can_restore = NotePermissions.can_restore_note(
-                self._is_studio_mode,
-                self._current_user_role
-            )
-            if can_restore:
-                restore_btn = QPushButton("Restore")
-                restore_btn.setFixedHeight(24)
-                restore_btn.setToolTip("Restore this deleted note")
-                restore_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                restore_btn.clicked.connect(self._on_restore)
-                restore_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #3a4a3a; border: 1px solid #4a6a4a;
-                        border-radius: 0px; color: #8BC34A; font-size: 11px; padding: 2px 12px;
-                    }
-                    QPushButton:hover { background-color: #4a5a4a; }
-                """)
-                header.addWidget(restore_btn)
+            restore_btn = QPushButton("Restore")
+            restore_btn.setFixedHeight(24)
+            restore_btn.setToolTip("Restore this deleted note")
+            restore_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            restore_btn.clicked.connect(self._on_restore)
+            restore_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #3a4a3a; border: 1px solid #4a6a4a;
+                    border-radius: 0px; color: #8BC34A; font-size: 11px; padding: 2px 12px;
+                }
+                QPushButton:hover { background-color: #4a5a4a; }
+            """)
+            header.addWidget(restore_btn)
 
     def _get_deleted_timestamp_style(self) -> str:
         return """
@@ -391,6 +373,20 @@ class NoteItemWidget(QFrame):
         self.resolve_toggled.emit(note_id, not current)
 
     def _on_delete(self):
+        # Cross-author confirmation (Option B Phase 4 — replaces role gate).
+        # Solo mode skips the prompt; only one person ever uses the library.
+        if self._is_studio_mode and not self._is_self_authored():
+            from PyQt6.QtWidgets import QMessageBox
+            author = self._note_data.get('author', 'someone else')
+            reply = QMessageBox.question(
+                self,
+                "Delete someone else's note?",
+                f"This note was written by {author}. Delete anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         note_id = self._note_data.get('id', -1)
         self.delete_requested.emit(note_id)
 
@@ -401,6 +397,20 @@ class NoteItemWidget(QFrame):
     def _start_edit(self, event):
         if self._edit_container is None:
             return
+        # Cross-author confirmation before allowing edit. Same shape as
+        # _on_delete; editing someone else's note is rare but legal.
+        if self._is_studio_mode and not self._is_self_authored():
+            from PyQt6.QtWidgets import QMessageBox
+            author = self._note_data.get('author', 'someone else')
+            reply = QMessageBox.question(
+                self,
+                "Edit someone else's note?",
+                f"This note was written by {author}. Edit anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         self._editing = True
         self._edit_input.setPlainText(self._note_data.get('note', ''))
         self._note_label.hide()
@@ -410,6 +420,11 @@ class NoteItemWidget(QFrame):
         cursor = self._edit_input.textCursor()
         cursor.select(cursor.SelectionType.Document)
         self._edit_input.setTextCursor(cursor)
+
+    def _is_self_authored(self) -> bool:
+        """True if this note's author matches the local identity name."""
+        author = self._note_data.get('author', '')
+        return bool(author) and author == self._current_user
 
     def _on_save_edit(self):
         if self._edit_container is None:
@@ -501,10 +516,10 @@ class ReviewNotesPanel(QWidget):
 
         header_layout.addStretch()
 
-        # Show deleted checkbox (elevated roles in Studio Mode)
-        if self._is_studio_mode and NotePermissions.can_view_deleted(
-            self._is_studio_mode, self._current_user_role
-        ):
+        # Show deleted checkbox — always visible in Studio Mode (Option B
+        # Phase 4 dropped the role gate). Solo mode has no deleted state to
+        # surface (it hard-deletes), so the checkbox stays hidden there.
+        if self._is_studio_mode:
             self._show_deleted_cb = QCheckBox("Show deleted")
             self._show_deleted_cb.setStyleSheet("color: #888; font-size: 11px;")
             self._show_deleted_cb.toggled.connect(self._on_show_deleted_toggled)

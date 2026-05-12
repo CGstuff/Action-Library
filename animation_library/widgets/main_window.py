@@ -81,6 +81,18 @@ class MainWindow(QMainWindow):
                 # User cancelled setup
                 sys.exit(0)
 
+        # First-run identity wizard (Option B per-machine identity).
+        # Forced — there's no "anonymous" mode. Runs after the library setup
+        # wizard so the app already knows where the library lives.
+        if not Config.has_identity():
+            from .dialogs.identity_wizard import IdentityWizard
+            identity_wizard = IdentityWizard()
+            if identity_wizard.exec() != QDialog.DialogCode.Accepted:
+                # User cancelled — same exit path as the setup wizard.
+                # (sys.exit cleanup risk is tracked separately as bug_fix_spec #3.)
+                sys.exit(0)
+            Config.save_identity(identity_wizard.get_identity())
+
         # Services and event bus (injectable for testing)
         self._event_bus = event_bus or get_event_bus()
         self._db_service = db_service or get_database_service()
@@ -301,6 +313,9 @@ class MainWindow(QMainWindow):
 
         # Header toolbar settings -> show settings dialog
         self._track_connection(self._header_toolbar.settings_clicked, self._show_settings)
+
+        # Header identity pill -> open Settings → Identity directly
+        self._track_connection(self._header_toolbar.identity_pill_clicked, self._show_identity_settings)
 
         # Header toolbar help -> show keyboard shortcuts overlay
         self._track_connection(self._header_toolbar.help_clicked, self._help_overlay.toggle)
@@ -622,6 +637,12 @@ class MainWindow(QMainWindow):
     def _show_settings(self):
         """Show settings dialog"""
         dialog = SettingsDialog(self._theme_manager, self)
+        dialog.exec()
+
+    def _show_identity_settings(self):
+        """Show settings dialog opened directly to the Identity tab."""
+        dialog = SettingsDialog(self._theme_manager, self)
+        dialog.open_identity_tab()
         dialog.exec()
 
     # ==================== SLOT HANDLERS ====================

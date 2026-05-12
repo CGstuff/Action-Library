@@ -59,6 +59,29 @@ if "%APP_VERSION%"=="" (
     echo       Detected version: %APP_VERSION%
 )
 
+REM Parse version for addon injection (strip 'v' prefix if present)
+set CLEAN_VERSION=%APP_VERSION:v=%
+for /f "tokens=1-3 delims=." %%a in ("%CLEAN_VERSION%") do (
+    set MAJOR=%%a
+    set MINOR=%%b
+    set PATCH=%%c
+)
+if "%PATCH%"=="" set PATCH=0
+if defined MAJOR (
+    echo       Parsed version: %MAJOR%.%MINOR%.%PATCH%
+)
+
+REM Inject version into Blender addon __init__.py.
+REM The addon source's bl_info["version"] tuple gets rewritten so the bundled
+REM copy (PyInstaller picks up blender_plugin/ as-is) ships with the right
+REM version. Reverted at the end of the build via `git checkout --`.
+if defined MAJOR (
+    echo.
+    echo [1.6/4] Injecting version into Blender addon...
+    powershell -Command "(Get-Content 'blender_plugin\__init__.py') -replace '\"version\": \(\d+, \d+, \d+\)', '\"version\": (%MAJOR%, %MINOR%, %PATCH%)' | Set-Content 'blender_plugin\__init__.py'"
+    echo       Addon version set to (%MAJOR%, %MINOR%, %PATCH%)
+)
+
 REM Run PyInstaller
 echo.
 echo [2/4] Running PyInstaller...
@@ -106,6 +129,11 @@ echo   folder to the new location.
 echo.
 ) > "dist\ActionLibrary\README.txt"
 echo       Created: dist/ActionLibrary/README.txt
+
+REM Revert in-place mutations so the working tree matches HEAD
+echo.
+echo Reverting build-time file mutations...
+git checkout -- blender_plugin\__init__.py 2>nul
 
 REM Cleanup version file
 if exist animation_library\version.txt (

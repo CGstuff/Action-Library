@@ -9,6 +9,7 @@ Design principles:
 - Studio-safe: can sync notes DB separately from assets
 """
 
+import logging
 import sqlite3
 import json
 from pathlib import Path
@@ -16,6 +17,8 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from ..config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class NotesDatabase:
@@ -461,10 +464,6 @@ class NotesDatabase:
         if mode not in ('solo', 'studio', 'pipeline'):
             return False
         return self.set_setting('app_mode', mode)
-
-    def get_current_user(self) -> str:
-        """Get current username."""
-        return self.get_setting('current_user', '')
 
     def get_show_deleted(self) -> bool:
         """Check if deleted notes should be shown."""
@@ -1103,9 +1102,14 @@ class NotesDatabase:
         frame: int,
         stroke_count: int,
         authors: str = '',
-        file_path: str = ''
+        file_path: str = '',
+        commit: bool = True,
     ) -> bool:
-        """Update or create drawover metadata entry."""
+        """Update or create drawover metadata entry.
+
+        Pass commit=False when chaining with another call inside a single
+        transaction (see log_drawover_with_metadata).
+        """
         try:
             cursor = self._connection.cursor()
             cursor.execute('''
@@ -1119,10 +1123,14 @@ class NotesDatabase:
                     file_path = excluded.file_path,
                     modified_at = CURRENT_TIMESTAMP
             ''', (animation_uuid, version_label, frame, stroke_count, authors, file_path))
-            self._connection.commit()
+            if commit:
+                self._connection.commit()
             return True
-        except Exception as e:
-            print(f"Failed to update drawover metadata: {e}")
+        except Exception:
+            logger.warning(
+                "Failed to update drawover metadata for %s frame %d",
+                version_label, frame, exc_info=True,
+            )
             return False
 
     def get_drawover_metadata(
@@ -1188,9 +1196,14 @@ class NotesDatabase:
         actor: str,
         actor_role: str = '',
         stroke_id: str = '',
-        details: Dict = None
-    ):
-        """Log a drawover action to the audit trail."""
+        details: Dict = None,
+        commit: bool = True,
+    ) -> bool:
+        """Log a drawover action to the audit trail.
+
+        Pass commit=False when chaining with another call inside a single
+        transaction (see log_drawover_with_metadata).
+        """
         try:
             cursor = self._connection.cursor()
             cursor.execute('''
@@ -1202,9 +1215,61 @@ class NotesDatabase:
                 action, actor, actor_role,
                 json.dumps(details) if details else ''
             ))
-            self._connection.commit()
-        except Exception as e:
-            print(f"Failed to log drawover action: {e}")
+            if commit:
+                self._connection.commit()
+            return True
+        except Exception:
+            logger.warning(
+                "Failed to log drawover action %s on %s frame %d",
+                action, version_label, frame, exc_info=True,
+            )
+            return False
+
+    def log_drawover_with_metadata(
+        self,
+        animation_uuid: str,
+        version_label: str,
+        frame: int,
+        action: str,
+        actor: str,
+        actor_role: str,
+        stroke_count: int,
+        authors: str = '',
+        file_path: str = '',
+        stroke_id: str = '',
+        details: Dict = None,
+    ) -> bool:
+        """Atomic combination of log_drawover_action + update_drawover_metadata.
+
+        Either both rows land or neither does — audit log and metadata stay in
+        sync. Use this instead of calling the two methods separately.
+        """
+        try:
+            ok_log = self.log_drawover_action(
+                animation_uuid, version_label, frame, action,
+                actor, actor_role, stroke_id, details,
+                commit=False,
+            )
+            ok_meta = self.update_drawover_metadata(
+                animation_uuid, version_label, frame, stroke_count,
+                authors, file_path,
+                commit=False,
+            )
+            if ok_log and ok_meta:
+                self._connection.commit()
+                return True
+            self._connection.rollback()
+            return False
+        except Exception:
+            try:
+                self._connection.rollback()
+            except Exception:
+                pass
+            logger.warning(
+                "log_drawover_with_metadata failed for %s frame %d",
+                version_label, frame, exc_info=True,
+            )
+            return False
 
     def get_drawover_audit_log(
         self,

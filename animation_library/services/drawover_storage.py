@@ -5,10 +5,13 @@ Handles saving/loading drawover JSON files and PNG cache generation.
 """
 
 import json
+import logging
+import os
+import threading
 import uuid as uuid_lib
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import OrderedDict
 
 from PyQt6.QtCore import QObject, pyqtSignal, QRunnable, QThreadPool
@@ -16,6 +19,8 @@ from PyQt6.QtGui import QImage, QPainter, QColor, QPen, QPainterPath, QFont
 from PyQt6.QtCore import Qt, QPointF, QRectF, QLineF
 
 from ..config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class DrawoverStorage:
@@ -36,6 +41,34 @@ class DrawoverStorage:
             base_path = Path(Config.get_database_folder())
         self._base = base_path / 'drawovers'
         self._base.mkdir(parents=True, exist_ok=True)
+
+        # Serializes the load→modify→write paths so concurrent edits to the
+        # same frame don't drop strokes. RLock allows nested locking from helpers.
+        self._write_lock = threading.RLock()
+
+    def _atomic_write_json(self, path: Path, data: Dict) -> None:
+        """Write JSON to path atomically via tempfile + rename.
+
+        A crash mid-write leaves either the previous file intact or the .tmp
+        leftover (cleaned up on next call). Never a half-written file.
+        """
+        tmp_path = path.with_suffix(path.suffix + '.tmp')
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except (OSError, AttributeError):
+                    pass  # not all filesystems support fsync
+            os.replace(tmp_path, path)
+        except Exception:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
+            raise
 
     def get_drawover_dir(self, animation_uuid: str, version: str) -> Path:
         """Get directory for a version's drawovers."""
@@ -79,44 +112,54 @@ class DrawoverStorage:
             True if saved successfully
         """
         try:
-            path = self.get_drawover_path(animation_uuid, version, frame)
-            path.parent.mkdir(parents=True, exist_ok=True)
+            with self._write_lock:
+                path = self.get_drawover_path(animation_uuid, version, frame)
+                path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Load existing data or create new
-            existing = self.load_drawover(animation_uuid, version, frame)
-            now = datetime.utcnow().isoformat() + 'Z'
+                # Load existing data or create new
+                existing = self.load_drawover(animation_uuid, version, frame)
+                now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
 
-            if existing:
-                data = existing
-                data['modified_at'] = now
-                data['strokes'] = strokes
-            else:
-                data = {
-                    'version': self.JSON_VERSION,
-                    'frame': frame,
-                    'canvas_size': list(canvas_size),
-                    'created_at': now,
-                    'modified_at': now,
-                    'author': author,
-                    'strokes': strokes,
-                    'deleted_strokes': []
-                }
+                if existing:
+                    data = existing
+                    data['modified_at'] = now
+                    data['strokes'] = strokes
+                else:
+                    data = {
+                        'version': self.JSON_VERSION,
+                        'frame': frame,
+                        'canvas_size': list(canvas_size),
+                        'created_at': now,
+                        'modified_at': now,
+                        'author': author,
+                        'strokes': strokes,
+                        'deleted_strokes': []
+                    }
 
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
+                self._atomic_write_json(path, data)
 
-            # Invalidate PNG cache
-            png_path = self.get_png_cache_path(animation_uuid, version, frame)
-            if png_path.exists():
-                png_path.unlink()
+                # Update manifest before invalidating PNG so the manifest never
+                # points at a missing-but-soon-to-be-rerendered PNG.
+                self._update_manifest(animation_uuid, version)
 
-            # Update manifest
-            self._update_manifest(animation_uuid, version)
+                # Invalidate PNG cache (best effort — stale PNG just means a
+                # re-render on next request, not a correctness issue).
+                png_path = self.get_png_cache_path(animation_uuid, version, frame)
+                if png_path.exists():
+                    try:
+                        png_path.unlink()
+                    except Exception:
+                        logger.warning(
+                            "Failed to remove stale PNG cache for %s frame %d",
+                            version, frame, exc_info=True,
+                        )
 
-            return True
+                return True
 
-        except Exception as e:
-            print(f"Error saving drawover: {e}")
+        except Exception:
+            logger.warning(
+                "Failed to save drawover for %s frame %d", version, frame, exc_info=True,
+            )
             return False
 
     def load_drawover(self, animation_uuid: str, version: str, frame: int) -> Optional[Dict]:
@@ -128,26 +171,41 @@ class DrawoverStorage:
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except Exception as e:
-            print(f"Error loading drawover: {e}")
+        except Exception:
+            logger.warning(
+                "Failed to load drawover for %s frame %d", version, frame, exc_info=True,
+            )
             return None
 
     def delete_drawover(self, animation_uuid: str, version: str, frame: int) -> bool:
         """Delete a frame's drawover files (hard delete)."""
         try:
-            json_path = self.get_drawover_path(animation_uuid, version, frame)
-            png_path = self.get_png_cache_path(animation_uuid, version, frame)
+            with self._write_lock:
+                json_path = self.get_drawover_path(animation_uuid, version, frame)
+                png_path = self.get_png_cache_path(animation_uuid, version, frame)
 
-            if json_path.exists():
-                json_path.unlink()
-            if png_path.exists():
-                png_path.unlink()
+                # Delete JSON first; only update manifest if that succeeded so
+                # the manifest never references a JSON that's still on disk.
+                if json_path.exists():
+                    json_path.unlink()
 
-            self._update_manifest(animation_uuid, version)
-            return True
+                # Best-effort PNG cleanup — failure here doesn't change correctness.
+                if png_path.exists():
+                    try:
+                        png_path.unlink()
+                    except Exception:
+                        logger.warning(
+                            "Failed to remove PNG cache for %s frame %d",
+                            version, frame, exc_info=True,
+                        )
 
-        except Exception as e:
-            print(f"Error deleting drawover: {e}")
+                self._update_manifest(animation_uuid, version)
+                return True
+
+        except Exception:
+            logger.warning(
+                "Failed to delete drawover for %s frame %d", version, frame, exc_info=True,
+            )
             return False
 
     def has_drawover(self, animation_uuid: str, version: str, frame: int) -> bool:
@@ -207,19 +265,21 @@ class DrawoverStorage:
         if 'id' not in stroke:
             stroke['id'] = f"stroke_{uuid_lib.uuid4().hex[:8]}"
 
-        stroke['created_at'] = datetime.utcnow().isoformat() + 'Z'
+        stroke['created_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
         stroke['author'] = author
 
-        # Load existing or create new
-        existing = self.load_drawover(animation_uuid, version, frame)
-        if existing:
-            existing['strokes'].append(stroke)
-            strokes = existing['strokes']
-        else:
-            strokes = [stroke]
+        # Lock around load+modify+save so concurrent add_stroke calls on the
+        # same frame don't drop strokes via lost-update race.
+        with self._write_lock:
+            existing = self.load_drawover(animation_uuid, version, frame)
+            if existing:
+                existing['strokes'].append(stroke)
+                strokes = existing['strokes']
+            else:
+                strokes = [stroke]
 
-        if self.save_drawover(animation_uuid, version, frame, strokes, author, canvas_size):
-            return stroke['id']
+            if self.save_drawover(animation_uuid, version, frame, strokes, author, canvas_size):
+                return stroke['id']
         return None
 
     def remove_stroke(
@@ -238,50 +298,58 @@ class DrawoverStorage:
             soft_delete: If True, move to deleted_strokes array (Studio Mode)
                         If False, permanently remove (Solo Mode)
         """
-        data = self.load_drawover(animation_uuid, version, frame)
-        if not data:
-            return False
+        with self._write_lock:
+            data = self.load_drawover(animation_uuid, version, frame)
+            if not data:
+                return False
 
-        # Find stroke
-        stroke_to_remove = None
-        for i, stroke in enumerate(data['strokes']):
-            if stroke.get('id') == stroke_id:
-                stroke_to_remove = data['strokes'].pop(i)
-                break
+            # Find stroke
+            stroke_to_remove = None
+            for i, stroke in enumerate(data['strokes']):
+                if stroke.get('id') == stroke_id:
+                    stroke_to_remove = data['strokes'].pop(i)
+                    break
 
-        if not stroke_to_remove:
-            return False
+            if not stroke_to_remove:
+                return False
 
-        if soft_delete:
-            # Move to deleted_strokes
-            if 'deleted_strokes' not in data:
-                data['deleted_strokes'] = []
+            if soft_delete:
+                # Move to deleted_strokes
+                if 'deleted_strokes' not in data:
+                    data['deleted_strokes'] = []
 
-            deleted_entry = {
-                'id': stroke_id,
-                'deleted_at': datetime.utcnow().isoformat() + 'Z',
-                'deleted_by': deleted_by,
-                'original_data': stroke_to_remove
-            }
-            data['deleted_strokes'].append(deleted_entry)
+                deleted_entry = {
+                    'id': stroke_id,
+                    'deleted_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z',
+                    'deleted_by': deleted_by,
+                    'original_data': stroke_to_remove
+                }
+                data['deleted_strokes'].append(deleted_entry)
 
-        # Save updated data
-        path = self.get_drawover_path(animation_uuid, version, frame)
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
+            # Save updated data atomically.
+            path = self.get_drawover_path(animation_uuid, version, frame)
+            try:
+                self._atomic_write_json(path, data)
+                self._update_manifest(animation_uuid, version)
 
-            # Invalidate PNG cache
-            png_path = self.get_png_cache_path(animation_uuid, version, frame)
-            if png_path.exists():
-                png_path.unlink()
+                png_path = self.get_png_cache_path(animation_uuid, version, frame)
+                if png_path.exists():
+                    try:
+                        png_path.unlink()
+                    except Exception:
+                        logger.warning(
+                            "Failed to remove PNG cache for %s frame %d after remove_stroke",
+                            version, frame, exc_info=True,
+                        )
 
-            self._update_manifest(animation_uuid, version)
-            return True
+                return True
 
-        except Exception as e:
-            print(f"Error removing stroke: {e}")
-            return False
+            except Exception:
+                logger.warning(
+                    "Failed to remove stroke %s from %s frame %d",
+                    stroke_id, version, frame, exc_info=True,
+                )
+                return False
 
     def restore_stroke(
         self,
@@ -297,24 +365,46 @@ class DrawoverStorage:
             return False
 
         # Find deleted stroke
-        for i, deleted in enumerate(data['deleted_strokes']):
-            if deleted.get('id') == stroke_id:
-                # Restore original data
-                original = deleted['original_data']
-                data['strokes'].append(original)
-                data['deleted_strokes'].pop(i)
+        with self._write_lock:
+            for i, deleted in enumerate(data['deleted_strokes']):
+                if deleted.get('id') == stroke_id:
+                    # Build the modified copy BEFORE attempting any writes so a
+                    # failure can't leave the in-memory data half-mutated.
+                    new_strokes = list(data['strokes'])
+                    new_strokes.append(deleted['original_data'])
+                    new_deleted = list(data['deleted_strokes'])
+                    new_deleted.pop(i)
 
-                # Save
-                path = self.get_drawover_path(animation_uuid, version, frame)
-                with open(path, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=2)
+                    path = self.get_drawover_path(animation_uuid, version, frame)
+                    try:
+                        candidate = dict(data)
+                        candidate['strokes'] = new_strokes
+                        candidate['deleted_strokes'] = new_deleted
+                        self._atomic_write_json(path, candidate)
+                    except Exception:
+                        logger.warning(
+                            "Failed to restore stroke %s on %s frame %d",
+                            stroke_id, version, frame, exc_info=True,
+                        )
+                        return False
 
-                # Invalidate cache
-                png_path = self.get_png_cache_path(animation_uuid, version, frame)
-                if png_path.exists():
-                    png_path.unlink()
+                    # Write succeeded — commit to the caller's copy too.
+                    data['strokes'] = new_strokes
+                    data['deleted_strokes'] = new_deleted
 
-                return True
+                    self._update_manifest(animation_uuid, version)
+
+                    png_path = self.get_png_cache_path(animation_uuid, version, frame)
+                    if png_path.exists():
+                        try:
+                            png_path.unlink()
+                        except Exception:
+                            logger.warning(
+                                "Failed to remove PNG cache for %s frame %d after restore_stroke",
+                                version, frame, exc_info=True,
+                            )
+
+                    return True
 
         return False
 
@@ -327,59 +417,49 @@ class DrawoverStorage:
         deleted_by: str = ''
     ) -> bool:
         """Clear all strokes on a frame."""
-        print(f"[DEBUG Storage.clear_frame] uuid={animation_uuid}, version={version}, frame={frame}")
-        print(f"[DEBUG Storage.clear_frame] soft_delete={soft_delete}, deleted_by={deleted_by}")
+        with self._write_lock:
+            data = self.load_drawover(animation_uuid, version, frame)
+            if not data:
+                return True  # Nothing to clear
 
-        path = self.get_drawover_path(animation_uuid, version, frame)
-        print(f"[DEBUG Storage.clear_frame] JSON path: {path}")
-        print(f"[DEBUG Storage.clear_frame] Path exists: {path.exists()}")
+            if soft_delete:
+                # Move all current strokes into deleted_strokes
+                if 'deleted_strokes' not in data:
+                    data['deleted_strokes'] = []
 
-        data = self.load_drawover(animation_uuid, version, frame)
-        print(f"[DEBUG Storage.clear_frame] Loaded data: {data is not None}")
-        if data:
-            print(f"[DEBUG Storage.clear_frame] Strokes in data: {len(data.get('strokes', []))}")
+                now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
+                for stroke in data['strokes']:
+                    deleted_entry = {
+                        'id': stroke.get('id', ''),
+                        'deleted_at': now,
+                        'deleted_by': deleted_by,
+                        'original_data': stroke
+                    }
+                    data['deleted_strokes'].append(deleted_entry)
 
-        if not data:
-            print("[DEBUG Storage.clear_frame] No data found - returning True (nothing to clear)")
-            return True  # Nothing to clear
+            data['strokes'] = []
 
-        if soft_delete:
-            # Move all to deleted
-            if 'deleted_strokes' not in data:
-                data['deleted_strokes'] = []
+            path = self.get_drawover_path(animation_uuid, version, frame)
+            try:
+                self._atomic_write_json(path, data)
+                self._update_manifest(animation_uuid, version)
 
-            now = datetime.utcnow().isoformat() + 'Z'
-            for stroke in data['strokes']:
-                deleted_entry = {
-                    'id': stroke.get('id', ''),
-                    'deleted_at': now,
-                    'deleted_by': deleted_by,
-                    'original_data': stroke
-                }
-                data['deleted_strokes'].append(deleted_entry)
+                png_path = self.get_png_cache_path(animation_uuid, version, frame)
+                if png_path.exists():
+                    try:
+                        png_path.unlink()
+                    except Exception:
+                        logger.warning(
+                            "Failed to remove PNG cache for %s frame %d after clear_frame",
+                            version, frame, exc_info=True,
+                        )
+                return True
 
-        data['strokes'] = []
-        print(f"[DEBUG Storage.clear_frame] Strokes after clear: {len(data['strokes'])}")
-
-        # Save
-        path = self.get_drawover_path(animation_uuid, version, frame)
-        try:
-            print(f"[DEBUG Storage.clear_frame] Saving to {path}...")
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
-            print("[DEBUG Storage.clear_frame] Saved successfully")
-
-            # Invalidate cache
-            png_path = self.get_png_cache_path(animation_uuid, version, frame)
-            if png_path.exists():
-                png_path.unlink()
-
-            self._update_manifest(animation_uuid, version)
-            return True
-
-        except Exception as e:
-            print(f"Error clearing frame: {e}")
-            return False
+            except Exception:
+                logger.warning(
+                    "Failed to clear frame %d on %s", frame, version, exc_info=True,
+                )
+                return False
 
     # ==================== PNG Rendering ====================
 
@@ -415,8 +495,10 @@ class DrawoverStorage:
         try:
             self._render_strokes_to_png(data, png_path, size)
             return png_path
-        except Exception as e:
-            print(f"Error rendering PNG: {e}")
+        except Exception:
+            logger.warning(
+                "Failed to render PNG for %s frame %d", version, frame, exc_info=True,
+            )
             return None
 
     def _render_strokes_to_png(
@@ -722,6 +804,10 @@ class DrawoverStorage:
                 }
 
             except Exception:
+                logger.warning(
+                    "Skipping unreadable drawover JSON in manifest scan: %s",
+                    json_path, exc_info=True,
+                )
                 continue
 
         manifest = {
@@ -733,8 +819,13 @@ class DrawoverStorage:
             'total_strokes': total_strokes
         }
 
-        with open(manifest_path, 'w', encoding='utf-8') as f:
-            json.dump(manifest, f, indent=2)
+        try:
+            self._atomic_write_json(manifest_path, manifest)
+        except Exception:
+            logger.warning(
+                "Failed to write manifest for %s/%s",
+                animation_uuid, version, exc_info=True,
+            )
 
     def get_manifest(self, animation_uuid: str, version: str) -> Optional[Dict]:
         """Get manifest data for a version."""
@@ -746,49 +837,59 @@ class DrawoverStorage:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception:
+            logger.warning(
+                "Failed to read manifest for %s/%s",
+                animation_uuid, version, exc_info=True,
+            )
             return None
 
 
 # ==================== Cache ====================
 
 class DrawoverCache:
-    """LRU cache for loaded drawover data."""
+    """LRU cache for loaded drawover data. Thread-safe."""
 
     def __init__(self, max_size: int = 50):
         self._cache: OrderedDict[str, Dict] = OrderedDict()
         self._max_size = max_size
+        self._lock = threading.Lock()
 
     def _make_key(self, animation_uuid: str, version: str, frame: int) -> str:
         return f"{animation_uuid}:{version}:{frame}"
 
     def get(self, animation_uuid: str, version: str, frame: int) -> Optional[Dict]:
         key = self._make_key(animation_uuid, version, frame)
-        if key in self._cache:
-            self._cache.move_to_end(key)
-            return self._cache[key]
-        return None
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+            return None
 
     def put(self, animation_uuid: str, version: str, frame: int, data: Dict):
         key = self._make_key(animation_uuid, version, frame)
-        self._cache[key] = data
-        self._cache.move_to_end(key)
+        with self._lock:
+            self._cache[key] = data
+            self._cache.move_to_end(key)
 
-        while len(self._cache) > self._max_size:
-            self._cache.popitem(last=False)
+            while len(self._cache) > self._max_size:
+                self._cache.popitem(last=False)
 
     def invalidate(self, animation_uuid: str, version: str, frame: int):
         key = self._make_key(animation_uuid, version, frame)
-        self._cache.pop(key, None)
+        with self._lock:
+            self._cache.pop(key, None)
 
     def invalidate_version(self, animation_uuid: str, version: str):
         """Invalidate all cached data for a version."""
         prefix = f"{animation_uuid}:{version}:"
-        keys_to_remove = [k for k in self._cache.keys() if k.startswith(prefix)]
-        for key in keys_to_remove:
-            self._cache.pop(key, None)
+        with self._lock:
+            keys_to_remove = [k for k in self._cache.keys() if k.startswith(prefix)]
+            for key in keys_to_remove:
+                self._cache.pop(key, None)
 
     def clear(self):
-        self._cache.clear()
+        with self._lock:
+            self._cache.clear()
 
 
 # ==================== Singleton ====================

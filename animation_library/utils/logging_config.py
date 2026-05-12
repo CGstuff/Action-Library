@@ -3,6 +3,7 @@ Centralized logging configuration for Animation Library v2
 """
 import logging
 import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from PyQt6.QtWidgets import QPlainTextEdit
 from PyQt6.QtCore import QObject, pyqtSignal, Qt
@@ -28,8 +29,13 @@ class LoggingConfig:
         logger = logging.getLogger()
         logger.setLevel(logging.DEBUG)
 
-        # File handler
-        file_handler = logging.FileHandler(cls._log_file_path, encoding='utf-8')
+        # File handler — rotates at 50 MB, keeps 5 backups (max ~300 MB on disk)
+        file_handler = RotatingFileHandler(
+            cls._log_file_path,
+            maxBytes=50_000_000,
+            backupCount=5,
+            encoding='utf-8',
+        )
         file_handler.setLevel(logging.DEBUG)
         file_formatter = logging.Formatter(
             '%(asctime)s [%(levelname)s] %(name)s: %(message)s',

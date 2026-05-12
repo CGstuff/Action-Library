@@ -15,7 +15,7 @@ import math
 import uuid as uuid_lib
 from enum import Enum
 from typing import Optional, List, Dict, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem,
@@ -690,7 +690,7 @@ class DrawoverCanvas(QGraphicsView):
             'size_px': self._diamond_size,
             'fill': True,
             'format': 'uv',
-            'created_at': datetime.now().isoformat(),
+            'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z',
             'author': self._current_author
         }
 
@@ -826,6 +826,8 @@ class DrawoverCanvas(QGraphicsView):
                     cmd = RemoveStrokeCommand(self, item, stroke_data)
                     self._undo_stack.push(cmd)
                     del self._stroke_items[stroke_id]
+                    # Drop the parallel _item_data entry so it doesn't leak across erase/undo cycles.
+                    self._item_data.pop(id(item), None)
                     self.stroke_removed.emit(stroke_id)
                     self.drawing_modified.emit()
                     break
@@ -866,7 +868,7 @@ class DrawoverCanvas(QGraphicsView):
             return None
 
         stroke_id = f"stroke_{uuid_lib.uuid4().hex[:8]}"
-        now = datetime.utcnow().isoformat() + 'Z'
+        now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
 
         rect = self._get_effective_rect()
         rect_size = min(rect.width(), rect.height()) if rect.width() > 0 else 1

@@ -96,9 +96,6 @@ class DatabaseService:
         db.review_notes.get_notes_for_animation(uuid)
     """
 
-    # Schema version (re-exported for compatibility)
-    SCHEMA_VERSION = 4
-
     def __init__(self, db_path: Optional[Path] = None):
         """
         Initialize database service.

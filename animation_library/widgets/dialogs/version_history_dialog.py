@@ -24,7 +24,9 @@ from PyQt6.QtGui import QColor, QPixmap, QImage, QIcon
 from ...config import Config
 from ...services.database_service import get_database_service
 from ...services.notes_database import get_notes_database
-from ...services.permissions import DrawoverPermissions
+# Permissions module removed (Option B Phase 4) — drawover clear gate
+# replaced with cross-author confirmation; soft/hard-delete decision is
+# now `self._is_studio_mode` directly.
 from ...services.drawover_storage import get_drawover_storage, get_drawover_cache
 from ...services.annotated_export_service import (
     find_ffmpeg, get_reviews_folder, generate_export_filename
@@ -142,7 +144,14 @@ class VersionHistoryDialog(QDialog):
 
         # Studio Mode state
         self._is_studio_mode: bool = self._notes_db.is_studio_mode()
-        self._current_user: str = self._notes_db.get_current_user()
+        # current_user is sourced from per-machine identity.json
+        # (Option B Phase 2). The shared notes-DB roster is no longer
+        # consulted for "who am I"; it's still queried for legacy role
+        # lookups via _get_current_user_role(), which bridges to 'admin'
+        # for users whose identity isn't in the roster.
+        from ...config import Config
+        identity = Config.load_identity()
+        self._current_user: str = identity.name if identity else ''
         self._current_user_role: str = self._get_current_user_role()
         self._show_deleted: bool = False  # Toggle state
 
@@ -157,11 +166,23 @@ class VersionHistoryDialog(QDialog):
         self._load_versions()
 
     def _get_current_user_role(self) -> str:
-        """Get role of current user."""
+        """
+        Get role of current user.
+
+        BRIDGE (Option B Phase 2 → Phase 4): Phase 4 removes role-based
+        permissions entirely. Until then, default to 'admin' so users
+        migrating from the old shared roster (where they may have been
+        Lead/Admin) don't suddenly lose abilities (delete, restore, etc.)
+        when their identity.json name doesn't match a roster entry.
+
+        If the identity name DOES happen to match a legacy roster row,
+        that row's role is honored — preserves behavior for users who
+        haven't yet had the roster removed underneath them.
+        """
         if not self._current_user:
-            return 'artist'
+            return 'admin'  # bridge — was 'artist'
         user = self._notes_db.get_user(self._current_user)
-        return user.get('role', 'artist') if user else 'artist'
+        return user.get('role', 'admin') if user else 'admin'  # bridge
 
     def _configure_window(self):
         self.setWindowTitle("Animation Lineage")
@@ -1315,6 +1336,14 @@ class VersionHistoryDialog(QDialog):
         if not self._selected_uuid or not self._selected_version_label:
             return
 
+        # Hide mode: the canvas's stroke state is stale (last-loaded frame still in _item_data).
+        # Both save and load must be skipped so that stale state isn't written to disk for
+        # every frame the user scrubs past. Just track the frame so other UI stays in sync.
+        if self._hide_annotations:
+            self._drawover_canvas.hide()
+            self._current_drawover_frame = frame
+            return
+
         # Save previous frame's drawover first (only if strokes were NOT from Hold)
         if self._current_drawover_frame >= 0 and self._current_drawover_frame != frame:
             if not self._strokes_from_hold:
@@ -1322,11 +1351,6 @@ class VersionHistoryDialog(QDialog):
 
         self._current_drawover_frame = frame
         self._strokes_from_hold = False  # Reset flag
-
-        # Handle Hide mode - just hide canvas
-        if self._hide_annotations:
-            self._drawover_canvas.hide()
-            return
 
         # Reposition canvas to match current video rect
         self._position_drawover_canvas()
@@ -1519,7 +1543,19 @@ class VersionHistoryDialog(QDialog):
 
         strokes = self._drawover_canvas.export_strokes()
 
-        if strokes:
+        # Persist the empty state too, but only if the frame previously had
+        # strokes on disk — otherwise we'd create noise files for every frame
+        # the user scrubbed past with an empty canvas.
+        had_existing = (
+            not strokes
+            and self._drawover_storage.has_drawover(
+                self._selected_uuid,
+                self._selected_version_label,
+                self._current_drawover_frame,
+            )
+        )
+
+        if strokes or had_existing:
             # Get canvas size from video label (which matches video content exactly)
             video_label = self._video_preview.video_label
             canvas_size = (
@@ -1544,27 +1580,29 @@ class VersionHistoryDialog(QDialog):
                     self._current_drawover_frame
                 )
 
-                # Log action if in studio mode
+                # Log action + update metadata atomically so the audit trail
+                # and per-frame metadata can't drift out of sync.
+                authors = set(s.get('author', '') for s in strokes if s.get('author'))
                 if self._is_studio_mode:
-                    self._notes_db.log_drawover_action(
+                    self._notes_db.log_drawover_with_metadata(
                         self._selected_uuid,
                         self._selected_version_label,
                         self._current_drawover_frame,
                         'saved',
                         self._current_user,
                         self._current_user_role,
-                        details={'stroke_count': len(strokes)}
+                        stroke_count=len(strokes),
+                        authors=','.join(authors),
+                        details={'stroke_count': len(strokes)},
                     )
-
-                # Update metadata
-                authors = set(s.get('author', '') for s in strokes if s.get('author'))
-                self._notes_db.update_drawover_metadata(
-                    self._selected_uuid,
-                    self._selected_version_label,
-                    self._current_drawover_frame,
-                    len(strokes),
-                    ','.join(authors)
-                )
+                else:
+                    self._notes_db.update_drawover_metadata(
+                        self._selected_uuid,
+                        self._selected_version_label,
+                        self._current_drawover_frame,
+                        len(strokes),
+                        ','.join(authors)
+                    )
 
                 # Update annotation markers on timeline
                 self._load_annotation_markers()
@@ -1628,27 +1666,31 @@ class VersionHistoryDialog(QDialog):
         if not strokes:
             return
 
-        # Check permissions for clearing in studio mode
+        # Cross-author confirmation if any stroke on this frame was drawn
+        # by someone else (Option B Phase 4 — replaces role gate).
         if self._is_studio_mode:
-            has_others = any(
-                s.get('author', '') and s.get('author') != self._current_user
+            other_authors = sorted({
+                s.get('author', '')
                 for s in strokes
-            )
-            if not DrawoverPermissions.can_clear_frame(
-                self._is_studio_mode,
-                self._current_user_role,
-                has_others
-            ):
-                QMessageBox.warning(
+                if s.get('author') and s.get('author') != self._current_user
+            })
+            if other_authors:
+                authors_str = ", ".join(other_authors)
+                reply = QMessageBox.question(
                     self,
-                    "Permission Denied",
-                    "You don't have permission to clear annotations from other users."
+                    "Clear annotations from other users?",
+                    f"This frame has annotations by: {authors_str}. "
+                    f"Clearing will remove their work too. Continue?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
                 )
-                return
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
 
-        # Clear from storage
+        # Clear from storage. Studio mode = soft delete (recoverable from
+        # storage); Solo mode = hard delete (matches the rest of Solo).
         if self._selected_uuid and self._selected_version_label:
-            soft_delete = DrawoverPermissions.use_soft_delete(self._is_studio_mode)
+            soft_delete = self._is_studio_mode
             success = self._drawover_storage.clear_frame(
                 self._selected_uuid,
                 self._selected_version_label,

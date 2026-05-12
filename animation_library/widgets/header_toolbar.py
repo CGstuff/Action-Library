@@ -7,7 +7,8 @@ Inspired by: Current animation_library toolbar
 
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QLineEdit, QPushButton,
-    QSlider, QLabel, QSpacerItem, QSizePolicy, QComboBox
+    QSlider, QLabel, QSpacerItem, QSizePolicy, QComboBox,
+    QFrame
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QSize
 from PyQt6.QtGui import QIcon
@@ -17,6 +18,81 @@ from ..events.event_bus import get_event_bus
 from ..services.database_service import get_database_service
 from ..utils import IconLoader, colorize_white_svg
 from ..themes.theme_manager import get_theme_manager
+
+
+class IdentityPill(QFrame):
+    """
+    Small always-visible widget showing the local identity.
+
+    Layout:  [colored circle]  [display_name]
+
+    Clicking the pill emits `clicked` so the parent can open Settings to
+    the Identity tab. Subscribes to event_bus.identity_changed so the
+    pill refreshes immediately when identity is edited in Settings.
+    """
+
+    clicked = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Click to edit your identity")
+        self.setFrameShape(QFrame.Shape.NoFrame)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 10, 4)
+        layout.setSpacing(8)
+
+        self._color_dot = QLabel()
+        self._color_dot.setFixedSize(14, 14)
+        layout.addWidget(self._color_dot)
+
+        self._name_label = QLabel("")
+        self._name_label.setStyleSheet(
+            "color: #1a1a1a; font-size: 12px; font-weight: 600;"
+        )
+        layout.addWidget(self._name_label)
+
+        # Subtle pill background so it reads as a clickable chip on the
+        # header gradient.
+        self.setStyleSheet("""
+            IdentityPill {
+                background-color: rgba(255, 255, 255, 0.18);
+                border-radius: 12px;
+            }
+            IdentityPill:hover {
+                background-color: rgba(255, 255, 255, 0.28);
+            }
+        """)
+
+        self._refresh()
+
+        # Listen for identity edits — pill auto-refreshes after Apply in
+        # Settings → Identity.
+        get_event_bus().identity_changed.connect(self._on_identity_changed)
+
+    def _refresh(self) -> None:
+        identity = Config.load_identity()
+        if identity is None:
+            # Defensive fallback — wizard normally guarantees one exists.
+            self._name_label.setText("(no identity)")
+            self._color_dot.setStyleSheet(
+                "background-color: #888; border-radius: 7px;"
+            )
+            return
+        self._name_label.setText(identity.display_name)
+        self._color_dot.setStyleSheet(
+            f"background-color: {identity.color}; border-radius: 7px;"
+        )
+
+    def _on_identity_changed(self, _identity) -> None:
+        # Param ignored — _refresh re-reads from disk for safety.
+        self._refresh()
+
+    def mousePressEvent(self, event):  # noqa: N802 (Qt convention)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class HeaderToolbar(QWidget):
@@ -50,6 +126,7 @@ class HeaderToolbar(QWidget):
     tags_filter_changed = pyqtSignal(list)  # List of selected tags
     sort_changed = pyqtSignal(str, str)  # (sort_by, sort_order)
     help_clicked = pyqtSignal()  # Help button clicked
+    identity_pill_clicked = pyqtSignal()  # Identity pill clicked → open Settings → Identity
 
     def __init__(self, parent=None, db_service=None, event_bus=None, theme_manager=None):
         super().__init__(parent)
@@ -190,6 +267,10 @@ class HeaderToolbar(QWidget):
         self._settings_btn.setFixedSize(40, 40)
         self._settings_btn.setToolTip("Settings (Ctrl+,)")
 
+        # Identity pill (Option B Phase 5) — colored circle + display name.
+        # Always visible, click opens Settings → Identity.
+        self._identity_pill = IdentityPill(self)
+
         # Help button (shows keyboard shortcuts)
         self._help_btn = QPushButton("?")
         self._help_btn.setFixedSize(40, 40)
@@ -258,10 +339,12 @@ class HeaderToolbar(QWidget):
         # Stretch spacer to push right buttons to far right
         layout.addStretch()
 
-        # ===== SECTION 4: RIGHT - Archive & System Buttons =====
+        # ===== SECTION 4: RIGHT - Archive, Identity & System Buttons =====
         # Archive button separated from refresh to prevent accidental clicks
         layout.addWidget(self._delete_btn)
-        layout.addSpacing(16)  # Extra spacing before system buttons
+        layout.addSpacing(16)  # Extra spacing before identity pill
+        layout.addWidget(self._identity_pill)
+        layout.addSpacing(12)  # Space between pill and system buttons
         layout.addWidget(self._about_btn)
         layout.addSpacing(4)
         layout.addWidget(self._console_btn)
@@ -296,6 +379,10 @@ class HeaderToolbar(QWidget):
 
         # Settings button
         self._settings_btn.clicked.connect(self.settings_clicked.emit)
+
+        # Identity pill — re-emits as identity_pill_clicked for the parent
+        # to open Settings → Identity tab.
+        self._identity_pill.clicked.connect(self.identity_pill_clicked.emit)
 
         # Help button
         self._help_btn.clicked.connect(self.help_clicked.emit)

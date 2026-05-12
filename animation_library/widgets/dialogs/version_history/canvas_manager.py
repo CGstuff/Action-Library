@@ -294,27 +294,29 @@ class AnnotationCanvasManager:
                     self._current_frame
                 )
 
-                # Log action in studio mode
+                # Log action + update metadata atomically so the audit trail
+                # and per-frame metadata can't drift out of sync.
+                authors = set(s.get('author', '') for s in strokes if s.get('author'))
                 if self._is_studio_mode:
-                    self._notes_db.log_drawover_action(
+                    self._notes_db.log_drawover_with_metadata(
                         self._selected_uuid,
                         self._selected_version_label,
                         self._current_frame,
                         'saved',
                         self._current_user,
                         self._current_user_role,
-                        details={'stroke_count': len(strokes)}
+                        stroke_count=len(strokes),
+                        authors=','.join(authors),
+                        details={'stroke_count': len(strokes)},
                     )
-
-                # Update metadata
-                authors = set(s.get('author', '') for s in strokes if s.get('author'))
-                self._notes_db.update_drawover_metadata(
-                    self._selected_uuid,
-                    self._selected_version_label,
-                    self._current_frame,
-                    len(strokes),
-                    ','.join(authors)
-                )
+                else:
+                    self._notes_db.update_drawover_metadata(
+                        self._selected_uuid,
+                        self._selected_version_label,
+                        self._current_frame,
+                        len(strokes),
+                        ','.join(authors)
+                    )
 
                 # Update annotation markers
                 self._load_annotation_markers()

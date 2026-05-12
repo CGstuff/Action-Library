@@ -15,12 +15,14 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QLabel, QPushButton, QMessageBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QDialog, QDialogButtonBox
+    QTableWidgetItem, QHeaderView, QDialog, QDialogButtonBox,
+    QAbstractItemView
 )
 from PyQt6.QtCore import Qt
 
 from ...services.database_service import get_database_service
 from ...services.database import SCHEMA_VERSION
+from ...services.notes_database import get_notes_database
 
 
 class MaintenanceTab(QWidget):
@@ -50,6 +52,16 @@ class MaintenanceTab(QWidget):
 
         # Maintenance Actions Group
         layout.addWidget(self._create_maintenance_section())
+
+        # Activity Log Group (Option B Phase 6 — surfaces the previously
+        # write-only audit log)
+        layout.addWidget(self._create_activity_log_section())
+        # Initial load of recent activity. Surface-level only — failure
+        # here shouldn't block the rest of the tab from opening.
+        try:
+            self._load_activity()
+        except Exception as e:
+            print(f"Initial activity log load failed: {e}")
 
         layout.addStretch()
 
@@ -212,6 +224,109 @@ class MaintenanceTab(QWidget):
         group_layout.addLayout(rebuild_layout)
 
         return group
+
+    def _create_activity_log_section(self):
+        """Create the Activity Log section (Option B Phase 6).
+
+        Surfaces the audit trail that was previously written but never
+        read. Notes-only for now (drawover audit log is a sibling table
+        with a different shape; future work).
+        """
+        group = QGroupBox("Activity Log")
+        group_layout = QVBoxLayout(group)
+
+        desc = QLabel(
+            "Recent actions on review notes (latest 100 entries). "
+            "Read-only audit trail."
+        )
+        desc.setWordWrap(True)
+        self._apply_secondary_style(desc)
+        group_layout.addWidget(desc)
+
+        # Read-only table.
+        self._activity_table = QTableWidget()
+        self._activity_table.setColumnCount(5)
+        self._activity_table.setHorizontalHeaderLabels(
+            ["Time", "Actor", "Action", "Frame", "Note"]
+        )
+        self._activity_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self._activity_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self._activity_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self._activity_table.verticalHeader().setVisible(False)
+        self._activity_table.setMinimumHeight(220)
+        self._activity_table.setAlternatingRowColors(True)
+
+        header = self._activity_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)   # Time
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)   # Actor
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)   # Action
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)   # Frame
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch) # Note
+        self._activity_table.setColumnWidth(0, 145)
+        self._activity_table.setColumnWidth(1, 110)
+        self._activity_table.setColumnWidth(2, 90)
+        self._activity_table.setColumnWidth(3, 60)
+
+        group_layout.addWidget(self._activity_table)
+
+        # Refresh button row.
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        self._refresh_activity_btn = QPushButton("Refresh")
+        self._refresh_activity_btn.setStyleSheet(self._button_style)
+        self._refresh_activity_btn.clicked.connect(self._load_activity)
+        btn_layout.addWidget(self._refresh_activity_btn)
+        group_layout.addLayout(btn_layout)
+
+        return group
+
+    def _load_activity(self):
+        """Re-query the audit log and repopulate the activity table."""
+        notes_db = get_notes_database()
+        try:
+            entries = notes_db.get_recent_activity(limit=100)
+        except Exception as e:
+            # Defensive — DB might not be initialized in some edge paths.
+            print(f"Activity log query failed: {e}")
+            entries = []
+
+        if not entries:
+            # Show an empty-state row spanning all columns.
+            self._activity_table.setRowCount(1)
+            empty = QTableWidgetItem("No recorded activity yet.")
+            empty.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            empty.setForeground(Qt.GlobalColor.gray)
+            self._activity_table.setItem(0, 0, empty)
+            self._activity_table.setSpan(0, 0, 1, 5)
+            return
+
+        # Clear any previous span before re-populating.
+        self._activity_table.clearSpans()
+        self._activity_table.setRowCount(len(entries))
+
+        for row, entry in enumerate(entries):
+            timestamp = str(entry.get('timestamp', '') or '')
+            actor = entry.get('actor', '') or '(unknown)'
+            action_raw = entry.get('action', '') or ''
+            action = action_raw.replace('_', ' ').title()
+            frame = entry.get('frame', 0)
+            note_preview = (entry.get('note_preview', '') or '')
+            # Single-line preview, capped — keeps table tidy.
+            note_preview = note_preview.replace('\n', ' ').strip()
+            if len(note_preview) > 90:
+                note_preview = note_preview[:87] + '...'
+
+            self._activity_table.setItem(row, 0, QTableWidgetItem(timestamp))
+            self._activity_table.setItem(row, 1, QTableWidgetItem(actor))
+            self._activity_table.setItem(row, 2, QTableWidgetItem(action))
+            self._activity_table.setItem(row, 3, QTableWidgetItem(f"f{frame}"))
+            self._activity_table.setItem(row, 4, QTableWidgetItem(note_preview))
 
     def _apply_secondary_style(self, label):
         """Apply secondary text styling to a label"""

@@ -92,6 +92,11 @@ class EventBus(QObject):
     # Settings events
     settings_changed = pyqtSignal(str, object)  # setting_name, value
 
+    # Identity events (Option B Phase 5 — per-machine user identity)
+    # Payload is the new Identity dataclass; uses 'object' because Identity
+    # is a Python type, not a Qt-registered type.
+    identity_changed = pyqtSignal(object)  # animation_library.services.identity.Identity
+
     def __init__(self):
         super().__init__()
 

@@ -4,6 +4,7 @@ Annotated Export Service - Export video with burned-in annotations
 Extracts video frames, composites annotation overlays, and encodes to MP4.
 """
 
+import logging
 import sys
 import shutil
 import tempfile
@@ -15,6 +16,8 @@ import cv2
 import numpy as np
 
 from .drawover_storage import get_drawover_storage
+
+logger = logging.getLogger(__name__)
 
 
 def find_ffmpeg() -> Optional[Path]:
@@ -141,12 +144,15 @@ def export_with_annotations(
         return False, f"Export failed: {str(e)}"
 
     finally:
-        # Clean up temp directory
+        # Clean up temp directory (log on failure — leaked dir is recoverable but
+        # we want to know about it).
         if temp_dir and temp_dir.exists():
             try:
                 shutil.rmtree(temp_dir)
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to remove annotated-export temp dir %s", temp_dir, exc_info=True,
+                )
 
 
 def _extract_and_composite_frames(

@@ -362,9 +362,10 @@ class ComparisonWidget(QWidget):
             video_b._show_current_frame()
             video_b._cv_frame_count += 1
 
-        # Update playhead positions on both timelines
-        self._column_a.set_current_frame(self._current_frame)
-        self._column_b.set_current_frame(self._current_frame)
+        # Update playhead positions on both timelines AND reload annotations
+        # so per-frame drawovers stay in sync during playback.
+        self._column_a.set_current_frame(self._current_frame, load_drawover=True)
+        self._column_b.set_current_frame(self._current_frame, load_drawover=True)
 
         # Update slider
         if not self._is_seeking and self._total_frames > 0:

@@ -35,7 +35,6 @@ class Config:
     STYLES_DIR: Final[Path] = ASSETS_DIR / "styles"
 
     # Database configuration
-    DATABASE_VERSION: Final[int] = 1
     DEFAULT_DB_NAME: Final[str] = "database.db"
 
     # Performance settings (Hybrid plan + Maya-inspired)
@@ -94,9 +93,6 @@ class Config:
     ENABLE_HOVER_VIDEO: Final[bool] = False  # Disabled for performance - using metadata panel preview instead
     ENABLE_DRAG_DROP: Final[bool] = True
     ENABLE_MULTI_SELECT: Final[bool] = True
-
-    # Database schema
-    DB_SCHEMA_VERSION: Final[int] = 1
 
     # Storage structure (human-readable folders)
     LIBRARY_FOLDER_NAME: Final[str] = "library"     # Hot storage for latest versions
@@ -301,6 +297,17 @@ class Config:
     def get_settings_file(cls) -> Path:
         """Get settings JSON file path"""
         return cls.get_user_data_dir() / 'settings.json'
+
+    @classmethod
+    def get_identity_file(cls) -> Path:
+        """
+        Get the per-machine identity file path.
+
+        Stored separately from settings.json so it's easy to find, easy to
+        manually recover, and conceptually distinct from "user preferences."
+        Identity is "who am I"; settings are "how I want the app to behave."
+        """
+        return cls.get_user_data_dir() / 'identity.json'
 
     # Library Path Settings
     LIBRARY_CONFIG_FILE: Final[str] = "library_path.txt"
@@ -567,6 +574,81 @@ class Config:
             return True
         except Exception:
             return False
+
+    # ==================== IDENTITY (per-machine) ====================
+    # See animation_library.services.identity for the Identity dataclass.
+    # Identity is intentionally stored in its OWN file (identity.json) rather
+    # than the general settings.json — it's "who am I" not "what do I prefer."
+
+    @classmethod
+    def load_identity(cls):
+        """
+        Load this machine's identity from identity.json.
+
+        Returns:
+            Identity instance if a valid identity file exists, None otherwise.
+            Caller (typically MainWindow.__init__) should treat None as
+            "show the first-run identity wizard."
+        """
+        from .services.identity import Identity
+        identity_file = cls.get_identity_file()
+        if not identity_file.exists():
+            return None
+        try:
+            import json
+            with open(identity_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return Identity.from_dict(data)
+        except Exception:
+            # Malformed file — treat as "no identity" so the wizard runs again.
+            return None
+
+    @classmethod
+    def save_identity(cls, identity) -> bool:
+        """
+        Save this machine's identity atomically to identity.json.
+
+        Args:
+            identity: Identity dataclass instance.
+
+        Returns:
+            True on success, False on any I/O failure.
+        """
+        try:
+            import json
+            import os
+            import tempfile
+            identity_file = cls.get_identity_file()
+            identity_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Atomic write: tmp file + rename. Avoids leaving a half-written
+            # identity if the process is killed mid-save.
+            fd, tmp_path = tempfile.mkstemp(
+                suffix='.tmp', dir=str(identity_file.parent)
+            )
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    json.dump(identity.to_dict(), f, indent=2, ensure_ascii=False)
+                os.replace(tmp_path, str(identity_file))
+                return True
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        except Exception:
+            return False
+
+    @classmethod
+    def has_identity(cls) -> bool:
+        """
+        True if a valid identity exists on this machine.
+
+        Used by MainWindow on launch to decide whether to show the first-run
+        identity wizard. A malformed identity file counts as "no identity."
+        """
+        return cls.load_identity() is not None
 
     # ==================== LIFECYCLE STATUS ====================
     # 'none' = no status (for solo animators using as simple asset browser)

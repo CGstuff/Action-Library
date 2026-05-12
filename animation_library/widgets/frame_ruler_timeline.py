@@ -99,17 +99,22 @@ class FrameRulerTimeline(QWidget):
         self.update()
 
     def get_frame_at_x(self, x: int) -> int:
-        """Convert X coordinate to frame number."""
+        """Convert X coordinate to frame number.
+
+        Symmetric with get_x_for_frame: divides by max(1, total_frames - 1)
+        so the last frame lives at the right edge of the ruler.
+        """
         ruler_width = self.width() - self._left_margin - self._right_margin
-        if ruler_width <= 0:
+        if ruler_width <= 0 or self._total_frames <= 0:
             return 0
 
         # Clamp X to ruler area
         x = max(self._left_margin, min(x, self.width() - self._right_margin))
         rel_x = x - self._left_margin
 
-        # Calculate frame
-        frame = int((rel_x / ruler_width) * self._total_frames)
+        denom = max(1, self._total_frames - 1)
+        # round() so click-near-edge lands on the visually-nearest frame.
+        frame = round((rel_x / ruler_width) * denom)
         return max(0, min(frame, self._total_frames - 1))
 
     def get_x_for_frame(self, frame: int) -> int:
