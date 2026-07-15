@@ -34,6 +34,15 @@ from ..protocol import (
 logger = logging.getLogger(__name__)
 
 
+# Result of queue_apply_* — lets the caller report honestly instead of always
+# claiming "Applied". APPLIED and QUEUED are both truthy (backward compatible
+# with `if result:` checks); FAILED is falsy.
+APPLY_APPLIED = 'applied'   # Blender confirmed it applied (socket round-trip)
+APPLY_QUEUED = 'queued'     # Written to the file queue; Blender will process it
+                            # when it is running - NOT yet confirmed applied
+APPLY_FAILED = None         # Could not send, or Blender reported an error
+
+
 class BlenderService:
     """
     Service for communicating with Blender plugin
@@ -149,16 +158,16 @@ class BlenderService:
             if response is not None:
                 if response.get('status') == 'success':
                     logger.info(f"Socket: Applied animation '{animation_name}'")
-                    return True
+                    return APPLY_APPLIED
                 else:
                     logger.warning(f"Socket: Error - {response.get('message')}")
                     # Don't fall back on actual errors (like no armature selected)
                     # Only fall back if socket communication itself failed
-                    return False
+                    return APPLY_FAILED
         except Exception as e:
             logger.debug(f"Socket unavailable, using file fallback: {e}")
 
-        # Fallback to file-based communication
+        # Fallback to file-based communication (queued, not confirmed applied)
         return self._queue_apply_animation_file(animation_id, animation_name, options)
 
     def _queue_apply_animation_file(
@@ -189,11 +198,11 @@ class BlenderService:
             temp_file.rename(apply_file)
 
             logger.debug(f"Wrote queue file: {apply_file}")
-            return True
+            return APPLY_QUEUED
 
         except Exception as e:
             logger.error(f"Error writing queue file: {e}")
-            return False
+            return APPLY_FAILED
 
     def queue_apply_pose(
         self,
@@ -230,14 +239,14 @@ class BlenderService:
             if response is not None:
                 if response.get('status') == 'success':
                     logger.info(f"Socket: Applied pose '{pose_name}'")
-                    return True
+                    return APPLY_APPLIED
                 else:
                     logger.warning(f"Socket: Error - {response.get('message')}")
-                    return False
+                    return APPLY_FAILED
         except Exception as e:
             logger.debug(f"Socket unavailable, using file fallback: {e}")
 
-        # Fallback to file-based communication
+        # Fallback to file-based communication (queued, not confirmed applied)
         return self._queue_apply_pose_file(pose_id, pose_name, blend_file_path, mirror)
 
     def _queue_apply_pose_file(
@@ -269,11 +278,11 @@ class BlenderService:
             temp_file.rename(apply_file)
 
             logger.debug(f"Wrote pose queue file: {apply_file}")
-            return True
+            return APPLY_QUEUED
 
         except Exception as e:
             logger.error(f"Error writing pose queue file: {e}")
-            return False
+            return APPLY_FAILED
 
     def get_queue_size(self) -> int:
         """

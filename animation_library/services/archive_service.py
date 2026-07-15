@@ -13,6 +13,7 @@ import gc
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
+from ..config import Config
 from .database_service import get_database_service, DatabaseService
 from .utils.path_utils import (
     get_library_path,
@@ -111,6 +112,12 @@ class ArchiveService:
                 self._db.delete_animation(uuid)
                 return True, "Animation removed (files were already missing)"
 
+            # Snapshot restorable metadata (gradient, favorite, status, lock,
+            # tags, description) into the JSON BEFORE we copy the folder to the
+            # archive - the DB row is about to be deleted, so the JSON is the only
+            # thing that survives to restore from.
+            self._db.sync_metadata_to_json(uuid)
+
             # Destination folder - preserve original folder name (.deleted/{folder_name}/)
             dest_folder = _get_unique_folder_name(archive_folder, source_folder.name)
 
@@ -165,6 +172,10 @@ class ArchiveService:
             # Remove from animations table first (so it's gone from UI)
             self._db.delete_animation(uuid)
 
+            # If this was the latest version of a multi-version asset, promote a
+            # survivor so the lineage doesn't vanish from the grid.
+            self._promote_survivor_if_latest(animation)
+
             # Try to delete original files
             still_locked = safe_delete_folder_contents(source_folder, skip_files=failed_files)
 
@@ -210,7 +221,11 @@ class ArchiveService:
                 self._db.delete_from_archive(uuid)
                 return False, "Archive files not found (already deleted?)"
 
-            # Destination folder - use animation base name (human-readable)
+            # Destination folder - place under actions/ or poses/ to match the v11
+            # layout. Previously this used library/{base_name} (no actions/poses
+            # segment), so restored assets landed OUTSIDE the folders Blender and
+            # the resolvers scan - they couldn't be applied, captured, or found,
+            # and had to be moved back by hand.
             animation_name = archive_item.get('name', 'unnamed')
 
             # Get base name (strip version suffix) for folder
@@ -219,8 +234,18 @@ class ArchiveService:
             safe_base_name = safe_base_name.strip(' .') or 'unnamed'
             safe_base_name = re.sub(r'_+', '_', safe_base_name)
 
-            # Folder name: {base_name}/ (human-readable, no UUID)
-            dest_folder = library_folder / safe_base_name
+            # actions/ vs poses/ - read from the archived JSON, fall back to
+            # "single-frame == pose".
+            source_meta = self._peek_source_json(source_folder)
+            is_pose = source_meta.get('is_pose')
+            if is_pose is None:
+                is_pose = 1 if (archive_item.get('frame_count') == 1) else 0
+            try:
+                parent_folder = Config.get_poses_folder() if is_pose else Config.get_actions_folder()
+            except ValueError:
+                parent_folder = library_folder  # library not configured (shouldn't reach here)
+
+            dest_folder = parent_folder / safe_base_name
 
             if dest_folder.exists():
                 # Check if it's already in the database
@@ -230,10 +255,15 @@ class ArchiveService:
                     self._db.delete_from_archive(uuid)
                     logger.info(f"Animation {uuid} already in library, cleaned up archive record")
                     return True, "Animation already restored"
-                else:
-                    # Folder exists but not in DB - remove orphan folder and continue
-                    shutil.rmtree(str(dest_folder))
-                    logger.warning(f"Removed orphan folder for {uuid}")
+                # The folder name is taken by a DIFFERENT asset (or an orphan).
+                # NEVER delete it - that could destroy another animation's files.
+                # Restore into a unique sibling name instead. (The UUID-folder
+                # scheme will remove this name collision entirely.)
+                dest_folder = _get_unique_folder_name(parent_folder, safe_base_name)
+                logger.warning(
+                    f"Restore target '{safe_base_name}' already exists; "
+                    f"restoring to '{dest_folder.name}' to avoid overwrite"
+                )
 
             # Determine target folder
             folder_id = target_folder_id
@@ -297,12 +327,26 @@ class ArchiveService:
             animation_data['thumbnail_path'] = str(dest_folder / f"{safe_anim_name}.png")
             animation_data['preview_path'] = str(dest_folder / f"{safe_anim_name}.webm")
 
+            # Backfill NOT NULL / required fields from the archive record if the
+            # JSON lacked them, so the insert can't fail on e.g. a missing
+            # rig_type (which would abort the restore).
+            if not animation_data.get('rig_type'):
+                animation_data['rig_type'] = archive_item.get('rig_type') or 'unknown'
+            if not animation_data.get('name'):
+                animation_data['name'] = archive_item.get('name', 'Restored Animation')
+
             # Add back to animations table
             result = self._db.add_animation(animation_data)
             if not result:
                 # Rollback - move files back to archive
                 shutil.move(str(dest_folder), str(source_folder))
                 return False, "Failed to restore to database"
+
+            # Reconcile the version group's is_latest so we never end up with two
+            # "latest" rows - e.g. when this version was the latest, archiving it
+            # promoted a survivor (H6), and the restored row also claims latest.
+            # The highest version number becomes the single latest.
+            self._reconcile_group_latest(animation_data.get('version_group_id'))
 
             # Remove from archive table
             self._db.delete_from_archive(uuid)
@@ -420,13 +464,90 @@ class ArchiveService:
 
             # Remove from database
             self._db.delete_animation(uuid)
-            
+
+            # If we just removed the LATEST version of a multi-version asset,
+            # promote a surviving version - otherwise the whole lineage has no
+            # is_latest=1 row and vanishes from the grid (which filters on it).
+            self._promote_survivor_if_latest(animation)
+
             logger.info(f"Instant deleted animation '{animation.get('name')}'")
             return True, "Animation deleted"
 
         except Exception as e:
             logger.error(f"Failed to instant delete animation: {e}")
             return False, f"Error: {str(e)}"
+
+    def _peek_source_json(self, folder: Path) -> Dict[str, Any]:
+        """Read the first JSON in an archived folder (best-effort) to recover
+        fields like is_pose before the folder is moved. Returns {} on failure.
+        """
+        try:
+            import json
+            for jf in Path(folder).glob("*.json"):
+                with open(jf, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _reconcile_group_latest(self, version_group_id: Optional[str]) -> None:
+        """Ensure a version group has exactly one is_latest=1 row (the highest
+        version). Fixes the double-latest / 'both show v001' corruption that
+        archive+restore could create alongside H6's promotion. Best-effort.
+        """
+        try:
+            if not version_group_id:
+                return
+            versions = self._db.get_version_history(version_group_id)  # version DESC
+            if not versions:
+                return
+            winner = versions[0]
+            latest_rows = [v for v in versions if v.get('is_latest')]
+            if len(latest_rows) == 1 and latest_rows[0].get('uuid') == winner.get('uuid'):
+                return  # already exactly one latest, and it's the highest version
+            self._db.set_as_latest(winner['uuid'])
+            logger.info(
+                f"Reconciled version group latest -> '{winner.get('name')}' "
+                f"(v{winner.get('version')})"
+            )
+        except Exception as e:
+            logger.warning(f"Could not reconcile version group latest: {e}")
+
+    def _promote_survivor_if_latest(self, deleted_animation: Dict[str, Any]) -> None:
+        """Promote a surviving version to latest after a version was deleted.
+
+        If the deleted row was the group's is_latest=1 version and other versions
+        survive, promote the highest-numbered survivor - otherwise the lineage is
+        left with no is_latest=1 row and the whole asset disappears from the grid
+        (which filters on is_latest=1). No-op for single-version assets or when a
+        latest already exists. Best-effort; never raises.
+
+        Note: the promoted version's files may still physically live in cold
+        storage (_versions/). The path resolvers fall back to cold storage, so the
+        asset stays fully browsable and applicable; physically relocating it to
+        hot storage is a separate refinement.
+        """
+        try:
+            if not deleted_animation.get('is_latest'):
+                return
+            version_group_id = deleted_animation.get('version_group_id')
+            if not version_group_id:
+                return
+            # After the delete this returns only surviving versions, ordered by
+            # version DESC (highest first).
+            survivors = self._db.get_version_history(version_group_id)
+            if not survivors:
+                return
+            if any(v.get('is_latest') for v in survivors):
+                return  # A latest already exists; nothing to promote.
+            winner = survivors[0]
+            if self._db.set_as_latest(winner['uuid']):
+                logger.info(
+                    f"Promoted '{winner.get('name')}' (v{winner.get('version')}) to latest "
+                    f"after deleting the previous latest version"
+                )
+        except Exception as e:
+            logger.warning(f"Could not promote a surviving version after delete: {e}")
 
     def get_archive_items(self) -> List[Dict[str, Any]]:
         """

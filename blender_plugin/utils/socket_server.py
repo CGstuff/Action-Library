@@ -163,7 +163,8 @@ def start_server(host: Optional[str] = None, port: Optional[int] = None) -> bool
         _server_thread.start()
 
         _is_initialized = True
-        # Note: Timer is now handled by modal operator in socket_operator.py
+        # Note: the command queue is drained on the main thread by a
+        # bpy.app.timers callback (see operators/AL_socket_listener.py).
         logger.info(f"Socket server started on {host}:{port}")
         return True
 
@@ -337,7 +338,7 @@ def _send_response(client_socket: socket.socket, response: dict):
 def process_command_queue():
     """
     Process queued commands on main thread.
-    Called by the modal operator timer.
+    Called by the bpy.app.timers callback in AL_socket_listener.py.
 
     Uses time budget for light commands and limits heavy commands
     to prevent blocking Blender's UI.

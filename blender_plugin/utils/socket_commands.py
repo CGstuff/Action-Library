@@ -117,20 +117,27 @@ def validate_command(command: dict, command_type: str) -> Tuple[bool, Optional[s
 
 
 def _get_active_armature():
-    """Get the active armature object, or find one in the scene"""
+    """Get the armature to apply to.
+
+    Prefers the active object, then a selected armature. As a convenience it also
+    uses the scene's ONLY armature when there is exactly one - but when the scene
+    has MULTIPLE armatures it refuses to guess (returns None) so a socket apply
+    never silently targets the wrong rig in a multi-character scene. In the
+    ambiguous case the caller reports "No armature selected" and the user picks.
+    """
     obj = bpy.context.active_object
     if obj and obj.type == 'ARMATURE':
         return obj
 
-    # Try to find an armature in selection
+    # A selected armature
     for obj in bpy.context.selected_objects:
         if obj.type == 'ARMATURE':
             return obj
 
-    # Try to find any armature in scene
-    for obj in bpy.context.scene.objects:
-        if obj.type == 'ARMATURE':
-            return obj
+    # Only auto-pick from the scene when it is unambiguous (exactly one armature).
+    scene_armatures = [o for o in bpy.context.scene.objects if o.type == 'ARMATURE']
+    if len(scene_armatures) == 1:
+        return scene_armatures[0]
 
     return None
 

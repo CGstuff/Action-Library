@@ -59,12 +59,12 @@ class AnimationRepository:
                         uuid, name, description, folder_id, rig_type, armature_name,
                         bone_count, frame_start, frame_end, frame_count, duration_seconds,
                         fps, blend_file_path, json_file_path, preview_path, thumbnail_path,
-                        file_size_mb, tags, author, use_custom_thumbnail_gradient,
+                        file_size_mb, tags, author, is_favorite, is_locked, use_custom_thumbnail_gradient,
                         thumbnail_gradient_top, thumbnail_gradient_bottom,
                         created_date, modified_date,
                         version, version_label, version_group_id, is_latest, status, is_pose, is_partial,
                         naming_fields, naming_template
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     uuid,
                     animation_data.get('name'),
@@ -85,6 +85,8 @@ class AnimationRepository:
                     animation_data.get('file_size_mb'),
                     tags_json,
                     animation_data.get('author', ''),
+                    animation_data.get('is_favorite', 0),
+                    animation_data.get('is_locked', 0),
                     animation_data.get('use_custom_thumbnail_gradient', 0),
                     animation_data.get('thumbnail_gradient_top'),
                     animation_data.get('thumbnail_gradient_bottom'),
@@ -107,7 +109,12 @@ class AnimationRepository:
                 ))
 
                 return cursor.lastrowid
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"AnimationRepository.add failed for '{animation_data.get('name')}' "
+                f"({animation_data.get('uuid')}): {e}"
+            )
             return None
 
     def get_by_uuid(self, uuid: str) -> Optional[Dict[str, Any]]:
@@ -930,7 +937,17 @@ class AnimationRepository:
 
         # Determine if this is cold storage (old version) or hot storage (latest)
         is_latest = animation.get('is_latest', 1)
+        is_pose = animation.get('is_pose', 0)
         version_label = for_version or animation.get('version_label', 'v001')
+
+        # Hot storage lives under actions/ or poses/ (v11 human-readable
+        # structure): library/actions/{base_name}/ or library/poses/{base_name}/.
+        # Reconstructing this correctly is essential when the stored absolute
+        # path doesn't resolve (e.g. another machine with a different drive
+        # mapping) - otherwise thumbnails/previews silently fail to load.
+        def _hot_folder() -> Path:
+            parent = Config.get_poses_folder() if is_pose else Config.get_actions_folder()
+            return parent / base_name
 
         try:
             if is_latest == 0 or for_version:
@@ -940,12 +957,10 @@ class AnimationRepository:
                 if cold_path.exists():
                     return cold_path
                 # Fallback to hot storage if cold doesn't exist
-                library_folder = Config.get_library_folder()
-                return library_folder / base_name
+                return _hot_folder()
             else:
-                # Hot storage: library/{base_name}/
-                library_folder = Config.get_library_folder()
-                return library_folder / base_name
+                # Hot storage: library/actions|poses/{base_name}/
+                return _hot_folder()
         except ValueError:
             # Library not configured
             return None
@@ -978,15 +993,26 @@ class AnimationRepository:
             path = folder / f"{safe_name}.blend"
             if path.exists():
                 return path
+            # Fallback: on-disk name may differ from the current name (partial/
+            # desynced rename, or a peer whose stored absolute path doesn't
+            # resolve). Grab any .blend in the folder; sorted() keeps it stable.
+            blend_files = sorted(folder.glob("*.blend"))
+            if blend_files:
+                return blend_files[0]
 
         # Try cold storage: _versions/{base_name}/{version_label}/
         base_name = Config.get_base_name(name)
         version_label = animation.get('version_label', 'v001')
         try:
             versions_folder = Config.get_versions_folder()
-            cold_path = versions_folder / base_name / version_label / f"{safe_name}.blend"
+            cold_folder = versions_folder / base_name / version_label
+            cold_path = cold_folder / f"{safe_name}.blend"
             if cold_path.exists():
                 return cold_path
+            if cold_folder.exists():
+                blend_files = sorted(cold_folder.glob("*.blend"))
+                if blend_files:
+                    return blend_files[0]
         except ValueError:
             pass
 
@@ -1020,15 +1046,25 @@ class AnimationRepository:
             path = folder / f"{safe_name}.json"
             if path.exists():
                 return path
+            # Fallback: on-disk name may differ from the current name. Grab any
+            # .json in the folder; sorted() keeps the choice stable.
+            json_files = sorted(folder.glob("*.json"))
+            if json_files:
+                return json_files[0]
 
         # Try cold storage: _versions/{base_name}/{version_label}/
         base_name = Config.get_base_name(name)
         version_label = animation.get('version_label', 'v001')
         try:
             versions_folder = Config.get_versions_folder()
-            cold_path = versions_folder / base_name / version_label / f"{safe_name}.json"
+            cold_folder = versions_folder / base_name / version_label
+            cold_path = cold_folder / f"{safe_name}.json"
             if cold_path.exists():
                 return cold_path
+            if cold_folder.exists():
+                json_files = sorted(cold_folder.glob("*.json"))
+                if json_files:
+                    return json_files[0]
         except ValueError:
             pass
 
@@ -1063,6 +1099,14 @@ class AnimationRepository:
                 path = folder / f"{safe_name}{ext}"
                 if path.exists():
                     return path
+            # Fallback: the on-disk filename may differ from the current name
+            # (e.g. after a partial/desynced rename, or when read from another
+            # machine whose stored absolute path doesn't resolve). Grab any
+            # preview video in the folder. sorted() keeps the choice stable.
+            for ext in ['*.webm', '*.mp4']:
+                video_files = sorted(folder.glob(ext))
+                if video_files:
+                    return video_files[0]
 
         # Try cold storage: _versions/{base_name}/{version_label}/
         base_name = Config.get_base_name(name)
@@ -1123,6 +1167,13 @@ class AnimationRepository:
             path = folder / f"{safe_name}.png"
             if path.exists():
                 return path
+            # Fallback: the on-disk filename may differ from the current name
+            # (e.g. after a partial/desynced rename, or when read from another
+            # machine whose stored absolute path doesn't resolve). Grab any PNG
+            # in the animation's folder. sorted() keeps the choice stable.
+            png_files = sorted(folder.glob("*.png"))
+            if png_files:
+                return png_files[0]
 
         # Try cold storage: _versions/{base_name}/{version_label}/
         base_name = Config.get_base_name(name)

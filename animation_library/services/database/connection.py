@@ -1,7 +1,7 @@
 """
 Database Connection - Thread-local SQLite connection management
 
-Provides thread-safe connection handling with WAL mode.
+Provides thread-safe connection handling with a network-safe rollback journal.
 """
 
 import sqlite3
@@ -21,8 +21,8 @@ class DatabaseConnection:
 
     Provides:
     - Thread-safe connections via thread-local storage
-    - Write lock for serializing database writes (prevents WAL corruption)
-    - WAL mode for better read concurrency
+    - Write lock for serializing database writes across threads
+    - Network-safe rollback journal (DELETE) - NOT WAL, which corrupts over SMB
     - Foreign key support
     - Transaction context manager
     """
@@ -36,8 +36,7 @@ class DatabaseConnection:
         """
         self.db_path = db_path
         self._local = threading.local()
-        # Write lock to serialize database writes across threads
-        # This prevents potential WAL corruption with concurrent writes
+        # Write lock to serialize database writes across threads in this process
         self._write_lock = threading.RLock()
 
     def get_connection(self) -> sqlite3.Connection:
@@ -55,8 +54,22 @@ class DatabaseConnection:
             )
             # Enable foreign keys
             conn.execute("PRAGMA foreign_keys = ON")
-            # Use WAL mode for better concurrency
-            conn.execute("PRAGMA journal_mode = WAL")
+            # Journal mode: a rollback journal (DELETE), NOT WAL. This database
+            # lives at {library}/.meta/database.db, which for studios sits on a
+            # shared NETWORK drive - and SQLite's WAL mode relies on shared memory
+            # (mmap) that is unreliable/unsupported over SMB shares and can CORRUPT
+            # the database. DELETE is safe over network filesystems. The cost (a
+            # reader briefly waits during a write's exclusive lock) is negligible
+            # for this read-heavy, single-writer workload.
+            # Switching an existing WAL database here checkpoints it and converts
+            # to DELETE automatically (one-time, safe).
+            try:
+                conn.execute("PRAGMA journal_mode = DELETE")
+            except sqlite3.Error as e:
+                logger.warning(f"Could not set journal_mode=DELETE: {e}")
+            # Wait for a busy lock instead of failing instantly (also covered by
+            # the connect() timeout above; set explicitly for clarity).
+            conn.execute("PRAGMA busy_timeout = 30000")
             # Row factory for dict-like access
             conn.row_factory = sqlite3.Row
 

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-07-15
+
+### Fixed
+
+- **Blender Auto-Save Restored** - With the addon enabled, Blender's auto-save silently never ran because the socket listener was a permanent modal operator (Blender skips auto-save while a modal operator is active). The listener now drains its queue via `bpy.app.timers`, so auto-save works normally without toggling the addon off.
+- **App Freeze / Stall on Apply** - Fixed the desktop app freezing on the second Apply (a socket response desync left the connection permanently out of step) and, separately, the UI stalling on slow applies (the socket round-trip now runs off the UI thread instead of blocking it for up to 30s).
+- **Rename Broke Apply** - Applying an animation after renaming it failed ("blend file not found") because the addon trusted a stale embedded path. Apply now locates the file by UUID, so renamed assets apply correctly.
+- **Thumbnails/Previews Missing for Other Animators** - On shared/network libraries, peers on a different drive letter saw missing thumbnails because path resolution reconstructed the wrong folder. Resolution now rebuilds the correct `actions/`/`poses/` folder and falls back to matching files, so all animators see previews.
+- **Deleting the Latest Version Erased the Asset** - Deleting the latest version of a multi-version animation left the lineage with no current version, making the whole asset vanish from the grid. A surviving version is now promoted automatically.
+- **Move to Archive Crash** - "Move to Archive" from the card context menu crashed (missing method); it now archives correctly.
+- **Archive/Restore Data Loss** - Restoring from Archive placed files in the wrong location, could create a corrupted version state (two "latest" versions), and lost the custom thumbnail gradient/favorite/status. Restore now targets the correct folder, reconciles the version flags, and preserves that metadata.
+- **Honest Apply Status** - The app no longer reports "Applied" when Blender is closed and the request was only queued; it now distinguishes Applied / Queued / Failed.
+- **Apply-as-Slot on a Fresh Rig (Blender 5)** - Applying with "Use Slots" onto an armature with no existing action silently degraded to a plain (non-slotted) action; it now creates a proper slotted action.
+
+### Reliability
+
+- **Network Database Corruption Guard** - The shared metadata database used SQLite WAL mode, which relies on shared memory that is unreliable over network shares and can corrupt the database. It now uses a network-safe rollback journal; existing databases convert automatically and safely on first open.
+
 ## [1.4.4] - 2026-05-13
 
 ### Changed

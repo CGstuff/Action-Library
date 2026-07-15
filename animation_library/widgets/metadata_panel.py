@@ -984,6 +984,14 @@ class MetadataPanel(QWidget):
 
             # Notify via event bus
             self._event_bus.animation_updated.emit(uuid)
+        else:
+            # The write was rejected - most commonly because status is read-only
+            # in Pipeline mode (controlled by Pipeline Control), or a DB lock.
+            # Surface it instead of failing silently.
+            self._event_bus.report_error(
+                "status",
+                "Could not change status - it may be read-only (controlled by Pipeline Control)."
+            )
 
     def _on_view_history_clicked(self):
         """Open version history dialog"""

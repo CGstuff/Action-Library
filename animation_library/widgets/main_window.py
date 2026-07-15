@@ -11,14 +11,14 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QStatusBar, QDialog, QMessageBox, QMenu
 )
-from PyQt6.QtCore import Qt, QSettings, QTimer, QFileSystemWatcher
+from PyQt6.QtCore import Qt, QSettings, QTimer, QFileSystemWatcher, QThreadPool, QRunnable, QObject, pyqtSignal
 from PyQt6.QtGui import QCloseEvent
 import json
 
 from ..config import Config
 from ..events.event_bus import get_event_bus
 from ..services.database_service import get_database_service
-from ..services.blender_service import get_blender_service
+from ..services.blender_service import get_blender_service, APPLY_QUEUED
 from ..services.archive_service import get_archive_service
 from ..services.trash_service import get_trash_service
 from ..services.thumbnail_loader import get_thumbnail_loader
@@ -36,6 +36,33 @@ from .bulk_edit_toolbar import BulkEditToolbar
 from .settings.settings_dialog import SettingsDialog
 from .help_overlay import HelpOverlay
 from .controllers import ArchiveTrashController, BulkEditController, FilterController
+
+
+class _ApplyWorkerSignals(QObject):
+    """Signal carrier for the background apply worker (QRunnable can't hold signals)."""
+    done = pyqtSignal(object, dict)  # (apply_result, context)
+
+
+class _ApplyWorker(QRunnable):
+    """Runs a blocking apply (socket round-trip) off the Qt UI thread.
+
+    The socket send/recv can block up to ~30s on a slow/large apply over the
+    network; doing it on the UI thread froze the app. This runs it on a pool
+    thread and reports the result back via a queued signal (delivered on the UI
+    thread), so the window stays responsive.
+    """
+    def __init__(self, fn, context: dict):
+        super().__init__()
+        self._fn = fn
+        self._context = context
+        self.signals = _ApplyWorkerSignals()
+
+    def run(self):
+        try:
+            result = self._fn()
+        except Exception:
+            result = None
+        self.signals.done.emit(result, self._context)
 
 
 class MainWindow(QMainWindow):
@@ -743,29 +770,50 @@ class MainWindow(QMainWindow):
         name = animation.get('name', 'Unknown')
         is_pose = animation.get('is_pose', 0)
 
+        item_type = "pose" if is_pose else "animation"
         if is_pose:
-            # Pose: Apply instantly with optional mirror (other modifiers don't apply to poses)
+            # Pose: apply instantly with optional mirror (other modifiers don't apply to poses)
             blend_file_path = animation.get('blend_file_path', '')
-            success = self._blender_service.queue_apply_pose(uuid, name, blend_file_path, mirror=mirror)
+            fn = lambda: self._blender_service.queue_apply_pose(uuid, name, blend_file_path, mirror=mirror)
         else:
-            # Animation: Apply with options from apply panel, override based on modifiers
-            # Determine apply mode: Alt = INSERT, otherwise NEW
+            # Animation: read options from the apply panel ON THE UI THREAD, then
+            # run the blocking apply off-thread.
             apply_mode = "INSERT" if insert_at_playhead else "NEW"
             options = self._apply_panel.get_options(apply_mode=apply_mode)
-
-            # Override mirror/slots if modifiers held
             if mirror:
                 options['mirror'] = True
             if use_slots:
                 options['use_slots'] = True
+            fn = lambda: self._blender_service.queue_apply_animation(uuid, name, options)
 
-            success = self._blender_service.queue_apply_animation(uuid, name, options)
+        # Run the (potentially 30s) socket round-trip off the UI thread so a slow
+        # apply can't freeze the window; the result is reported by _on_apply_result.
+        self._status_bar.showMessage(f"Applying {item_type} '{name}'...")
+        self._apply_async(fn, {
+            'name': name, 'item_type': item_type, 'mirror': mirror,
+            'use_slots': use_slots, 'insert_at_playhead': insert_at_playhead,
+        })
 
-        if success:
-            item_type = "pose" if is_pose else "animation"
-            mirror_text = " (mirrored)" if mirror else ""
-            slots_text = " (as slot)" if use_slots and not is_pose else ""
-            playhead_text = " at playhead" if insert_at_playhead and not is_pose else ""
+    def _apply_async(self, fn, context: dict):
+        """Run a blocking apply (socket round-trip) on a pool thread; the result
+        is delivered to _on_apply_result on the UI thread via a queued signal."""
+        worker = _ApplyWorker(fn, context)
+        worker.signals.done.connect(self._on_apply_result)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_apply_result(self, result, context: dict):
+        """UI-thread slot: show the apply result message."""
+        name = context.get('name', 'Unknown')
+        item_type = context.get('item_type', 'animation')
+        if result == APPLY_QUEUED:
+            # Blender isn't connected; queued to file - do NOT claim it applied.
+            self._status_bar.showMessage(
+                f"Queued {item_type} '{name}' - Blender not connected; it will apply when Blender is running"
+            )
+        elif result:
+            mirror_text = " (mirrored)" if context.get('mirror') else ""
+            slots_text = " (as slot)" if context.get('use_slots') and item_type != 'pose' else ""
+            playhead_text = " at playhead" if context.get('insert_at_playhead') and item_type != 'pose' else ""
             self._status_bar.showMessage(f"Applied {item_type} '{name}'{mirror_text}{slots_text}{playhead_text} to Blender")
         else:
             self._status_bar.showMessage(f"Failed to apply '{name}'")
@@ -966,20 +1014,18 @@ class MainWindow(QMainWindow):
         name = animation.get('name', 'Unknown')
         is_pose = animation.get('is_pose', 0)
 
+        item_type = "pose" if is_pose else "animation"
         if is_pose:
             # Pose: Apply instantly without options
             blend_file_path = animation.get('blend_file_path', '')
-            success = self._blender_service.queue_apply_pose(uuid, name, blend_file_path)
+            fn = lambda: self._blender_service.queue_apply_pose(uuid, name, blend_file_path)
         else:
             # Animation: Queue with options
-            success = self._blender_service.queue_apply_animation(uuid, name, options)
+            fn = lambda: self._blender_service.queue_apply_animation(uuid, name, options)
 
-        if success:
-            item_type = "pose" if is_pose else "animation"
-            self._status_bar.showMessage(f"Applied {item_type} '{name}' to Blender")
-        else:
-            self._status_bar.showMessage(f"Failed to apply '{name}'")
-            self._event_bus.report_error("blender", f"Failed to apply animation '{name}'")
+        # Off-thread apply (see _on_animation_double_clicked) so the UI stays responsive.
+        self._status_bar.showMessage(f"Applying {item_type} '{name}'...")
+        self._apply_async(fn, {'name': name, 'item_type': item_type})
 
     def _on_refresh_library(self):
         """Handle refresh library button click - sync database with library folder"""

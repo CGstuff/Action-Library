@@ -80,7 +80,7 @@ class DatabaseService:
 
     Features:
     - Thread-local connections for thread safety
-    - WAL mode for better concurrency
+    - Network-safe rollback journal (DELETE) for shared-disk durability
     - Transaction support
     - Automatic schema initialization and migrations
 
@@ -262,6 +262,55 @@ class DatabaseService:
             logger.warning(f"Failed to sync tags to JSON: {e}")
             return False
 
+    # Restorable metadata that is otherwise DB-only. Mirrored into the JSON
+    # sidecar (the durable copy that survives archive/restore and cross-machine
+    # reads) so e.g. a custom thumbnail gradient is not lost when an animation is
+    # archived - archiving deletes the DB row, and restore re-imports from JSON.
+    _JSON_METADATA_FIELDS = (
+        'tags', 'description', 'author', 'status',
+        'is_favorite', 'is_locked',
+        'use_custom_thumbnail_gradient',
+        'thumbnail_gradient_top', 'thumbnail_gradient_bottom',
+    )
+
+    def sync_metadata_to_json(self, uuid: str) -> bool:
+        """Write the DB row's restorable metadata into the animation's JSON sidecar.
+
+        The JSON is the durable source of truth that survives archive/restore
+        (which deletes the DB row) and cross-machine reads. Call this before
+        archiving so gradient / favorite / status / lock / tags / description are
+        preserved on restore. Best-effort; never raises.
+        """
+        try:
+            animation = self.animations.get_by_uuid(uuid)
+            if not animation:
+                return False
+
+            # Resolve the JSON robustly (stored path may be stale or another
+            # machine's drive letter); resolve_json_file reconstructs it locally.
+            json_path = animation.get('json_file_path')
+            json_file = Path(json_path) if json_path else None
+            if not json_file or not json_file.exists():
+                resolved = self.animations.resolve_json_file(animation)
+                json_file = resolved if resolved else None
+            if not json_file or not json_file.exists():
+                return False
+
+            with open(json_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            for field in self._JSON_METADATA_FIELDS:
+                if field in animation and animation[field] is not None:
+                    data[field] = animation[field]
+
+            return _atomic_json_write(json_file, data)
+        except (json.JSONDecodeError, IOError, OSError) as e:
+            logger.warning(f"Could not sync metadata to JSON for {uuid}: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Unexpected error syncing metadata to JSON for {uuid}: {e}")
+            return False
+
     def rename_animation(self, uuid: str, new_name: str,
                          naming_fields: dict = None,
                          naming_template: str = None) -> bool:
@@ -298,8 +347,24 @@ class DatabaseService:
         old_blend_path = animation.get('blend_file_path', '')
         old_blend = Path(old_blend_path) if old_blend_path else None
 
+        # The stored path may be absolute with another machine's drive letter, or
+        # stale after a previous rename. Re-resolve the real file on THIS machine
+        # before falling back to a name-only update - otherwise the DB name
+        # desyncs from disk (and a later library rebuild reverts the rename).
+        # resolve_blend_file reconstructs the actions/poses folder locally and
+        # globs for the file, so it finds it regardless of drive/name drift.
         if not old_blend or not old_blend.exists():
-            # Files don't exist - just update DB name and fields
+            resolved = self.animations.resolve_blend_file(animation)
+            if resolved and resolved.exists():
+                old_blend = resolved
+
+        if not old_blend or not old_blend.exists():
+            # Files genuinely not found on disk - update DB name/fields only, and
+            # make it visible that the on-disk files were left untouched.
+            logger.warning(
+                f"Rename '{old_name}' -> '{new_name}': blend file not found on disk; "
+                f"updating DB name only (on-disk files unchanged)."
+            )
             updates = {'name': new_name}
             if naming_fields:
                 updates['naming_fields'] = json.dumps(naming_fields)
@@ -365,7 +430,11 @@ class DatabaseService:
                 # Base name same, folder stays the same
                 new_folder = old_folder
 
-            # Rename files inside the folder
+            # Rename files inside the folder. Only record a new path when the file
+            # actually exists at the target afterward - otherwise we'd point the DB
+            # at a file that isn't there (a pose has no .webm; a thumbnail may not
+            # be generated yet). Files left missing keep their existing DB value
+            # instead of getting a phantom path.
             new_paths = {}
             for ext, key in [('.blend', 'blend_file_path'), ('.json', 'json_file_path'),
                              ('.webm', 'preview_path'), ('.png', 'thumbnail_path')]:
@@ -374,7 +443,8 @@ class DatabaseService:
                 if old_file.exists() and old_file != new_file:
                     rename_with_retry(old_file, new_file)
                     completed_renames.append((new_file, old_file))
-                new_paths[key] = str(new_file)
+                if new_file.exists():
+                    new_paths[key] = str(new_file)
 
             # Update JSON file content with new name (atomic write)
             json_path = Path(new_paths.get('json_file_path', ''))
@@ -622,6 +692,10 @@ class DatabaseService:
     def get_latest_version(self, version_group_id: str) -> Optional[Dict[str, Any]]:
         """Get the latest version in a version group."""
         return self.animations.get_latest_version(version_group_id)
+
+    def set_as_latest(self, uuid: str) -> bool:
+        """Promote a specific version to is_latest=1 within its version group."""
+        return self.animations.set_as_latest(uuid)
 
     def create_new_version(self, source_uuid: str, new_uuid: str,
                            file_updates: Dict[str, Any]) -> Optional[str]:

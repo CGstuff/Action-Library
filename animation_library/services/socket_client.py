@@ -56,6 +56,9 @@ class BlenderSocketClient:
         self.config = config or ConnectionConfig()
         self._socket: Optional[socket.socket] = None
         self._connected = False
+        # Bytes read past the end of one response, carried to the next read so a
+        # coalesced frame isn't lost. Cleared whenever the socket is reset.
+        self._recv_buffer = ""
         # Use RLock (reentrant lock) to allow same thread to acquire multiple times
         # This prevents race conditions when send_command() calls connect()
         self._lock = threading.RLock()
@@ -106,6 +109,8 @@ class BlenderSocketClient:
     def _cleanup_socket(self):
         """Clean up socket resources"""
         self._connected = False
+        # Drop any partial/leftover bytes so a fresh connection starts clean.
+        self._recv_buffer = ""
         if self._socket:
             try:
                 self._socket.close()
@@ -156,8 +161,10 @@ class BlenderSocketClient:
             # Set receive timeout
             self._socket.settimeout(self.config.recv_timeout)
 
-            # Receive response
-            buffer = ""
+            # Receive response. Start from any bytes left over from the previous
+            # read so a coalesced frame ({resp1}\n{resp2}\n) isn't lost.
+            buffer = self._recv_buffer
+            self._recv_buffer = ""
             while '\n' not in buffer:
                 data = self._socket.recv(4096)
                 if not data:
@@ -168,19 +175,27 @@ class BlenderSocketClient:
                 buffer += data.decode('utf-8')
                 logger.debug(f"Received {len(data)} bytes")
 
-            # Parse JSON response
-            response_str = buffer.split('\n')[0]
+            # Parse the first complete line; keep any remainder for the next read.
+            response_str, _, rest = buffer.partition('\n')
+            self._recv_buffer = rest
             response = json.loads(response_str)
             logger.debug(f"Response received: {response.get('status')}")
             return response
 
         except socket.timeout:
             logger.warning(f"Response timeout after {self.config.recv_timeout}s")
-            # Don't cleanup on timeout - connection may still be valid
+            # A timed-out request means Blender is still processing; its response
+            # will arrive LATER. If we keep this socket, the next command would
+            # read that late reply as its own - permanently shifting every reply
+            # by one (the classic "first apply works, second freezes"). Drop the
+            # connection so the next command starts clean. Blender still completes
+            # the in-flight operation; we just don't read its ack.
+            self._cleanup_socket()
             return None
         except json.JSONDecodeError as e:
             logger.warning(f"Invalid JSON response: {e}")
-            # Don't cleanup on parse error - connection may still be valid
+            # Framing is broken - reset the connection rather than risk desync.
+            self._cleanup_socket()
             return None
         except BrokenPipeError:
             logger.warning("Broken pipe - connection lost")

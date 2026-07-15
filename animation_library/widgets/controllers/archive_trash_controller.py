@@ -136,11 +136,41 @@ class ArchiveTrashController:
                 '_archived_date': item.get('archived_date'),
                 '_original_folder_path': item.get('original_folder_path', ''),
             }
+            # The archive table doesn't store gradient or version info, so the
+            # archive-view cards would otherwise show a default gradient and no
+            # version label. Pull those from the archived JSON sidecar (version is
+            # written at capture; gradient at archive time via sync_metadata_to_json).
+            self._enrich_display_from_json(item.get('archive_folder_path'), anim)
             animations.append(anim)
         return animations
 
+    def _enrich_display_from_json(self, folder_path, anim: Dict[str, Any]) -> None:
+        """Best-effort: copy gradient / version / pose fields from an archived
+        (or trashed) folder's JSON into the display dict so its card renders like
+        it does in the library. Never raises.
+        """
+        if not folder_path:
+            return
+        try:
+            import json
+            from pathlib import Path
+            for jf in Path(folder_path).glob("*.json"):
+                with open(jf, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                for key in (
+                    'use_custom_thumbnail_gradient',
+                    'thumbnail_gradient_top', 'thumbnail_gradient_bottom',
+                    'version', 'version_label', 'version_group_id', 'is_latest',
+                    'is_pose', 'status',
+                ):
+                    if data.get(key) is not None:
+                        anim[key] = data[key]
+                break
+        except Exception:
+            pass
+
     def archive_selected(self) -> None:
-        """Archive selected animations from normal view (soft delete)."""
+        """Archive the currently selected animations from normal view (soft delete)."""
         if self.in_special_view:
             return
 
@@ -148,8 +178,22 @@ class ArchiveTrashController:
         if not selected_uuids:
             return
 
+        self.archive_animations(selected_uuids)
+
+    def archive_animations(self, uuids: List[str]) -> None:
+        """Archive a specific list of animations (soft delete).
+
+        Shared by the bulk 'archive selected' action and the single-item
+        context menu (which passes one uuid). Confirms, moves each to archive,
+        removes it from the model, and updates counts/status.
+        """
+        if self.in_special_view:
+            return
+        if not uuids:
+            return
+
         # Confirmation dialog
-        count = len(selected_uuids)
+        count = len(uuids)
         msg = (
             f"Move {count} animation{'s' if count > 1 else ''} to Archive?\n\n"
             "Items can be restored from the Archive folder."
@@ -169,7 +213,7 @@ class ArchiveTrashController:
         # Move to archive
         archived = 0
         errors = []
-        for uuid in selected_uuids:
+        for uuid in uuids:
             success, message = self._archive_service.move_to_archive(uuid)
             if success:
                 self._animation_model.remove_animation(uuid)
@@ -371,6 +415,8 @@ class ArchiveTrashController:
                 '_trashed_date': item.get('trashed_date'),
                 '_archived_date': item.get('archived_date'),
             }
+            # Same as archive: pull gradient/version/pose from the trashed JSON.
+            self._enrich_display_from_json(item.get('trash_folder_path'), anim)
             animations.append(anim)
         return animations
 
@@ -521,7 +567,11 @@ class ArchiveTrashController:
         if self._in_archive_view:
             self.move_to_trash_from_archive()
         elif self._in_trash_view:
-            self._status_bar.showMessage("Use right-click menu for trash actions")
+            # Permanently delete the selected trash items. permanent_delete()
+            # already guards on the hard-delete setting and confirms first.
+            # (Previously this showed "use right-click menu" for a menu that
+            # doesn't exist, leaving single-item permanent delete unreachable.)
+            self.permanent_delete()
         else:
             self.archive_selected()
 

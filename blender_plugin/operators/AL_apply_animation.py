@@ -19,6 +19,70 @@ from ..preferences.AL_preferences import get_library_path
 logger = get_logger()
 
 
+def _blend_from_folder(folder):
+    """Return the path to the .blend inside an asset folder, or None.
+
+    Resolution is by folder (located via UUID), not by filename, so a name
+    that has drifted from the stored path (post-rename) still resolves. If the
+    folder holds multiple .blend files the choice is stable (sorted).
+    """
+    if not folder:
+        return None
+    blends = sorted(Path(folder).glob("*.blend"))
+    return str(blends[0]) if blends else None
+
+
+def _find_asset_by_uuid(library_dir, target_uuid):
+    """Locate an asset's JSON + folder by scanning the local library for its UUID.
+
+    Scans hot storage (library/actions, library/poses, legacy library/) and cold
+    storage (_versions/). Resolution is purely by the UUID stored in each JSON,
+    so it is independent of the drive letter and of any stale/embedded absolute
+    path. Returns (json_path, folder) or (None, None).
+    """
+    if not library_dir or not target_uuid:
+        return None, None
+    library_dir = Path(library_dir)
+
+    search_folders = []
+    library_folder = library_dir / "library"
+    if library_folder.exists():
+        for sub in ("actions", "poses"):
+            p = library_folder / sub
+            if p.exists():
+                search_folders.append(p)
+        # Legacy: assets directly under library/
+        search_folders.append(library_folder)
+
+    def _matches(json_path):
+        try:
+            with open(json_path, "r") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, IOError, OSError):
+            return False
+        return (data.get("id") or data.get("uuid")) == target_uuid
+
+    for search_folder in search_folders:
+        for folder in search_folder.iterdir():
+            if folder.is_dir() and folder.name not in ("actions", "poses"):
+                for pj in folder.glob("*.json"):
+                    if _matches(pj):
+                        return pj, folder
+
+    # Cold storage: _versions/{base}/{version}/
+    versions_folder = library_dir / "_versions"
+    if versions_folder.exists():
+        for anim_folder in versions_folder.iterdir():
+            if anim_folder.is_dir():
+                for version_folder in anim_folder.iterdir():
+                    if version_folder.is_dir():
+                        for pj in version_folder.glob("*.json"):
+                            if _matches(pj):
+                                return pj, version_folder
+
+    return None, None
+
+
 def get_quaternion_at_frame(action, bone_name, frame):
     """
     Read all 4 quaternion components from fcurves at a given frame.
@@ -174,10 +238,16 @@ class ANIMLIB_OT_apply_animation(Operator):
                     f"current armature is '{current_rig_type}'")
                 return {'CANCELLED'}
             
-            # Get blend file path
+            # Resolve the blend file. The embedded blend_file_path can be stale
+            # (the asset was renamed since capture) or point at another machine's
+            # drive letter. We already located the asset's folder by UUID above,
+            # so fall back to that folder's .blend - this makes apply rename-safe
+            # and drive-independent (fixes cross-machine apply for read-only peers).
             blend_file_path = animation.get('blend_file_path')
             if not blend_file_path or not os.path.exists(blend_file_path):
-                self.report({'ERROR'}, f"Action blend file not found: {blend_file_path}")
+                blend_file_path = _blend_from_folder(animation_folder)
+            if not blend_file_path or not os.path.exists(blend_file_path):
+                self.report({'ERROR'}, f"Action blend file not found in {animation_folder}")
                 return {'CANCELLED'}
             
             frame_start = animation.get('frame_start')
@@ -264,6 +334,13 @@ class ANIMLIB_OT_apply_animation(Operator):
         Returns:
             Mirrored action or None if mirroring fails
         """
+        # Initialize before the try so the except can always restore context
+        # safely. Previously original_area_type/area could be referenced before
+        # assignment, raising a NameError inside the except that got swallowed -
+        # leaving the viewport stranded as a Dope Sheet after a failed mirror.
+        original_action = None
+        area = None
+        original_area_type = None
         try:
             logger.info("Starting mirror operation using Blender's native paste flipped")
 
@@ -560,11 +637,21 @@ class ANIMLIB_OT_apply_animation(Operator):
                         target_armature.animation_data.action = current_action
                         logger.info(f"Created persistent action '{action_name}' for slot-based Actions")
 
-                    # Ensure action has layer and strip (required for Blender 4.4+ layered actions)
+                    # Ensure the action has a layer + keyframe strip. Blender 5
+                    # requires these before a slot's channelbag can be accessed,
+                    # and a freshly created action (the "no existing action" case
+                    # above) has NEITHER. Without this, current_action.layers[0]
+                    # below raises IndexError, the error is swallowed, and slot
+                    # mode silently degrades to a plain NEW action - so applying
+                    # "as slot" onto a rig with no action would quietly produce a
+                    # NON-slotted animation. Mirrors init_action_for_blender_5().
                     if hasattr(current_action, 'layers') and len(current_action.layers) == 0:
-                        logger.debug("Action has no layers, creating layer and strip")
-                        # Note: In Blender 4.4+, layers/strips may be auto-created
-                        # This check is defensive in case they're not
+                        try:
+                            _new_layer = current_action.layers.new(name="Layer")
+                            _new_layer.strips.new(type='KEYFRAME')
+                            logger.debug(f"Initialized layer+strip for slotted action '{current_action.name}'")
+                        except Exception as e:
+                            logger.error(f"Failed to initialize layer/strip for slotted action: {e}")
 
                     # Get or create slot with sequential naming
                     existing_slot_count = len(current_action.slots)
@@ -611,7 +698,7 @@ class ANIMLIB_OT_apply_animation(Operator):
                         except Exception as e:
                             logger.error(f"Failed to get channelbag for slot: {e}")
                             logger.error(traceback.format_exc())
-                            logger.warning("Channelbag access failed - slot mode not available in this Blender version")
+                            logger.warning("Channelbag access failed - falling back to standard NEW mode")
                             # Will trigger fallback to standard NEW mode below
 
                         # Filter bones if needed
@@ -1111,7 +1198,8 @@ class ANIMLIB_OT_check_apply_queue(Operator):
                 self.report({'INFO'}, "No pending apply requests")
                 return {'FINISHED'}
 
-            # Process the most recent pending request (already sorted by queue_client)
+            # Process the oldest pending request first (FIFO; queue_client sorts
+            # oldest-first) so rapid successive applies run in submission order.
             request_file = pending_files[0]
 
             # Read request data using queue client
@@ -1209,7 +1297,22 @@ class ANIMLIB_OT_check_apply_queue(Operator):
 
             pose_id = request_data.get('animation_id') or request_data.get('pose_id')
             pose_name = request_data.get('animation_name') or request_data.get('pose_name', 'Unknown Pose')
+
+            # Resolve the pose blend by UUID from the local library first, so it
+            # works after a rename and on machines with a different drive letter.
+            # The path the desktop app sent (request_data['blend_file_path']) is an
+            # absolute path with the sender's drive letter, so it is only a fallback.
             blend_file_path = request_data.get('blend_file_path')
+            if pose_id:
+                try:
+                    local_lib = get_library_path()
+                    if local_lib:
+                        _pj, _folder = _find_asset_by_uuid(local_lib, pose_id)
+                        local_blend = _blend_from_folder(_folder)
+                        if local_blend:
+                            blend_file_path = local_blend
+                except Exception as e:
+                    logger.debug(f"Pose UUID resolution failed, using sent path: {e}")
 
             if not blend_file_path or not os.path.exists(blend_file_path):
                 self.report({'ERROR'}, f"Pose blend file not found: {blend_file_path}")

@@ -324,10 +324,22 @@ class AnimationListModel(QAbstractListModel):
             return animation.get('fps')
 
         elif role == AnimationRole.BlendFilePathRole:
-            return animation.get('blend_file_path')
+            # Resolve against the local library root (stored path may be absolute
+            # with another machine's drive letter, or stale after a rename).
+            stored_path = animation.get('blend_file_path')
+            if stored_path and Path(stored_path).exists():
+                return stored_path
+            db_service = self._get_db_service()
+            resolved = db_service.animations.resolve_blend_file(animation)
+            return str(resolved) if resolved else stored_path
 
         elif role == AnimationRole.JSONFilePathRole:
-            return animation.get('json_file_path')
+            stored_path = animation.get('json_file_path')
+            if stored_path and Path(stored_path).exists():
+                return stored_path
+            db_service = self._get_db_service()
+            resolved = db_service.animations.resolve_json_file(animation)
+            return str(resolved) if resolved else stored_path
 
         elif role == AnimationRole.PreviewPathRole:
             # Resolve preview path (checks library and archive folders)

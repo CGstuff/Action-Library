@@ -105,7 +105,7 @@ class AnimationLibraryQueueClient:
 
         Returns:
             list: List of Path objects for pending apply_*.json files,
-                  sorted by modification time (newest first)
+                  sorted by modification time (oldest first, FIFO)
         """
         # Always get fresh library path (preferences may have loaded after init)
         from ..preferences import get_library_path
@@ -122,8 +122,10 @@ class AnimationLibraryQueueClient:
 
         try:
             pending_files = list(self.queue_dir.glob(QUEUE_FILE_PATTERN))
-            # Sort by modification time (newest first)
-            pending_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+            # Sort by modification time OLDEST first so the consumer (which takes
+            # pending_files[0]) processes requests in submission order (FIFO).
+            # Newest-first made rapid A-then-B applies run B before A.
+            pending_files.sort(key=lambda f: f.stat().st_mtime)
             logger.debug(f"Found {len(pending_files)} pending requests")
             return pending_files
         except Exception as e:
