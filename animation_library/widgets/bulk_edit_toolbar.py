@@ -66,17 +66,18 @@ class BulkEditToolbar(QWidget):
     Toolbar for bulk editing selected animations
 
     Features:
-    - Remove tags from selected
-    - Move to folder
+    - Add / remove tags on the selection
+    - Add the selection to a folder (additive - they stay in any others)
     - Gradient presets dropdown with color squares
     - Centered, minimalistic layout
 
     Layout:
         [stretch] [Selection Label] [stretch]
-        [stretch] [Remove Tags] [Move to Folder] [Gradient ▼] [stretch]
+        [stretch] [Add Tags] [Remove Tags] [Add to Folder] [Gradient ▼] [stretch]
     """
 
     # Signals
+    add_tags_clicked = pyqtSignal()
     remove_tags_clicked = pyqtSignal()
     move_to_folder_clicked = pyqtSignal()
     gradient_preset_selected = pyqtSignal(str, tuple, tuple)  # name, top_color, bottom_color
@@ -110,13 +111,19 @@ class BulkEditToolbar(QWidget):
         self._restore_btn.setToolTip("Restore selected items")
         self._restore_btn.hide()  # Hidden by default
 
+        # Add tags button
+        self._add_tags_btn = QPushButton("Add Tags")
+        self._add_tags_btn.setToolTip("Add tags to selected animations")
+
         # Remove tags button
         self._remove_tags_btn = QPushButton("Remove Tags")
         self._remove_tags_btn.setToolTip("Remove tags from selected animations")
 
         # Move to folder button
-        self._move_folder_btn = QPushButton("Move to Folder")
-        self._move_folder_btn.setToolTip("Move selected animations to a folder")
+        self._move_folder_btn = QPushButton("Add to Folder")
+        self._move_folder_btn.setToolTip(
+            "Add selected animations to a folder (they stay in any others)"
+        )
 
         # Gradient preset dropdown
         self._gradient_combo = QComboBox()
@@ -162,6 +169,7 @@ class BulkEditToolbar(QWidget):
         buttons_row.setSpacing(12)
         buttons_row.addStretch()
         buttons_row.addWidget(self._restore_btn)
+        buttons_row.addWidget(self._add_tags_btn)
         buttons_row.addWidget(self._remove_tags_btn)
         buttons_row.addWidget(self._move_folder_btn)
         buttons_row.addWidget(self._gradient_combo)
@@ -173,6 +181,7 @@ class BulkEditToolbar(QWidget):
 
         # Buttons
         self._restore_btn.clicked.connect(self._on_restore_clicked)
+        self._add_tags_btn.clicked.connect(self._on_add_tags_clicked)
         self._remove_tags_btn.clicked.connect(self._on_remove_tags_clicked)
         self._move_folder_btn.clicked.connect(self._on_move_folder_clicked)
 
@@ -261,6 +270,10 @@ class BulkEditToolbar(QWidget):
         """Handle restore button click"""
         self.restore_clicked.emit()
 
+    def _on_add_tags_clicked(self):
+        """Handle add tags button click"""
+        self.add_tags_clicked.emit()
+
     def _on_remove_tags_clicked(self):
         """Handle remove tags button click"""
         self.remove_tags_clicked.emit()
@@ -312,6 +325,7 @@ class BulkEditToolbar(QWidget):
         # Enable/disable controls
         enabled = count > 0
         self._restore_btn.setEnabled(enabled)
+        self._add_tags_btn.setEnabled(enabled)
         self._remove_tags_btn.setEnabled(enabled)
         self._move_folder_btn.setEnabled(enabled)
         self._gradient_combo.setEnabled(enabled)
@@ -339,6 +353,7 @@ class BulkEditToolbar(QWidget):
             self._restore_btn.hide()
 
         # Hide normal editing buttons in special views
+        self._add_tags_btn.setVisible(not in_special_view)
         self._remove_tags_btn.setVisible(not in_special_view)
         self._move_folder_btn.setVisible(not in_special_view)
         self._gradient_combo.setVisible(not in_special_view)

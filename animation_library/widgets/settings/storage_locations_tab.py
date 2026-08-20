@@ -177,7 +177,10 @@ class StorageLocationsTab(QWidget):
         Config.save_allow_hard_delete(checked)
 
     def _change_library_location(self):
-        """Change animation library location"""
+        """Change animation library location, then relaunch into it."""
+        from ...services.library_switch import reset_library_services, switch_library
+        from ...utils.app_restart import restart_application
+
         current_path = Config.load_library_path()
         if not current_path:
             current_path = Path.home() / "AnimationLibrary"
@@ -189,43 +192,102 @@ class StorageLocationsTab(QWidget):
             QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
         )
 
-        if new_path:
-            # Confirm the change
-            reply = QMessageBox.question(
+        if not new_path:
+            return
+
+        if Config.load_library_path() and Path(new_path) == Path(current_path):
+            QMessageBox.information(
                 self,
-                "Change Library Location",
-                f"Change animation library location to:\n{new_path}\n\n"
-                "Note: This will not move existing animations. "
-                "You'll need to manually copy them if desired.\n\n"
-                "Continue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                "No Change",
+                "That is already the current library location."
+            )
+            return
+
+        main_window = self._find_main_window()
+
+        reply = QMessageBox.question(
+            self,
+            "Change Library Location",
+            f"Change animation library location to:\n{new_path}\n\n"
+            "Existing animations are NOT moved - an empty folder becomes a new, "
+            "empty library.\n\n"
+            + ("Blender picks up the change automatically.\n\n"
+               if main_window is not None else
+               "Action Library will restart to load it. Blender picks up the "
+               "change automatically.\n\n")
+            + "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        if main_window is not None:
+            # In-place switch: rebinds the whole UI to the new library without
+            # restarting. Writing the pointer also releases the Blender addon,
+            # which polls it and follows within ~2s.
+            ok, message = main_window.switch_to_library(new_path)
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Change Failed",
+                    f"Could not change library location:\n\n{message}"
+                )
+                return
+
+            self.library_label.setText(f"<b>Animation Library:</b><br>{new_path}")
+
+            # Close Settings. This dialog is rebuilt on every open, but the tabs
+            # already alive right now captured the OLD services when they were
+            # constructed (e.g. MaintenanceTab), so leaving it open would let you
+            # run an integrity check against a closed database.
+            dialog = self.window()
+            if dialog is not None and dialog is not main_window:
+                dialog.close()
+            return
+
+        # No main window found (shouldn't happen in the real app) - fall back to
+        # the relaunch path. Don't tear the services down until the new instance
+        # is confirmed, or a failed relaunch leaves this one with dead services.
+        ok, message = switch_library(new_path, reset_services=False)
+        if not ok:
+            QMessageBox.warning(
+                self,
+                "Change Failed",
+                f"Could not change library location:\n\n{message}"
+            )
+            return
+
+        self.library_label.setText(f"<b>Animation Library:</b><br>{new_path}")
+
+        if not restart_application(on_confirmed=reset_library_services):
+            QMessageBox.information(
+                self,
+                "Restart Required",
+                f"Library location changed to:\n{new_path}\n\n"
+                "Action Library could not restart itself - please close and "
+                "reopen it to finish loading the new library."
             )
 
-            if reply == QMessageBox.StandardButton.Yes:
-                # Save new path
-                if Config.save_library_path(new_path):
-                    # Create directory structure
-                    new_path_obj = Path(new_path)
-                    (new_path_obj / "library").mkdir(parents=True, exist_ok=True)
-                    (new_path_obj / "animations").mkdir(parents=True, exist_ok=True)
+    def _find_main_window(self):
+        """Locate the MainWindow so we can switch library in place.
 
-                    # Update label
-                    self.library_label.setText(
-                        f"<b>Animation Library:</b><br>{new_path}"
-                    )
+        Returns None if it can't be found, in which case the caller falls back to
+        relaunching.
+        """
+        from ..main_window import MainWindow
 
-                    QMessageBox.information(
-                        self,
-                        "Success",
-                        f"Library location changed to:\n{new_path}\n\n"
-                        "Please restart the application for changes to take effect."
-                    )
-                else:
-                    QMessageBox.warning(
-                        self,
-                        "Error",
-                        "Failed to save library location. Please try again."
-                    )
+        widget = self
+        while widget is not None:
+            if isinstance(widget, MainWindow):
+                return widget
+            widget = widget.parent()
+
+        from PyQt6.QtWidgets import QApplication
+        for top_level in QApplication.topLevelWidgets():
+            if isinstance(top_level, MainWindow):
+                return top_level
+        return None
 
     def _open_folder(self, folder_path):
         """Open folder in system file explorer"""

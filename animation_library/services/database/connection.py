@@ -38,6 +38,13 @@ class DatabaseConnection:
         self._local = threading.local()
         # Write lock to serialize database writes across threads in this process
         self._write_lock = threading.RLock()
+        # Every connection handed out, so close_all() can close them ALL - not
+        # just the calling thread's. Connections are thread-local, and worker
+        # threads open their own (thumbnail loads, async apply). Without this,
+        # switching library would leave those threads holding open handles on the
+        # OLD database, which on Windows can pin the file.
+        self._all_connections: List[sqlite3.Connection] = []
+        self._connections_lock = threading.Lock()
 
     def get_connection(self) -> sqlite3.Connection:
         """
@@ -74,6 +81,8 @@ class DatabaseConnection:
             conn.row_factory = sqlite3.Row
 
             self._local.connection = conn
+            with self._connections_lock:
+                self._all_connections.append(conn)
 
         return self._local.connection
 
@@ -135,22 +144,43 @@ class DatabaseConnection:
 
     def close(self):
         """Close database connection for current thread."""
-        if hasattr(self._local, 'connection') and self._local.connection:
-            try:
-                self._local.connection.close()
-            except Exception as e:
-                logger.warning(f"Error closing database connection: {e}")
-            finally:
-                self._local.connection = None
+        conn = getattr(self._local, 'connection', None)
+        if conn is None:
+            return
+
+        try:
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Error closing database connection: {e}")
+        finally:
+            self._local.connection = None
+            with self._connections_lock:
+                if conn in self._all_connections:
+                    self._all_connections.remove(conn)
 
     def close_all(self):
         """
-        Close the current thread's database connection.
+        Close EVERY connection this manager handed out, on any thread.
 
-        Call this during application shutdown. Note: Thread-local connections
-        from other threads will be cleaned up when those threads exit.
+        Call on shutdown, and when switching library. This is deliberately not
+        the same as close(): connections are thread-local, so close() only ever
+        closes the caller's. Worker threads open their own, and those would keep
+        the old database file open indefinitely.
         """
-        self.close()
+        with self._connections_lock:
+            connections = list(self._all_connections)
+            self._all_connections.clear()
+
+        for conn in connections:
+            try:
+                conn.close()
+            except Exception as e:
+                logger.warning(f"Error closing database connection: {e}")
+
+        # Drop this thread's reference. Other threads' thread-local slots still
+        # point at now-closed connections, which is fine: this manager is being
+        # discarded, so nothing should call get_connection() on it again.
+        self._local.connection = None
 
 
 __all__ = ['DatabaseConnection']

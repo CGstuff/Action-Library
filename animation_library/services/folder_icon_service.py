@@ -101,6 +101,36 @@ class FolderIconService:
             del self.icon_assignments[folder_path]
             self._save_icons()
 
+    def rekey_path(self, old_path: str, new_path: str) -> int:
+        """Move assignments from one folder path to another, descendants included.
+
+        Assignments are keyed by PATH, and a folder's path changes whenever it is
+        renamed or reparented. Without this the assignment is orphaned and the
+        icon silently reverts to the default, leaving a dead key behind forever.
+
+        Returns:
+            Number of assignments moved.
+        """
+        if not old_path or not new_path or old_path == new_path:
+            return 0
+
+        moved = 0
+        for path in list(self.icon_assignments.keys()):
+            if path == old_path:
+                target = new_path
+            elif path.startswith(f"{old_path}/"):
+                # A descendant: swap the prefix, keep the rest of the path.
+                target = new_path + path[len(old_path):]
+            else:
+                continue
+
+            self.icon_assignments[target] = self.icon_assignments.pop(path)
+            moved += 1
+
+        if moved:
+            self._save_icons()
+        return moved
+
     def get_all_presets(self) -> List[Dict]:
         """Get all available icon presets"""
         return self.DEFAULT_PRESETS.copy()

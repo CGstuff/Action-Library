@@ -53,6 +53,9 @@ class MaintenanceTab(QWidget):
         # Maintenance Actions Group
         layout.addWidget(self._create_maintenance_section())
 
+        # Library Repair Group
+        layout.addWidget(self._create_repair_section())
+
         # Activity Log Group (Option B Phase 6 — surfaces the previously
         # write-only audit log)
         layout.addWidget(self._create_activity_log_section())
@@ -224,6 +227,122 @@ class MaintenanceTab(QWidget):
         group_layout.addLayout(rebuild_layout)
 
         return group
+
+    def _create_repair_section(self):
+        """Create the library repair section.
+
+        These are legacy data-repair jobs. They used to run inside sync_library()
+        - i.e. on every capture, every queue poll and every refresh, on every
+        client - which meant every machine took a write lock on the shared
+        database, and several could race to move the same files. They're one-time
+        jobs, so they live here now: run on demand, by one person, deliberately.
+        """
+        group = QGroupBox("Library Repair")
+        group_layout = QVBoxLayout(group)
+
+        desc = QLabel(
+            "One-time repairs for legacy libraries. Both are harmless no-ops on a "
+            "healthy library, and run automatically on a fresh import or rebuild."
+        )
+        desc.setWordWrap(True)
+        self._apply_secondary_style(desc)
+        group_layout.addWidget(desc)
+        group_layout.addSpacing(10)
+
+        # Fix Pose Flags
+        poses_layout = QHBoxLayout()
+        poses_btn = QPushButton("Fix Pose Flags")
+        poses_btn.setStyleSheet(self._button_style)
+        poses_btn.clicked.connect(self._on_fix_pose_flags)
+        poses_layout.addWidget(poses_btn)
+
+        poses_desc = QLabel("Mark single-frame assets as poses")
+        self._apply_secondary_style(poses_desc)
+        poses_layout.addWidget(poses_desc)
+        poses_layout.addStretch()
+
+        group_layout.addLayout(poses_layout)
+        group_layout.addSpacing(10)
+
+        # Migrate Folder Structure
+        migrate_layout = QHBoxLayout()
+        migrate_btn = QPushButton("Migrate Folder Structure")
+        migrate_btn.setStyleSheet(self._button_style)
+        migrate_btn.clicked.connect(self._on_migrate_folders)
+        migrate_layout.addWidget(migrate_btn)
+
+        migrate_desc = QLabel("Move legacy library/{name}/ assets into actions/ or poses/")
+        self._apply_secondary_style(migrate_desc)
+        migrate_layout.addWidget(migrate_desc)
+        migrate_layout.addStretch()
+
+        group_layout.addLayout(migrate_layout)
+
+        return group
+
+    def _on_fix_pose_flags(self):
+        """Run the legacy pose-flag repair."""
+        try:
+            fixed = self._db_service.fix_pose_flags()
+        except Exception as e:
+            QMessageBox.critical(self, "Repair Failed", f"Failed to fix pose flags:\n\n{e}")
+            return
+
+        if fixed:
+            QMessageBox.information(
+                self,
+                "Pose Flags Fixed",
+                f"Marked {fixed} single-frame asset(s) as poses.\n\n"
+                f"Refresh the library to see the change."
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Nothing to Fix",
+                "All single-frame assets are already flagged as poses."
+            )
+
+    def _on_migrate_folders(self):
+        """Run the legacy actions/poses folder migration (MOVES FILES)."""
+        reply = QMessageBox.question(
+            self,
+            "Migrate Folder Structure",
+            "Move any legacy assets from library/{name}/ into library/actions/{name}/ "
+            "or library/poses/{name}/?\n\n"
+            "This MOVES FILES on disk and updates their database paths.\n\n"
+            "Make sure nobody else has the library open, and that Blender is not "
+            "mid-capture.\n\n"
+            "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            # Flags first: the migration files each asset by its is_pose flag and
+            # skips anything already under actions/ or poses/, so a pose still
+            # flagged is_pose=0 would land in actions/ and stay stuck there.
+            self._db_service.fix_pose_flags()
+            migrated = self._db_service.migrate_to_actions_poses_folders()
+        except Exception as e:
+            QMessageBox.critical(self, "Migration Failed", f"Failed to migrate folders:\n\n{e}")
+            return
+
+        if migrated:
+            QMessageBox.information(
+                self,
+                "Migration Complete",
+                f"Moved {migrated} asset(s) into the actions/poses structure.\n\n"
+                f"Refresh the library to see the change."
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Nothing to Migrate",
+                "No legacy assets found - everything is already filed under "
+                "actions/ or poses/."
+            )
 
     def _create_activity_log_section(self):
         """Create the Activity Log section (Option B Phase 6).
@@ -514,14 +633,36 @@ class MaintenanceTab(QWidget):
             # Rescan library
             total_found, newly_imported = self._db_service.sync_library()
 
+            # Legacy repair, explicitly. sync_library() is a scan and nothing
+            # more - it used to run these itself, but it sits on a hot path (every
+            # capture, every queue poll, every refresh, from every client), so a
+            # write-locking repair and a file-moving migration had no business
+            # there. A rebuild is exactly where they DO belong: we just
+            # reimported everything from disk, so fix it up once, here.
+            # ORDER IS LOAD-BEARING: the migration picks poses/ vs actions/ from
+            # the is_pose flag, and it skips anything already filed under either.
+            # So a single-frame pose still flagged is_pose=0 would be moved into
+            # actions/ and then be permanently stuck there. Fix the flags first.
+            fixed_poses = self._db_service.fix_pose_flags()
+            migrated = self._db_service.migrate_to_actions_poses_folders()
+
             # Show results
+            repair_text = ""
+            if migrated:
+                repair_text += f"Moved to actions/poses folders: {migrated}\n"
+            if fixed_poses:
+                repair_text += f"Pose flags corrected: {fixed_poses}\n"
+            if repair_text:
+                repair_text = "\n" + repair_text
+
             QMessageBox.information(
                 self,
                 "Rebuild Complete",
                 f"Database rebuilt successfully!\n\n"
                 f"Cleared: {cleared} old entries\n"
                 f"Found: {total_found} animation folders\n"
-                f"Imported: {newly_imported} animations\n\n"
+                f"Imported: {newly_imported} animations\n"
+                f"{repair_text}\n"
                 f"Please close Settings and refresh the library."
             )
 

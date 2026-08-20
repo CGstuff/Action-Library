@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Applying — Action Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="top"><span class="brand">Action Library</span><a href="index.html">Home</a></nav>
+  <main>
+    <h1>Applying</h1>
+    <p>Getting animation out of the library and onto a rig. You drive this from the
+       <b>app</b> — select the armature in Blender, then double-click a card.</p>
+
+    <h2 id="basics">The basics</h2>
+    <ol>
+      <li>In Blender, select the armature you want to animate.</li>
+      <li>In Action Library, <b>double-click</b> the card.</li>
+    </ol>
+    <p>The animation is assigned to your rig as its active action. Blender doesn't
+       need to be in any particular mode and you don't need to switch windows back
+       and forth — the app tells Blender directly.</p>
+
+    <h2 id="modifiers">Modifiers</h2>
+    <p>Hold a key while double-clicking to change what happens:</p>
+    <table>
+      <tr><th>Hold</th><th>Does</th></tr>
+      <tr><td><kbd>Ctrl</kbd></td><td><b>Mirror</b> — flip left to right.</td></tr>
+      <tr><td><kbd>Shift</kbd></td><td><b>As a slot</b> — add as an action slot rather than replacing the action (actions only).</td></tr>
+      <tr><td><kbd>Alt</kbd></td><td><b>At the playhead</b> — insert here instead of replacing.</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd></td><td>Mirrored, as a slot.</td></tr>
+    </table>
+    <p>The <b>Apply</b> panel on the right has the same options as checkboxes. Set
+       them there and a plain double-click uses them — handy when you're applying
+       lots of things the same way.</p>
+
+    <h2 id="options">What the options do</h2>
+
+    <h3>Mirror</h3>
+    <p>Flips the animation across the rig's axis of symmetry, so a left-hand wave
+       becomes a right-hand wave. It relies on your rig's bones following a
+       standard left/right naming convention (<code>.L</code> / <code>.R</code> and
+       similar) — that's how Blender knows which bone pairs with which.</p>
+
+    <h3>At the playhead</h3>
+    <p>Instead of replacing the rig's action, the keyframes are inserted starting
+       at the current frame, merging with what's already there. Use it to chain
+       moves together — a walk, then a turn, then a stop.</p>
+
+    <h3>Reverse</h3>
+    <p>Plays the animation backwards, flipping the keyframes around the range.</p>
+
+    <h3>Selected bones only</h3>
+    <p>Applies only to the bones you currently have selected in Blender, leaving
+       everything else untouched. Good for taking just the arms from one take.</p>
+
+    <h3>Use action slots</h3>
+    <p>Adds the animation as a <b>slot</b> on a layered action rather than
+       replacing the rig's action, so several animations can sit on one rig at
+       once. Needs Blender 4.5 or newer.</p>
+
+    <h2 id="poses">Applying poses</h2>
+    <p>Double-click a pose card and the pose is applied to your rig immediately.
+       <kbd>Ctrl</kbd> mirrors it, exactly as with animations.</p>
+
+    <h3 id="blending">Pose blending</h3>
+    <p>Poses can be dialled in rather than snapped to. <b>Right-click and drag</b> on
+       a pose card:</p>
+    <ul>
+      <li>Drag <b>right</b> to blend further toward the pose; an overlay shows the
+          percentage.</li>
+      <li>Hold <kbd>Ctrl</kbd> while dragging to blend toward the <b>mirrored</b>
+          pose.</li>
+      <li><b>Left-click</b> or press <kbd>Escape</kbd> to cancel and put the rig
+          back.</li>
+      <li>Release to keep the blend where you left it.</li>
+    </ul>
+    <p>Your rig updates live in Blender as you drag, so you're judging the result
+       by eye rather than by number.</p>
+
+    <h2 id="rig-types">Rig compatibility</h2>
+    <p>Animations remember which rig type they were made for, and Action Library
+       compares that against the armature you're applying to. If they don't match
+       you'll be warned — the animation may still apply, but bones that don't exist
+       on the target simply won't be driven.</p>
+    <div class="tip">Use the rig-type filter while browsing to only see animations
+      that fit the rig you're working on.</div>
+
+    <h2 id="not-running">If Blender isn't running</h2>
+    <p>Applying works over a direct connection to Blender. If Blender isn't open,
+       the app doesn't lose your request — it queues it, and it applies as soon as
+       Blender is running with the addon enabled. The status bar tells you when
+       that's happened.</p>
+
+    <h2 id="troubleshooting">When apply doesn't work</h2>
+    <ul>
+      <li><b>Nothing happens</b> — is an armature selected in Blender? Applying
+          needs a target.</li>
+      <li><b>"Cannot connect to Blender"</b> — Blender must be running with the
+          addon enabled, and the port must match on both sides. See
+          <a href="installation.html#troubleshooting">install troubleshooting</a>.</li>
+      <li><b>The animation applies but looks wrong</b> — check the rig type matches.
+          A rig with different bone names will take the parts that line up and
+          ignore the rest.</li>
+      <li><b>Mirroring doesn't mirror</b> — the rig's bones probably don't use a
+          left/right naming convention Blender recognises.</li>
+    </ul>
+
+    <footer>Next: <a href="versions.html">Versions</a> ·
+      Back to <a href="index.html">documentation home</a>.</footer>
+  </main>
+  <script src="nav.js"></script>
+</body>
+</html>

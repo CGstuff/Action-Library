@@ -106,6 +106,19 @@ class BlenderIntegrationTab(QWidget):
         info_label.setWordWrap(True)
         addon_layout.addWidget(info_label)
 
+        # The single most common reason an install "doesn't work": the installer
+        # launches its OWN background Blender and saves preferences from it, so a
+        # Blender that's already open won't see the addon, and its in-memory
+        # preferences can be written back over what the installer just saved.
+        warning_label = QLabel(
+            "⚠ Close Blender before installing. The installer starts its own "
+            "copy of Blender - if one is already running, the install may not "
+            "take effect."
+        )
+        warning_label.setWordWrap(True)
+        warning_label.setStyleSheet("color: #FFA500; font-weight: bold;")
+        addon_layout.addWidget(warning_label)
+
         install_btn = QPushButton("Install Addon")
         install_btn.setStyleSheet(self._button_style)
         install_btn.clicked.connect(self.install_addon)
@@ -115,9 +128,17 @@ class BlenderIntegrationTab(QWidget):
         self.addon_status_label.setWordWrap(True)
         addon_layout.addWidget(self.addon_status_label)
 
+        # This used to tell users to enable the addon by hand in Blender's
+        # preferences. It doesn't need enabling: install_addon.py already calls
+        # addon_utils.enable() and wm.save_userpref(). Sending people to look for
+        # a checkbox that is already ticked is how "did it install or not?"
+        # starts - reported by real users.
         note_label = QLabel(
-            "Note: After installation, restart Blender and enable the addon in:\n"
-            "Edit > Preferences > Add-ons > Search for 'Action Library'"
+            "The addon is installed, enabled and pointed at your library "
+            "automatically. Just start Blender afterwards - you'll find it in "
+            "the 3D Viewport sidebar (N key) under the 'Animation' tab.\n"
+            "Reinstall after every Action Library update: the app and the addon "
+            "are versioned together."
         )
         note_label.setWordWrap(True)
         current_theme = self.theme_manager.get_current_theme()
@@ -130,7 +151,26 @@ class BlenderIntegrationTab(QWidget):
             note_label.setStyleSheet("font-style: italic; opacity: 0.6;")
         addon_layout.addWidget(note_label)
 
+        # Straight to the install page rather than the docs front door - someone
+        # reading this box already has a specific problem.
+        docs_btn = QPushButton("Open installation guide")
+        docs_btn.setStyleSheet(self._button_style)
+        docs_btn.clicked.connect(self._open_install_docs)
+        addon_layout.addWidget(docs_btn)
+
         return addon_group
+
+    def _open_install_docs(self):
+        """Open the documentation's installation page in the browser."""
+        from ...utils.docs import get_expected_docs_location, open_documentation
+
+        if not open_documentation("installation.html"):
+            QMessageBox.information(
+                self,
+                "Documentation",
+                "The documentation files weren't found.\n\n"
+                f"They're expected at:\n{get_expected_docs_location()}"
+            )
 
     def _create_socket_section(self):
         """Create socket communication settings section"""

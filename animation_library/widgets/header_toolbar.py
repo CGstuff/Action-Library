@@ -5,10 +5,12 @@ Pattern: QWidget with horizontal layout
 Inspired by: Current animation_library toolbar
 """
 
+import os
+
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QLineEdit, QPushButton,
     QSlider, QLabel, QSpacerItem, QSizePolicy, QComboBox,
-    QFrame
+    QFrame, QMenu
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QSize
 from PyQt6.QtGui import QIcon
@@ -16,6 +18,7 @@ from PyQt6.QtGui import QIcon
 from ..config import Config
 from ..events.event_bus import get_event_bus
 from ..services.database_service import get_database_service
+from ..services.service_refs import service_ref
 from ..utils import IconLoader, colorize_white_svg
 from ..themes.theme_manager import get_theme_manager
 
@@ -108,10 +111,21 @@ class HeaderToolbar(QWidget):
     - Event bus integration
 
     Layout:
-        [Search] [Grid/List] [Size: ----] [Edit Mode] [Delete]
+        [Library] [Search] [Grid/List] [Size: ----] [Edit Mode] [Delete]
     """
 
+    # Resolved on every access, never cached - the library can change at runtime.
+    # See services/service_refs.py.
+    _db_service = service_ref(get_database_service, '_injected_db_service')
+
+    # Sentinel for the picker's "Browse..." entry, so it can't collide with a path.
+    BROWSE_LIBRARY = "__browse__"
+
     # Signals
+    library_switch_requested = pyqtSignal(str)  # user picked a known library (path)
+    library_browse_requested = pyqtSignal()     # user picked "Browse for another folder..."
+    library_forget_requested = pyqtSignal(str)  # user asked to drop a library from the list
+    docs_clicked = pyqtSignal()                 # open the local documentation
     search_text_changed = pyqtSignal(str)
     view_mode_changed = pyqtSignal(str)  # "grid" or "list"
     card_size_changed = pyqtSignal(int)
@@ -141,7 +155,7 @@ class HeaderToolbar(QWidget):
 
         # Services (injectable for testing)
         self._event_bus = event_bus or get_event_bus()
-        self._db_service = db_service or get_database_service()
+        self._injected_db_service = db_service  # None in production
         self._theme_manager = theme_manager or get_theme_manager()
 
         # State
@@ -156,6 +170,7 @@ class HeaderToolbar(QWidget):
 
         # Load filter data
         self._refresh_filter_data()
+        self.refresh_libraries()
 
         # Force Qt to reapply stylesheet for dynamic property AFTER widgets are created
         self.style().unpolish(self)
@@ -167,6 +182,16 @@ class HeaderToolbar(QWidget):
         # Get theme for icon colorization
         theme = self._theme_manager.get_current_theme()
         icon_color = theme.palette.header_icon_color if theme else "#1a1a1a"
+
+        # Library picker - which library everything else in this bar applies to
+        self._library_combo = QComboBox()
+        self._library_combo.setFixedWidth(190)
+        self._library_combo.setToolTip(
+            "Switch animation library\nRight-click to forget a library"
+        )
+        self._library_combo.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
 
         # Search box (match old repo: 200px wide)
         self._search_box = QLineEdit()
@@ -282,6 +307,13 @@ class HeaderToolbar(QWidget):
             }
         """)
 
+        # Documentation button. Text rather than an icon for now - there's no
+        # book/doc glyph in the icon set; drop one in animation_library/icons/
+        # and swap this for an IconLoader icon like its neighbours.
+        self._docs_btn = QPushButton("Docs")
+        self._docs_btn.setFixedSize(52, 40)
+        self._docs_btn.setToolTip("Documentation (F1)")
+
         # Rig type filter dropdown
         self._rig_type_combo = QComboBox()
         self._rig_type_combo.addItem("All Rig Types")
@@ -312,6 +344,10 @@ class HeaderToolbar(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(15, 0, 15, 0)  # Match old repo: 15px left/right
         layout.setSpacing(8)
+
+        # ===== SECTION 0: FAR LEFT - Which library =====
+        layout.addWidget(self._library_combo)
+        layout.addSpacing(16)
 
         # ===== SECTION 1: LEFT - Creation =====
         layout.addWidget(self._new_folder_btn)
@@ -345,6 +381,8 @@ class HeaderToolbar(QWidget):
         layout.addSpacing(16)  # Extra spacing before identity pill
         layout.addWidget(self._identity_pill)
         layout.addSpacing(12)  # Space between pill and system buttons
+        layout.addWidget(self._docs_btn)
+        layout.addSpacing(4)
         layout.addWidget(self._about_btn)
         layout.addSpacing(4)
         layout.addWidget(self._console_btn)
@@ -355,6 +393,14 @@ class HeaderToolbar(QWidget):
 
     def _connect_signals(self):
         """Connect internal signals"""
+
+        # Library picker. `activated` fires only on a real user pick;
+        # currentIndexChanged would also fire while arrowing through the list
+        # with the keyboard, i.e. a library switch per keystroke.
+        self._library_combo.activated.connect(self._on_library_activated)
+        self._library_combo.customContextMenuRequested.connect(
+            self._on_library_context_menu
+        )
 
         # Search box
         self._search_box.textChanged.connect(self._on_search_text_changed)
@@ -389,6 +435,7 @@ class HeaderToolbar(QWidget):
 
         # About button
         self._about_btn.clicked.connect(self._on_about_clicked)
+        self._docs_btn.clicked.connect(self._on_docs_clicked)
 
         # Console button
         self._console_btn.clicked.connect(self._on_console_clicked)
@@ -526,6 +573,15 @@ class HeaderToolbar(QWidget):
         """Handle delete button click"""
         self.delete_clicked.emit()
 
+    def _on_docs_clicked(self):
+        """Docs button pressed.
+
+        A plain method rather than connecting clicked -> docs_clicked.emit:
+        QPushButton.clicked carries a `checked` bool, and emit() of a no-argument
+        signal would choke on it.
+        """
+        self.docs_clicked.emit()
+
     def _on_about_clicked(self):
         """Handle about button click"""
         self.about_clicked.emit()
@@ -597,6 +653,113 @@ class HeaderToolbar(QWidget):
         for tag in tags:
             self._tags_combo.addItem(tag)
         self._tags_combo.blockSignals(False)
+
+    # ==================== LIBRARY PICKER ====================
+
+    def refresh_libraries(self):
+        """Rebuild the library picker from the known-libraries list.
+
+        Also the revert path: call this after a switch is cancelled or fails and
+        the combo snaps back to the real current library, with no index
+        bookkeeping to get wrong.
+        """
+        from ..services.known_libraries import get_known_libraries_store
+
+        libraries = get_known_libraries_store().list_libraries()
+
+        # Repopulating fires currentIndexChanged; block it so rebuilding the list
+        # can never be mistaken for the user choosing something.
+        self._library_combo.blockSignals(True)
+        try:
+            self._library_combo.clear()
+
+            current_index = 0
+            for i, lib in enumerate(libraries):
+                label = lib['label']
+                if not lib['exists']:
+                    # Unavailable, NOT gone: an offline network path must stay
+                    # listed, or the list silently empties itself whenever you're
+                    # off the VPN.
+                    label = f"{label}  (unavailable)"
+                self._library_combo.addItem(label, lib['path'])
+                self._library_combo.setItemData(
+                    i, lib['path'], Qt.ItemDataRole.ToolTipRole
+                )
+                if not lib['exists']:
+                    item = self._library_combo.model().item(i)
+                    if item is not None:
+                        item.setEnabled(False)
+                if lib['is_current']:
+                    current_index = i
+
+            if libraries:
+                self._library_combo.insertSeparator(self._library_combo.count())
+            self._library_combo.addItem("Browse for another folder...", self.BROWSE_LIBRARY)
+
+            self._library_combo.setCurrentIndex(current_index)
+        finally:
+            self._library_combo.blockSignals(False)
+
+    def _on_library_context_menu(self, pos):
+        """Right-click on the picker: forget a library.
+
+        The CURRENT library is deliberately not offered - forgetting it would be
+        meaningless, since the list re-seeds itself with whatever library is in
+        use and it would reappear immediately.
+        """
+        from ..services.known_libraries import get_known_libraries_store
+
+        removable = [
+            lib for lib in get_known_libraries_store().list_libraries()
+            if not lib['is_current']
+        ]
+
+        menu = QMenu(self)
+
+        if not removable:
+            empty = menu.addAction("No other libraries to forget")
+            empty.setEnabled(False)
+        else:
+            forget_menu = menu.addMenu("Forget")
+            for lib in removable:
+                label = lib['label']
+                if not lib['exists']:
+                    label = f"{label}  (unavailable)"
+                action = forget_menu.addAction(label)
+                action.setData(lib['path'])
+                action.setToolTip(lib['path'])
+            forget_menu.triggered.connect(
+                lambda action: self.library_forget_requested.emit(action.data())
+            )
+
+        menu.exec(self._library_combo.mapToGlobal(pos))
+
+    def _on_library_activated(self, index: int):
+        """Handle a user picking a library.
+
+        Wired to `activated`, NOT `currentIndexChanged`: the latter also fires
+        while arrowing through a combo with the keyboard, which would try to
+        switch library on every keystroke.
+        """
+        path = self._library_combo.itemData(index)
+        if not path:
+            return
+
+        if path == self.BROWSE_LIBRARY:
+            self.library_browse_requested.emit()
+            return
+
+        # Ignore re-picking the library we're already on. Normalize BOTH sides:
+        # stored paths keep their original casing (so labels read correctly), so
+        # a raw string compare would miss on Windows.
+        current = Config.load_library_path()
+        if current:
+            def key(p):
+                return os.path.normcase(os.path.normpath(str(p)))
+            if key(path) == key(current):
+                return
+
+        self.library_switch_requested.emit(str(path))
 
     def refresh_filters(self):
         """Public method to refresh filter data (e.g., after library refresh)"""

@@ -800,21 +800,23 @@ class ANIMLIB_OT_capture_animation(Operator):
         """
         Get metadata from source animation for version inheritance.
 
-        When creating a new version, we need to inherit folder_id, folder_path,
-        and tags from the source animation. This searches for the source
+        When creating a new version, we inherit folder_id, folder_path, tags and
+        description from the source animation - the things that describe the ASSET
+        rather than the individual take. (Per-take commentary lives in the review
+        notes, which are keyed per version.) This searches for the source
         animation's JSON file and reads its metadata.
 
         Args:
             version_group_id: The version group UUID to search for
 
         Returns:
-            dict with 'folder_id', 'folder_path', and 'tags' from source
+            dict with 'folder_id', 'folder_path', 'tags', 'description' from source
         """
         from pathlib import Path
         import json
         from ..preferences import get_library_path
 
-        result = {'folder_id': None, 'folder_path': None, 'tags': []}
+        result = {'folder_id': None, 'folder_path': None, 'tags': [], 'description': ''}
 
         library_path = get_library_path()
         if not library_path or not version_group_id:
@@ -866,6 +868,13 @@ class ANIMLIB_OT_capture_animation(Operator):
                             elif isinstance(source_tags, str):
                                 result['tags'] = [t.strip() for t in source_tags.split(',') if t.strip()]
                             logger.debug(f"Found source tags: {result['tags']}")
+
+                        # Get description if present (asset-level, so it carries
+                        # across versions like tags do).
+                        source_description = data.get('description')
+                        if source_description and not result['description']:
+                            result['description'] = source_description
+                            logger.debug(f"Found source description: {result['description']!r}")
 
                         # If we found folder info and tags, we can stop
                         if (result['folder_id'] is not None or result['folder_path']) and result['tags']:
@@ -1058,16 +1067,19 @@ class ANIMLIB_OT_capture_animation(Operator):
             # Get tags from UI input
             ui_tags = [tag.strip() for tag in scene.animlib_tags.split(',') if tag.strip()]
 
-            # Inherit folder_id, folder_path and tags from source animation when versioning
+            # Inherit folder_id, folder_path, tags and description from source
+            # animation when versioning
             inherited_folder_id = None
             inherited_folder_path = None
             inherited_tags = []
+            inherited_description = ''
 
             if version_info and version_info.get('version_group_id'):
                 source_metadata = self._get_source_animation_metadata(version_info['version_group_id'])
                 inherited_folder_id = source_metadata.get('folder_id')
                 inherited_folder_path = source_metadata.get('folder_path')
                 inherited_tags = source_metadata.get('tags', [])
+                inherited_description = source_metadata.get('description', '') or ''
                 logger.info(f"Inherited from source: folder_id={inherited_folder_id}, folder_path={inherited_folder_path}, tags={inherited_tags}")
 
             # Merge tags: inherited + UI (deduplicated, preserving order)
@@ -1075,6 +1087,12 @@ class ANIMLIB_OT_capture_animation(Operator):
             for tag in ui_tags:
                 if tag not in tags:
                     tags.append(tag)
+
+            # Description: what the user typed in the capture panel wins; if they
+            # left it blank on a new version, carry the previous version's
+            # description forward rather than losing it.
+            ui_description = (scene.animlib_description or '').strip()
+            description = ui_description if ui_description else inherited_description
 
             # Create JSON metadata
             # Determine version_group_id - use provided one or default to animation_id
@@ -1093,7 +1111,7 @@ class ANIMLIB_OT_capture_animation(Operator):
                 'id': animation_id,
                 'app_version': '1.3.0',  # For one-time v1.2→v1.3 migration detection
                 'name': animation_name,
-                'description': scene.animlib_description,
+                'description': description,
                 'author': scene.animlib_author,
                 'tags': tags,
                 'rig_type': rig_type,

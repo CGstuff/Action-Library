@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Storage — Action Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="top"><span class="brand">Action Library</span><a href="index.html">Home</a></nav>
+  <main>
+    <h1>Storage</h1>
+    <p>Where your animations live, how to keep more than one library, and how to
+       share one with other people.</p>
+
+    <h2 id="the-library-folder">The library folder</h2>
+    <p>Everything lives in one folder you choose. Inside it:</p>
+    <table>
+      <tr><th>Folder</th><th>What's in it</th></tr>
+      <tr><td><code>library/actions/</code></td><td>Your animations — one folder each.</td></tr>
+      <tr><td><code>library/poses/</code></td><td>Your poses.</td></tr>
+      <tr><td><code>_versions/</code></td><td>Older versions.</td></tr>
+      <tr><td><code>.meta/</code></td><td>The index, review notes and drawings.</td></tr>
+      <tr><td><code>.deleted/</code>, <code>.trash/</code></td><td>Archive and Trash (Studio mode).</td></tr>
+      <tr><td><code>.queue/</code></td><td>Messages between Blender and the app.</td></tr>
+    </table>
+    <p>Each animation's folder holds its <code>.blend</code>, a thumbnail, a preview
+       video, and a small <code>.json</code> of its metadata. Plain files, no
+       proprietary container — <b>copy the library folder and you've backed
+       everything up</b>, including every version.</p>
+
+    <h2 id="switching">Using more than one library</h2>
+    <p>The dropdown at the top-left of the header is the library picker. It lists
+       the libraries you've used, most recent first, and switching is immediate —
+       the whole app re-points at the one you pick, and <b>Blender follows within a
+       couple of seconds</b> without you touching anything.</p>
+
+    <h3>Adding a library</h3>
+    <p>Pick <b>Browse for another folder…</b> at the bottom of the dropdown. Choose
+       an existing library to add it to the list, or an <b>empty folder</b> to start
+       a new, empty one — Action Library builds everything it needs inside it. Once
+       you've used a library it's remembered, so you only browse for it once.</p>
+
+    <h3>Forgetting a library</h3>
+    <p><b>Right-click</b> the picker and choose <b>Forget</b>. This only removes it
+       from the dropdown — nothing is deleted, the folder and every animation in it
+       stay exactly as they are, and you can add it back with Browse.</p>
+    <p>You can't forget the library you're currently using; it would just reappear.</p>
+
+    <h3>Unavailable libraries</h3>
+    <p>A library on a network drive you can't currently reach — off the VPN, drive
+       unplugged — is shown as <b>unavailable</b> and can't be selected. It stays in
+       the list rather than disappearing, because it isn't gone, you just can't see
+       it right now.</p>
+
+    <div class="note">The list of libraries is kept <b>on your machine</b>, not in
+      any library. It has to be — a library can't hold the list of libraries, since
+      whichever one you're in only knows about itself.</div>
+
+    <h2 id="shared">Sharing a library</h2>
+    <p>Put the library folder on a shared drive and point everyone at the same path.
+       Everyone captures into it and sees everyone else's work.</p>
+
+    <h3>What's shared and what isn't</h3>
+    <table>
+      <tr><th>Shared by everyone</th><th>Yours alone</th></tr>
+      <tr><td>Animations, poses, versions</td><td>Your <b>identity</b> (your name and colour)</td></tr>
+      <tr><td>Tags, folders, favorites</td><td>Your <b>Recent</b> list</td></tr>
+      <tr><td>Status, review notes, drawings</td><td>Which library you're pointed at</td></tr>
+      <tr><td></td><td>Window layout, view settings</td></tr>
+    </table>
+    <p>That split is deliberate. Identity is per machine so two people on one
+       library don't overwrite each other, and Recent is per machine because
+       "what I was just looking at" is about you, not about the library.</p>
+
+    <h3>Expectations on a network drive</h3>
+    <ul>
+      <li>A colleague's capture takes a <b>few seconds</b> to appear.</li>
+      <li>Use <b>Studio mode</b> so deletes go through Archive rather than being
+          instant.</li>
+      <li>Everyone should run the <b>same version</b> of Action Library.</li>
+      <li>If something seems stale, press <b>refresh</b>.</li>
+    </ul>
+
+    <div class="warn">Sharing works over a normal mapped drive or network share. It
+      is <b>not</b> designed for Dropbox, Google Drive or OneDrive — those sync
+      files in the background on their own schedule and will fight the app's index.
+      If you need a shared library, use a real network share.</div>
+
+    <h2 id="changing">Changing where the library lives</h2>
+    <p>To move an existing library: close Action Library, copy the folder wherever
+       you want it, reopen, and point the picker at the new location with
+       <b>Browse</b>. The app doesn't move files for you — deliberately, because
+       moving gigabytes of animation is a job for your file manager, not a
+       button that might fail halfway.</p>
+    <p>You can also change it from <b>Settings &rsaquo; Storage Locations</b>, which
+       does the same thing as the picker.</p>
+
+    <h2 id="backups">Backups</h2>
+    <p>Copy the library folder. That's it — animations, versions, notes, drawings
+       and the index all live inside it.</p>
+    <p>Action Library also keeps its own database backups (from
+       <b>Settings &rsaquo; Maintenance</b>), but those only cover the index, not
+       your animation files. They're a safety net for the app, not a backup of your
+       work.</p>
+
+    <footer>Next: <a href="settings.html">Settings</a> ·
+      Back to <a href="index.html">documentation home</a>.</footer>
+  </main>
+  <script src="nav.js"></script>
+</body>
+</html>

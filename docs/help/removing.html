@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Archive &amp; delete — Action Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="top"><span class="brand">Action Library</span><a href="index.html">Home</a></nav>
+  <main>
+    <h1>Archive &amp; delete</h1>
+    <p>Getting rid of things — and getting them back. How this behaves depends on
+       which <a href="settings.html#modes">mode</a> you're in, so start there.</p>
+
+    <h2 id="two-modes">Two different behaviours</h2>
+    <table>
+      <tr><th></th><th>Solo mode</th><th>Studio mode</th></tr>
+      <tr><td><b>Delete does</b></td><td>Deletes. Immediately and permanently.</td><td>Moves to Archive.</td></tr>
+      <tr><td><b>Archive / Trash folders</b></td><td>Hidden — there's nothing to stage.</td><td>Visible in the tree.</td></tr>
+      <tr><td><b>Undo</b></td><td>None.</td><td>Restore from Archive or Trash.</td></tr>
+      <tr><td><b>Suits</b></td><td>Working alone, wanting it gone.</td><td>Shared library, or wanting a safety net.</td></tr>
+    </table>
+    <div class="warn">In <b>Solo mode</b>, delete means delete. The folder is removed
+      from disk, including every version of that animation. There is no Trash to
+      fish it back out of.</div>
+
+    <h2 id="studio">The Studio mode pipeline</h2>
+    <p>Studio mode gives you two stages before anything is really gone:</p>
+    <p><b>Library → Archive → Trash → gone</b></p>
+
+    <h3>Archive</h3>
+    <p>Select what you want gone and press the archive button in the header (or use
+       the card's right-click menu). The animation leaves the library and appears in
+       the <b>Archive</b> folder. It's still on disk, whole, and can be restored.</p>
+    <p>Archive is for "I don't want to see this while I work" rather than "destroy
+       it".</p>
+
+    <h3>Restore from Archive</h3>
+    <p>Select the <b>Archive</b> folder, select what you want back, and press
+       <b>Restore to Library</b> in the bulk toolbar. It returns with its metadata.</p>
+
+    <h3>Trash</h3>
+    <p>In the Archive view, deleting again moves the item on to <b>Trash</b> — the
+       last stop before it's gone for good. Trash can still be restored (back to
+       Archive), though some metadata may not survive the round trip.</p>
+
+    <h3>Emptying</h3>
+    <p>Right-click the <b>Archive</b> folder for <b>Empty Archive</b>, which moves
+       everything in it to Trash. Right-click <b>Trash</b> for <b>Empty Trash</b>,
+       which permanently deletes it all.</p>
+    <div class="warn">Empty Trash is the point of no return. Everything in it is
+      removed from disk.</div>
+
+    <h3>The permanent-deletion guard</h3>
+    <p>Permanent deletion is gated by a setting — <b>Allow permanent deletion</b>,
+       under <b>Settings &rsaquo; Storage Locations</b>. It's <b>off</b> by default,
+       and while it's off, Action Library refuses to destroy anything. If Empty
+       Trash doesn't seem to do anything, that's why.</p>
+
+    <h2 id="versions">Deleting and versions</h2>
+    <p>Removing an animation removes <b>all of its versions</b> — the whole
+       history goes with it.</p>
+    <p>But delete the <b>latest</b> version specifically and Action Library promotes
+       the next newest to take its place, so the animation stays in your library one
+       take older, rather than vanishing. See <a href="versions.html">Versions</a>.</p>
+
+    <h2 id="disk">What this looks like on disk</h2>
+    <p>Archive and Trash are real hidden folders inside your library
+       (<code>.deleted</code> and <code>.trash</code>). Archiving <b>moves the
+       animation's folder</b> into them, whole. So an archived animation is still a
+       normal folder of normal files — if the app ever failed you, you could find it
+       yourself with a file browser.</p>
+    <div class="note">Because Archive and Trash live inside the library, they take
+      up space until you empty them, and they travel with the library if you copy
+      it.</div>
+
+    <h2 id="advice">Which mode should you use?</h2>
+    <p>If more than one person touches the library, <b>Studio mode</b>. The cost of
+       a wrong delete on a shared library isn't your afternoon, it's someone
+       else's.</p>
+    <p>Working alone with a library you back up? <b>Solo mode</b> is less
+       ceremony — but "I back it up" should be true, not aspirational.</p>
+
+    <footer>Next: <a href="storage.html">Storage</a> ·
+      Back to <a href="index.html">documentation home</a>.</footer>
+  </main>
+  <script src="nav.js"></script>
+</body>
+</html>

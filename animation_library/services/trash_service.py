@@ -242,4 +242,14 @@ def get_trash_service() -> TrashService:
     return _trash_service_instance
 
 
-__all__ = ['TrashService', 'get_trash_service']
+def reset_trash_service() -> None:
+    """Discard the global TrashService.
+
+    It caches a DatabaseService at construction, so it points at whichever
+    library was configured then. Must be reset on a library switch.
+    """
+    global _trash_service_instance
+    _trash_service_instance = None
+
+
+__all__ = ['TrashService', 'get_trash_service', 'reset_trash_service']

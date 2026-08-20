@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Capturing — Action Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="top"><span class="brand">Action Library</span><a href="index.html">Home</a></nav>
+  <main>
+    <h1>Capturing</h1>
+    <p>Getting animation out of Blender and into your library. Everything here
+       happens in Blender, in the <b>3D Viewport sidebar</b> (<kbd>N</kbd>) under
+       the <b>Animation</b> tab.</p>
+
+    <h2 id="what-happens">What a capture actually saves</h2>
+    <p>Each capture creates a self-contained folder in your library holding:</p>
+    <ul>
+      <li>a <code>.blend</code> with the action data,</li>
+      <li>a <code>.png</code> thumbnail, rendered from your viewport,</li>
+      <li>a <code>.webm</code> preview video (actions only — poses are one frame),</li>
+      <li>a <code>.json</code> of metadata: name, rig type, frame range, author, tags.</li>
+    </ul>
+    <p>Blender then drops a note for the desktop app, which picks it up within a
+       few seconds and adds the card. Nothing else is required of you.</p>
+    <div class="note">The thumbnail and preview are rendered from your <b>viewport</b>,
+      so what you see is what you get. Frame the shot before you capture — a clear
+      side-on view of the motion beats a three-quarter view of the character's
+      back six months from now.</div>
+
+    <h2 id="capture-action">Capturing an animation</h2>
+    <ol>
+      <li>Select the armature.</li>
+      <li>Open the <b>Capture</b> panel.</li>
+      <li>Enter a <b>name</b>.</li>
+      <li>Set the <b>frame range</b>.</li>
+      <li>Press <b>Capture Action</b>.</li>
+    </ol>
+
+    <h3>Naming</h3>
+    <p>The name is how you'll find it again, and it decides the folder on disk.
+       Descriptive beats clever: <code>jump_heavy_land</code> is findable,
+       <code>Action.003</code> is not. If your studio uses a naming template, the
+       panel gives you fields to fill instead of a free-text box, and builds the
+       name from them — see <a href="settings.html#naming">naming settings</a>.</p>
+
+    <div class="tip">Search covers names, tags, descriptions and rig type — so
+      names don't have to carry everything. Name it for the motion, tag it for the
+      context.</div>
+
+    <h2 id="capture-pose">Capturing a pose</h2>
+    <p><b>Capture Pose</b> saves the current frame as a single-frame pose. It lands
+       in the Poses side of the library and gets a thumbnail but no preview video.
+       Poses are what pose blending works on — see
+       <a href="applying.html#blending">Pose blending</a>.</p>
+
+    <h3>Selected bones only</h3>
+    <p>Tick <b>Selected Bones Only</b> and the pose records just the bones you have
+       selected. Good for a hand shape or a facial expression you want to drop onto
+       a character without touching the rest of the rig.</p>
+
+    <h2 id="capture-selected">Capturing part of an animation</h2>
+    <p><b>Capture Selected</b> takes the keyframes you have selected in the dope
+       sheet and makes a new animation from them, shifted to start at frame 1. Use
+       it to lift one good section out of a long take without cutting up the
+       original.</p>
+
+    <h2 id="versions">Capturing over something that exists</h2>
+    <p>Capture using the name of something already in the library — or re-capture
+       an animation you originally applied <i>from</i> the library — and Action
+       Library asks what you mean:</p>
+    <ul>
+      <li><b>New Version</b> — this is an improved take of the same animation. The
+          previous one is kept and this becomes the latest.</li>
+      <li><b>New Animation</b> — this is a different thing that happens to have a
+          similar name. Both are kept, independently.</li>
+    </ul>
+    <p>Choose New Version and the older files are moved aside into version storage
+       rather than deleted. Nothing is ever overwritten — see
+       <a href="versions.html">Versions</a>.</p>
+
+    <div class="tip">This is the intended way to iterate: capture, apply, improve,
+      capture again with the same name. You get a history for free, and the card in
+      the library always shows your latest.</div>
+
+    <h2 id="update-preview">Updating a preview</h2>
+    <p>If the thumbnail or preview came out badly — wrong angle, character out of
+       frame — you don't have to re-capture. Frame the viewport how you want it,
+       select the animation, and press <b>Update Preview</b>. It re-renders the
+       thumbnail and video for the existing animation and leaves the animation data
+       alone.</p>
+    <div class="note">Update Preview works on <b>actions</b>, not poses.</div>
+
+    <h2 id="troubleshooting">When a capture doesn't appear</h2>
+    <ul>
+      <li><b>Give it five seconds.</b> The app polls on a short timer.</li>
+      <li><b>Press refresh</b> in the app's header.</li>
+      <li><b>Check both sides agree on the library.</b> The addon panel shows the
+          library path it's using; it should match
+          <b>Settings &rsaquo; Storage Locations</b> in the app.</li>
+      <li><b>Check the armature was selected</b> when you pressed capture.</li>
+      <li>Still nothing? The <b>console</b> button in the app's header shows what
+          it recorded. See <a href="installation.html#troubleshooting">install
+          troubleshooting</a>.</li>
+    </ul>
+
+    <footer>Next: <a href="applying.html">Applying</a> ·
+      Back to <a href="index.html">documentation home</a>.</footer>
+  </main>
+  <script src="nav.js"></script>
+</body>
+</html>

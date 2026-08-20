@@ -8,8 +8,8 @@ Inspired by: Current animation_library metadata display
 from pathlib import Path
 from typing import Optional, Dict, Any
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QScrollArea,
-    QFrame, QGridLayout, QPushButton, QHBoxLayout, QMenu, QSplitter
+    QWidget, QVBoxLayout, QLabel, QScrollArea, QDialog, QMessageBox,
+    QFrame, QGridLayout, QPushButton, QHBoxLayout, QMenu, QSplitter, QTextEdit
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QCursor
@@ -17,12 +17,18 @@ from PyQt6.QtGui import QFont, QCursor
 from ..themes.theme_manager import get_theme_manager
 from ..config import Config
 from ..services.database_service import get_database_service
+from ..services.service_refs import service_ref
 from .video_preview_widget import VideoPreviewWidget
 from .dialogs import VersionHistoryDialog
 from .dialogs.rename_dialog import show_rename_dialog
 
 
 class MetadataPanel(QWidget):
+    # Resolved on every access, never cached - the library can change at runtime.
+    # Previously memoized on first use, which meant it could never pick up a new
+    # library. See services/service_refs.py.
+    _db_service = service_ref(get_database_service, '_injected_db_service')
+
     """
     Panel for displaying animation metadata
 
@@ -71,7 +77,7 @@ class MetadataPanel(QWidget):
 
         # Services (injectable for testing)
         self._theme_manager = theme_manager or get_theme_manager()
-        self._db_service = db_service  # Lazy init via _get_db_service()
+        self._injected_db_service = db_service  # None in production
 
         # Event bus for edit mode changes
         from ..events.event_bus import get_event_bus
@@ -86,9 +92,7 @@ class MetadataPanel(QWidget):
         self.setMinimumWidth(300)
 
     def _get_db_service(self):
-        """Get database service (lazy initialization)"""
-        if self._db_service is None:
-            self._db_service = get_database_service()
+        """Get database service (always current - see _db_service above)."""
         return self._db_service
 
     def _create_widgets(self):
@@ -102,9 +106,11 @@ class MetadataPanel(QWidget):
         # Content widget
         self._content_widget = QWidget()
 
-        # Description label
-        self._description_label = QLabel("")
-        self._description_label.setWordWrap(True)
+        # Description - a read view (label) that swaps to an edit view (text box
+        # + Save/Cancel) when the Edit button is pressed. Editable in the app so
+        # nobody has to hand-edit the JSON sidecar (which the app doesn't re-read
+        # for an animation it already knows).
+        self._description_section = self._create_description_section()
 
         # Create info sections
         self._technical_section = self._create_section("Technical Information")
@@ -146,6 +152,126 @@ class MetadataPanel(QWidget):
         section.setProperty("grid", grid)
 
         return section
+
+    def _create_description_section(self) -> QWidget:
+        """Description with an in-app editor.
+
+        Two views in one widget: a read view (the text + an Edit button) and an
+        edit view (a text box + Save / Cancel). Editing writes to the database
+        AND the JSON sidecar, so the app is the one place you change it and the
+        sidecar always agrees - see DatabaseService.set_description.
+        """
+        section = QWidget()
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(0, 8, 0, 8)
+        layout.setSpacing(4)
+
+        # Header: title + Edit button.
+        header = QHBoxLayout()
+        title_label = QLabel("Description")
+        title_font = QFont()
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_label.setStyleSheet("""
+            QLabel {
+                background-color: rgba(128, 128, 128, 0.15);
+                padding: 4px 8px;
+                border-radius: 3px;
+            }
+        """)
+        header.addWidget(title_label, 1)
+
+        self._description_edit_btn = QPushButton("Edit")
+        self._description_edit_btn.setFixedHeight(24)
+        self._description_edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._description_edit_btn.clicked.connect(self._begin_edit_description)
+        header.addWidget(self._description_edit_btn, 0)
+        layout.addLayout(header)
+
+        # Read view.
+        self._description_label = QLabel("")
+        self._description_label.setWordWrap(True)
+        self._description_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(self._description_label)
+
+        # Edit view (hidden until Edit is pressed).
+        self._description_edit_widget = QWidget()
+        edit_layout = QVBoxLayout(self._description_edit_widget)
+        edit_layout.setContentsMargins(0, 0, 0, 0)
+        edit_layout.setSpacing(4)
+
+        self._description_editor = QTextEdit()
+        self._description_editor.setPlaceholderText("Describe this animation - what it's for, how to use it...")
+        self._description_editor.setFixedHeight(90)
+        edit_layout.addWidget(self._description_editor)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self._cancel_edit_description)
+        buttons.addWidget(cancel_btn)
+        save_btn = QPushButton("Save")
+        save_btn.setDefault(True)
+        save_btn.clicked.connect(self._save_description)
+        buttons.addWidget(save_btn)
+        edit_layout.addLayout(buttons)
+
+        self._description_edit_widget.hide()
+        layout.addWidget(self._description_edit_widget)
+
+        return section
+
+    def _refresh_description_view(self):
+        """Show the current description read-only, leaving any edit-in-progress."""
+        self._description_section.show()
+        self._description_edit_widget.hide()
+        self._description_label.show()
+        self._description_edit_btn.show()
+
+        description = (self._animation or {}).get('description', '') or ''
+        if description:
+            self._description_label.setText(description)
+            self._description_label.setStyleSheet("")
+        else:
+            # Make an empty description obviously editable rather than just blank.
+            self._description_label.setText("No description - click Edit to add one.")
+            self._description_label.setStyleSheet("color: gray; font-style: italic;")
+
+    def _begin_edit_description(self):
+        """Swap the read view for the editor."""
+        if not self._animation:
+            return
+        self._description_editor.setPlainText(self._animation.get('description', '') or '')
+        self._description_label.hide()
+        self._description_edit_btn.hide()
+        self._description_edit_widget.show()
+        self._description_editor.setFocus()
+
+    def _cancel_edit_description(self):
+        """Discard edits and go back to the read view."""
+        self._refresh_description_view()
+
+    def _save_description(self):
+        """Persist the edited description to the database and the JSON sidecar."""
+        if not self._animation:
+            return
+
+        uuid = self._animation.get('uuid')
+        new_text = self._description_editor.toPlainText().strip()
+        if new_text == (self._animation.get('description', '') or ''):
+            self._refresh_description_view()  # nothing changed
+            return
+
+        if self._get_db_service().set_description(uuid, new_text):
+            # Only touch the in-memory copy once the write succeeded, so a failure
+            # can't leave the panel showing a description that wasn't saved.
+            self._animation['description'] = new_text
+            self._refresh_description_view()
+            self._event_bus.animation_updated.emit(uuid)
+        else:
+            QMessageBox.warning(self, "Save Description", "Could not save the description.")
 
     def _create_preview_section(self) -> QWidget:
         """Create video preview section using VideoPreviewWidget"""
@@ -376,7 +502,7 @@ class MetadataPanel(QWidget):
         content_layout.addWidget(self._version_section)
         content_layout.addWidget(self._pose_actions_section)
         content_layout.addWidget(self._technical_section)
-        content_layout.addWidget(self._description_label)
+        content_layout.addWidget(self._description_section)
         content_layout.addWidget(self._rig_section)
         content_layout.addWidget(self._file_section)
         content_layout.addWidget(self._tags_section)
@@ -412,13 +538,8 @@ class MetadataPanel(QWidget):
         else:
             self._video_preview.clear()
 
-        # Update description
-        description = animation.get('description', '')
-        if description:
-            self._description_label.setText(description)
-            self._description_label.show()
-        else:
-            self._description_label.hide()
+        # Update description (leaves edit mode if we were editing another item)
+        self._refresh_description_view()
 
         # Update technical info
         self._update_technical_section()
@@ -442,8 +563,7 @@ class MetadataPanel(QWidget):
     def clear(self):
         """Clear panel"""
         self._animation = None
-        self._description_label.clear()
-        self._description_label.hide()
+        self._description_section.hide()
 
         # Clear video preview
         self._video_preview.clear()
@@ -573,9 +693,12 @@ class MetadataPanel(QWidget):
         label_widget.setFont(label_font)
         grid.addWidget(label_widget, 0, 0, Qt.AlignmentFlag.AlignTop)
 
-        # Tag badges container
         tags = self._animation.get('tags', [])
-        if not tags:
+        is_edit_mode = self._event_bus.is_edit_mode()
+
+        # Nothing to show and nothing to do - only when not editing, otherwise the
+        # user still needs somewhere to press '+'.
+        if not tags and not is_edit_mode:
             no_tags_label = QLabel("None")
             grid.addWidget(no_tags_label, 0, 1)
             return
@@ -586,15 +709,57 @@ class MetadataPanel(QWidget):
         tags_layout.setContentsMargins(0, 0, 0, 0)
         tags_layout.setSpacing(4)
 
-        # Get edit mode state
-        is_edit_mode = self._event_bus.is_edit_mode()
-
         for tag in tags:
             badge = self._create_tag_badge(tag, removable=is_edit_mode)
             tags_layout.addWidget(badge)
 
+        if is_edit_mode:
+            # Adding a tag was impossible from the app until now - the dialog
+            # existed but nothing opened it, so a tag mistyped at capture could
+            # never be fixed here.
+            add_btn = QPushButton("+")
+            add_btn.setFixedSize(20, 20)
+            add_btn.setToolTip("Add tags")
+            add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            add_btn.clicked.connect(self._on_add_tags_clicked)
+            tags_layout.addWidget(add_btn)
+
         tags_layout.addStretch()
         grid.addWidget(tags_widget, 0, 1)
+
+    def _on_add_tags_clicked(self):
+        """Ask for tags and add them to the selected animation."""
+        from .dialogs.tag_input_dialog import TagInputDialog
+
+        if not self._animation:
+            return
+
+        dialog = TagInputDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_tags = dialog.get_tags()
+        if not new_tags:
+            return
+
+        uuid = self._animation.get('uuid')
+        db = self._get_db_service()
+
+        # Normalization (trim + match the library's existing spelling) lives in
+        # add_tags_to_animation - see services/tag_utils.py.
+        if not db.add_tags_to_animation(uuid, new_tags):
+            # Either nothing new, or the write failed. Re-read to find out which,
+            # rather than guessing at the user.
+            return
+
+        # Re-read rather than patching the in-memory copy: the tags actually saved
+        # may differ from what was typed (canonical spelling), and the panel must
+        # show what's on disk, not what was asked for.
+        fresh = db.get_animation_by_uuid(uuid)
+        if fresh:
+            self._animation['tags'] = fresh.get('tags') or []
+            self._update_tags_section()
+            self._event_bus.tags_updated.emit(uuid, self._animation['tags'])
 
     def _create_tag_badge(self, tag: str, removable: bool = False) -> QWidget:
         """Create a tag badge widget"""

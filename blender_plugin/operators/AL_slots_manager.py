@@ -6,6 +6,46 @@ from ..utils.logger import get_logger
 
 logger = get_logger()
 
+
+def _quat_mul(a, b):
+    """Hamilton product a*b for (w, x, y, z) quaternions (compose rotations)."""
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return [aw * bw - ax * bx - ay * by - az * bz,
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw]
+
+
+def _blend_quaternions(quats, mode='AVERAGE'):
+    """Blend a list of (w, x, y, z) quaternions -> a single NORMALIZED quaternion.
+
+    Quaternions are sign-aligned to the first one before blending: q and -q
+    represent the same rotation, and without alignment an average can cancel to
+    garbage. AVERAGE = normalized linear blend (nlerp); ADD = compose (stack) the
+    rotations via quaternion multiplication. This replaces the old, invalid
+    component-by-component averaging of rotation channels.
+    """
+    import math
+    if not quats:
+        return (1.0, 0.0, 0.0, 0.0)
+    ref = quats[0]
+    aligned = []
+    for q in quats:
+        dot = q[0] * ref[0] + q[1] * ref[1] + q[2] * ref[2] + q[3] * ref[3]
+        aligned.append([-c for c in q] if dot < 0.0 else list(q))
+    if mode == 'ADD':
+        result = aligned[0]
+        for q in aligned[1:]:
+            result = _quat_mul(result, q)
+    else:  # AVERAGE / default -> normalized linear blend
+        n = float(len(aligned))
+        result = [sum(q[i] for q in aligned) / n for i in range(4)]
+    mag = math.sqrt(result[0] ** 2 + result[1] ** 2 + result[2] ** 2 + result[3] ** 2)
+    if mag < 1e-8:
+        return (1.0, 0.0, 0.0, 0.0)
+    return tuple(c / mag for c in result)
+
 class ANIMLIB_OT_delete_slot(Operator):
     """Delete the selected Action slot from the current action"""
     bl_idname = "animlib.delete_slot"
@@ -377,86 +417,103 @@ class ANIMLIB_OT_merge_slots(Operator):
                 action.slots.remove(merged_slot)
                 return {'CANCELLED'}
 
-            # Collect all unique (data_path, array_index) pairs across all slots
-            all_fcurve_keys = set()
+            # Collect fcurve keys GROUPED BY data_path, so a rotation quaternion's
+            # four components can be blended AS A QUATERNION. Averaging a
+            # quaternion's components independently (the old behaviour) is
+            # mathematically invalid - the result isn't a unit quaternion and the
+            # rotation is distorted.
+            paths = {}  # data_path -> set(array_index)
             for slot_index, cb in input_channelbags:
                 for fcurve in cb.fcurves:
-                    all_fcurve_keys.add((fcurve.data_path, fcurve.array_index))
+                    paths.setdefault(fcurve.data_path, set()).add(fcurve.array_index)
 
-            logger.info(f"Found {len(all_fcurve_keys)} unique fcurve keys to merge")
+            logger.info(f"Merging {len(paths)} channels across {len(input_channelbags)} slots")
 
-            # For each fcurve key, merge keyframes
+            def _fcurve_at(cb, data_path, array_index):
+                return next((fc for fc in cb.fcurves
+                             if fc.data_path == data_path and fc.array_index == array_index), None)
+
+            def _sample(fcurve, frame):
+                """Value of an fcurve at a frame (exact keyframe or interpolated)."""
+                if fcurve is None:
+                    return None
+                kf = next((k for k in fcurve.keyframe_points if abs(k.co[0] - frame) < 0.001), None)
+                return kf.co[1] if kf else self.interpolate_fcurve(fcurve, frame)
+
             merged_count = 0
-            for data_path, array_index in all_fcurve_keys:
-                # Get fcurves from each slot for this key
-                source_fcurves = []
-                for slot_index, cb in input_channelbags:
-                    fcurve = next(
-                        (fc for fc in cb.fcurves
-                         if fc.data_path == data_path and fc.array_index == array_index),
-                        None
-                    )
-                    if fcurve:
-                        source_fcurves.append(fcurve)
+            for data_path, indices in paths.items():
+                is_quat = data_path.endswith('rotation_quaternion') and {0, 1, 2, 3}.issubset(indices)
 
-                # Check if we should process this fcurve
-                if len(source_fcurves) < 2:
-                    # Only one slot has this fcurve
-                    if include_unique and source_fcurves:
-                        # Copy as-is
-                        fcurve_to_copy = source_fcurves[0]
-                        new_fcurve = merged_channelbag.fcurves.new(data_path, index=array_index)
-                        for keyframe in fcurve_to_copy.keyframe_points:
-                            new_fcurve.keyframe_points.insert(keyframe.co[0], keyframe.co[1])
-                        new_fcurve.update()
-                        merged_count += 1
+                # Slots that actually drive this channel.
+                driving = [cb for _, cb in input_channelbags
+                           if any(_fcurve_at(cb, data_path, i) for i in indices)]
+
+                # Only one slot drives it: copy as-is if the user opted in.
+                if len(driving) < 2:
+                    if include_unique and driving:
+                        cb = driving[0]
+                        for i in sorted(indices):
+                            src = _fcurve_at(cb, data_path, i)
+                            if not src:
+                                continue
+                            dst = merged_channelbag.fcurves.new(data_path, index=i)
+                            for k in src.keyframe_points:
+                                dst.keyframe_points.insert(k.co[0], k.co[1])
+                            dst.update()
+                            merged_count += 1
                     continue
 
-                # Create merged fcurve
-                merged_fcurve = merged_channelbag.fcurves.new(data_path, index=array_index)
-
-                # Collect all unique frame numbers across all source fcurves
-                all_frames = set()
-                for fcurve in source_fcurves:
-                    for keyframe in fcurve.keyframe_points:
-                        all_frames.add(keyframe.co[0])
-
-                all_frames = sorted(all_frames)
-
-                # For each frame, blend values from all fcurves
-                for frame in all_frames:
-                    values = []
-
-                    for fcurve in source_fcurves:
-                        # Find keyframe at this exact frame
-                        keyframe = next(
-                            (kf for kf in fcurve.keyframe_points if abs(kf.co[0] - frame) < 0.001),
-                            None
-                        )
-
-                        if keyframe:
-                            # Exact match - use value
-                            values.append(keyframe.co[1])
-                        else:
-                            # No exact keyframe - interpolate
-                            interpolated_value = self.interpolate_fcurve(fcurve, frame)
-                            if interpolated_value is not None:
-                                values.append(interpolated_value)
-
-                    # Blend values based on mode
-                    if values:
-                        if merge_mode == 'AVERAGE':
-                            blended_value = sum(values) / len(values)
-                        elif merge_mode == 'ADD':
-                            blended_value = sum(values)
-                        else:
-                            blended_value = values[0]
-
-                        # Insert blended keyframe
-                        merged_fcurve.keyframe_points.insert(frame, blended_value)
-
-                merged_fcurve.update()
-                merged_count += 1
+                if is_quat:
+                    # Blend as a quaternion (sign-aligned, normalized) per frame.
+                    all_frames = set()
+                    for cb in driving:
+                        for i in range(4):
+                            fc = _fcurve_at(cb, data_path, i)
+                            if fc:
+                                all_frames.update(k.co[0] for k in fc.keyframe_points)
+                    merged = {i: merged_channelbag.fcurves.new(data_path, index=i) for i in range(4)}
+                    for frame in sorted(all_frames):
+                        quats = []
+                        for cb in driving:
+                            q = []
+                            for i in range(4):
+                                v = _sample(_fcurve_at(cb, data_path, i), frame)
+                                q.append(v if v is not None else (1.0 if i == 0 else 0.0))
+                            quats.append(q)
+                        bq = _blend_quaternions(quats, merge_mode)
+                        for i in range(4):
+                            merged[i].keyframe_points.insert(frame, bq[i])
+                    for fc in merged.values():
+                        fc.update()
+                    merged_count += 4
+                else:
+                    # Non-rotation channels (location, scale, custom props):
+                    # per-component blend is correct. NOTE: rotation_euler is still
+                    # blended component-wise here, which is imperfect for large
+                    # angles - a proper fix would convert euler->quat->euler.
+                    for array_index in sorted(indices):
+                        source_fcurves = [fc for cb in driving
+                                          if (fc := _fcurve_at(cb, data_path, array_index))]
+                        if not source_fcurves:
+                            continue
+                        merged_fcurve = merged_channelbag.fcurves.new(data_path, index=array_index)
+                        all_frames = set()
+                        for fc in source_fcurves:
+                            all_frames.update(k.co[0] for k in fc.keyframe_points)
+                        for frame in sorted(all_frames):
+                            values = [v for fc in source_fcurves
+                                      if (v := _sample(fc, frame)) is not None]
+                            if not values:
+                                continue
+                            if merge_mode == 'AVERAGE':
+                                blended = sum(values) / len(values)
+                            elif merge_mode == 'ADD':
+                                blended = sum(values)
+                            else:
+                                blended = values[0]
+                            merged_fcurve.keyframe_points.insert(frame, blended)
+                        merged_fcurve.update()
+                        merged_count += 1
 
             # Activate the merged slot
             if hasattr(armature.animation_data, 'action_slot'):

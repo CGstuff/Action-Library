@@ -169,12 +169,56 @@ class DatabaseService:
         return self.folders.get_descendants(folder_id)
 
     def delete_folder(self, folder_id: int) -> bool:
-        """Delete folder (and all contained animations via CASCADE)."""
-        return self.folders.delete(folder_id)
+        """Delete a folder and its subfolders. Animations inside are KEPT.
+
+        The animations lose their membership (and the folder's name is dropped
+        from their tags - the folder owns that tag, so it goes with the folder),
+        but the animations themselves, their versions and their files are
+        untouched. See FolderRepository.delete for why the rescue matters.
+        """
+        # Collect what we'll need to clean up BEFORE the rows disappear.
+        doomed = []
+        for fid in self.folders.get_descendants(folder_id):
+            folder = self.folders.get_by_id(fid)
+            if folder and folder.get('name'):
+                uuids = self.folders.get_animation_uuids(fid)
+                if uuids:
+                    doomed.append((folder['name'], uuids))
+
+        if not self.folders.delete(folder_id):
+            return False
+
+        # Membership rows cascade away with the folder; the mirrored tags don't.
+        for folder_name, uuids in doomed:
+            self._remove_tag_from_animations(uuids, folder_name)
+
+        return True
+
+    def count_folder_contents(self, folder_id: int) -> Tuple[int, int]:
+        """(animation_count, subfolder_count) for a folder, including descendants."""
+        return self.folders.count_contents(folder_id)
 
     def update_folder_parent(self, folder_id: int, new_parent_id: int) -> bool:
-        """Update folder's parent to create hierarchy."""
-        return self.folders.update_parent(folder_id, new_parent_id)
+        """Move a folder under a new parent.
+
+        Membership is by folder id, so the animations inside are unaffected.
+        Folder ICONS are keyed by path though, and reparenting rewrites the path
+        of this folder and every descendant - so they're re-keyed here. Without
+        that, dragging a folder silently lost its custom icon (and its
+        descendants') and left dead keys in folder_icons.json forever.
+        """
+        before = self.folders.get_by_id(folder_id)
+        old_path = (before.get('path') or '') if before else ''
+
+        if not self.folders.update_parent(folder_id, new_parent_id):
+            return False
+
+        after = self.folders.get_by_id(folder_id)
+        new_path = (after.get('path') or '') if after else ''
+        if old_path and new_path and old_path != new_path:
+            self._rekey_folder_icons(old_path, new_path)
+
+        return True
 
     def ensure_folder_exists(self, path: str, description: str = None) -> Optional[int]:
         """Ensure folder hierarchy exists, creating missing folders."""
@@ -213,6 +257,24 @@ class DatabaseService:
             # Sync tags to JSON file
             self._update_animation_json_tags(uuid, updates['tags'])
         return success
+
+    def set_description(self, uuid: str, description: str) -> bool:
+        """Set an animation's description, in the database AND the JSON sidecar.
+
+        The sidecar write is why this exists as its own method: the scanner only
+        re-reads a few migration fields from JSON for an animation it already
+        knows, so a description edited only in the database would be correct in
+        the app but silently disagree with the sidecar (and a hand-edited sidecar
+        never reaches the app at all - that's the confusion this feature fixes).
+        Keeping both in step means the app is the one place you edit it, and the
+        sidecar always matches.
+        """
+        if not self.animations.update(uuid, {'description': description}):
+            return False
+        # sync_metadata_to_json mirrors the DB row's description (among other
+        # restorable fields) into the sidecar, resolving the file robustly.
+        self.sync_metadata_to_json(uuid)
+        return True
 
     def _update_animation_json_tags(self, animation_uuid: str, tags) -> bool:
         """Update animation's JSON file with current tags.
@@ -566,19 +628,174 @@ class DatabaseService:
         return self.animations.get_count(folder_id)
 
     def move_animation_to_folder(self, animation_uuid: str, folder_id: int) -> bool:
-        """Move animation to a different folder and add folder name to tags.
+        """Add an animation to a folder.
 
-        Also updates the JSON file to keep it in sync with the database,
-        which is important for version inheritance in the Blender plugin.
+        ADDITIVE: the animation stays in every folder it's already in. A run
+        belongs in Locomotion and GameDev and Show01 at the same time - that's
+        normal, not an edge case. Use remove_animation_from_folder() to take it
+        out of one.
+
+        Membership is recorded in folder_animations (the truth the tree filters
+        on). The folder's name is also mirrored onto the animation's tags so
+        search finds it and the JSON sidecar carries it to other machines - but
+        nothing reads that tag to decide membership.
         """
-        # Update database
-        success = self.animations.move_to_folder(animation_uuid, folder_id)
-        if not success:
+        if not self.folders.add_animation(folder_id, animation_uuid):
             return False
 
-        # Update JSON file to keep it in sync
+        # Keep animations.folder_id pointing at the most recent folder. Nothing
+        # filters on it any more, but the library scanner still round-trips it
+        # through the JSON sidecar as folder_path.
+        self.animations.move_to_folder(animation_uuid, folder_id)
+
         self._update_animation_json_folder(animation_uuid, folder_id)
         return True
+
+    def remove_animation_from_folder(self, animation_uuid: str, folder_id: int) -> bool:
+        """Take an animation out of ONE folder, leaving it in any others.
+
+        Also drops the folder's name from the animation's tags: the folder owns
+        that tag, so it goes when the membership does.
+        """
+        if not self.folders.remove_animation(folder_id, animation_uuid):
+            return False
+
+        folder = self.folders.get_by_id(folder_id)
+        if folder and folder.get('name'):
+            self._remove_tag_from_animations([animation_uuid], folder['name'])
+        return True
+
+    def get_tag_canonical_map(self) -> Dict[str, str]:
+        """{tag_key: the spelling this library uses} - see services/tag_utils.py.
+
+        Built from every tag occurrence in the library, so the most-used spelling
+        wins where variants already exist.
+        """
+        from .tag_utils import canonical_spelling
+        occurrences = []
+        for animation in self.animations.get_all(include_all_versions=True):
+            tags = animation.get('tags')
+            if isinstance(tags, list):
+                occurrences.extend(t for t in tags if isinstance(t, str))
+        return canonical_spelling(occurrences)
+
+    def add_tags_to_animation(self, uuid: str, tags: List[str]) -> bool:
+        """Add tags to an animation, normalized against the rest of the library.
+
+        The single place tags get added, so the case guard can't be skipped by
+        going in through a different door. Tags are trimmed, and steered to the
+        spelling the library already uses - type `combat` when `Combat` exists and
+        you get `Combat`, not a second tag that only differs by case.
+
+        Returns:
+            True if anything changed. False if the animation is unknown, or every
+            tag was already there (in any casing).
+        """
+        from .tag_utils import apply_canonical, dedupe_tags, tag_key
+
+        animation = self.animations.get_by_uuid(uuid)
+        if not animation:
+            return False
+
+        existing = dedupe_tags(animation.get('tags') or [])
+        existing_keys = {tag_key(t) for t in existing}
+
+        incoming = apply_canonical(tags, self.get_tag_canonical_map())
+        added = [t for t in incoming if tag_key(t) not in existing_keys]
+        if not added:
+            return False
+
+        return self.update_animation(uuid, {'tags': existing + added})
+
+    def get_folder_membership_map(self) -> Dict[str, List[int]]:
+        """Every folder membership as {animation_uuid: [folder_id, ...]}."""
+        return self.folders.get_membership_map()
+
+    def get_folders_for_animation(self, animation_uuid: str) -> List[int]:
+        """Folder ids this animation belongs to."""
+        return self.folders.get_folders_for_animation(animation_uuid)
+
+    def rename_folder(self, folder_id: int, new_name: str) -> bool:
+        """Rename a folder.
+
+        Renaming is safe now that membership is by folder id: the animations in
+        the folder don't care what it's called. Previously membership WAS the
+        name (matched against tags), so renaming would have emptied the folder -
+        which is why the rename menu item was left unimplemented.
+
+        Best-effort follow-ups, none of which can break the tree if they fail:
+          - rewrite the old name to the new one on the animations' tags (and
+            their JSON sidecars), since the folder owns that tag
+          - re-key the folder's custom icon, which is stored against its path
+        """
+        result = self.folders.rename(folder_id, new_name)
+        if result is None:
+            return False
+
+        old_name, new_name = result['old_name'], result['new_name']
+        if old_name != new_name:
+            uuids = self.folders.get_animation_uuids(folder_id)
+            if uuids:
+                self._rename_tag_on_animations(uuids, old_name, new_name)
+
+        old_path, new_path = result['old_path'], result['new_path']
+        if old_path and old_path != new_path:
+            self._rekey_folder_icons(old_path, new_path)
+
+        return True
+
+    def _rename_tag_on_animations(self, uuids: List[str], old_tag: str, new_tag: str) -> None:
+        """Swap one tag for another across animations (DB + JSON sidecar).
+
+        Case-insensitive on the way in (renaming folder 'Combat' also catches a
+        'combat' tag) and deduped on the way out.
+        """
+        from .tag_utils import dedupe_tags, tag_key
+
+        target = tag_key(old_tag)
+        for uuid in uuids:
+            animation = self.animations.get_by_uuid(uuid)
+            if not animation:
+                continue
+            tags = animation.get('tags') or []
+            if not isinstance(tags, list) or not any(tag_key(t) == target for t in tags):
+                continue
+            swapped = [new_tag if tag_key(t) == target else t for t in tags]
+            self.update_animation(uuid, {'tags': dedupe_tags(swapped)})
+
+    def _remove_tag_from_animations(self, uuids: List[str], tag: str) -> None:
+        """Drop a tag from animations (DB + JSON sidecar).
+
+        Case-insensitive: deleting a folder called 'Combat' must also clear a
+        'combat' tag it put there before the guard existed.
+        """
+        from .tag_utils import tag_key
+
+        target = tag_key(tag)
+        for uuid in uuids:
+            animation = self.animations.get_by_uuid(uuid)
+            if not animation:
+                continue
+            tags = animation.get('tags') or []
+            if not isinstance(tags, list):
+                continue
+            kept = [t for t in tags if tag_key(t) != target]
+            if len(kept) != len(tags):
+                self.update_animation(uuid, {'tags': kept})
+
+    def _rekey_folder_icons(self, old_path: str, new_path: str) -> None:
+        """Move a folder's custom icon (and its descendants') to the new path.
+
+        Icons are keyed by folder PATH, so any operation that rewrites paths
+        orphans them. This already happens on drag-reparent today - the icon
+        silently reverts to default. Handled here for rename; see
+        folder_icon_service.
+        """
+        try:
+            from .folder_icon_service import get_folder_icon_service
+            get_folder_icon_service(self).rekey_path(old_path, new_path)
+        except Exception as e:
+            logger.warning(f"Could not re-key folder icons {old_path} -> {new_path}: {e}")
 
     def _update_animation_json_folder(self, animation_uuid: str, folder_id: int) -> bool:
         """Update animation's JSON file with current folder information.
@@ -614,13 +831,13 @@ class DatabaseService:
             data['folder_id'] = folder_id
             data['folder_path'] = folder_path
 
-            # Also update tags to include folder name (matches database behavior)
+            # Also update tags to include folder name (matches database behavior).
+            # Case-insensitive, same rule as the DB side - see tag_utils.
             if folder and folder.get('name'):
-                folder_name = folder['name']
+                from .tag_utils import dedupe_tags
                 tags = data.get('tags', [])
-                if isinstance(tags, list) and folder_name not in tags:
-                    tags.append(folder_name)
-                    data['tags'] = tags
+                if isinstance(tags, list):
+                    data['tags'] = dedupe_tags(tags + [folder['name']])
 
             # Write back atomically
             return _atomic_json_write(json_file, data)
@@ -650,11 +867,22 @@ class DatabaseService:
         return self.animations.get_favorites()
 
     def update_last_viewed(self, uuid: str) -> bool:
-        """Update last viewed timestamp for an animation."""
+        """DEPRECATED - do not call. Use services.recently_viewed instead.
+
+        "Recently viewed" is per-user state, but this writes it to the SHARED
+        library database: it made every card click a write lock on a network
+        SQLite file, and made everyone's "Recently Viewed" a global mixture of
+        the whole studio's browsing. Kept only so the legacy column still has a
+        writer if some external tool needs one.
+        """
         return self.animations.update_last_viewed(uuid)
 
     def get_recent_animations(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """Get recently viewed animations."""
+        """DEPRECATED - reads the shared, studio-wide last_viewed_date column.
+
+        The UI's Recent filter/sort now reads per-machine state via
+        services.recently_viewed. See update_last_viewed() above.
+        """
         return self.animations.get_recent(limit)
 
     def get_animations_filtered(
@@ -831,23 +1059,44 @@ class DatabaseService:
         return self._scanner.scan_folder(library_path)
 
     def sync_library(self) -> Tuple[int, int]:
-        """Sync library with database (scan configured library path)."""
+        """Sync library with database (scan configured library path).
+
+        This is a HOT path: it runs on every capture notification, every queue
+        poll that finds one, and every manual refresh - on EVERY client. It must
+        therefore do nothing but scan+import.
+
+        It used to also run fix_pose_flags() (a legacy data-repair UPDATE) and
+        _migrate_to_actions_poses_folders() (a shutil file-moving migration).
+        Those are one-time repair/migration jobs, not per-refresh work: running
+        them here meant every machine took a write lock on the shared network
+        database on every refresh, and several clients could race to move the
+        same files. They're still available as explicit maintenance calls.
+        """
         library_path = Config.load_library_path()
         if not library_path:
             return (0, 0)
-        result = self._scanner.sync_library(library_path)
-
-        # Fix pose flags for existing animations (in case they were imported before is_pose was added)
-        self.fix_pose_flags()
-
-        # Migrate existing animations to actions/poses folder structure
-        self._migrate_to_actions_poses_folders()
-
-        return result
+        return self._scanner.sync_library(library_path)
 
     def fix_pose_flags(self) -> int:
-        """Fix is_pose flag for animations that should be poses (frame_count = 1)."""
+        """Fix is_pose flag for animations that should be poses (frame_count = 1).
+
+        Legacy data repair - a no-op on a healthy library. Call explicitly (fresh
+        import / maintenance), NOT on every launch or refresh: it takes a write
+        lock on the shared database.
+        """
         return self.animations.fix_pose_flags()
+
+    def migrate_to_actions_poses_folders(self) -> int:
+        """Move any legacy library/{name}/ assets into library/actions|poses/{name}/.
+
+        One-time migration that MOVES FILES. Call explicitly (fresh import /
+        maintenance) - never on a per-refresh path, where several clients could
+        race to move the same files.
+
+        Returns:
+            Number of animations migrated
+        """
+        return self._migrate_to_actions_poses_folders()
 
     # ==================== METADATA EXPORT/IMPORT (delegated) ====================
 
@@ -979,6 +1228,14 @@ class DatabaseService:
 
         return self.animations.update(uuid, new_paths)
 
+    def close(self) -> None:
+        """Close every connection this service opened, on any thread.
+
+        Call before discarding the service (shutdown, or a library switch) so
+        worker threads don't leave handles open on the old database file.
+        """
+        self._connection.close_all()
+
     def get_database_stats(self) -> Dict[str, Any]:
         """
         Get database statistics for status display.
@@ -1079,6 +1336,10 @@ def get_database_service() -> DatabaseService:
     """
     Get global DatabaseService singleton instance.
 
+    NOTE: the instance binds its db_path at construction, from whichever library
+    was configured at the time. It does NOT follow a later library change - use
+    reset_database_service() (or services.library_switch) for that.
+
     Returns:
         Global DatabaseService instance
     """
@@ -1088,4 +1349,21 @@ def get_database_service() -> DatabaseService:
     return _database_service_instance
 
 
-__all__ = ['DatabaseService', 'get_database_service']
+def reset_database_service() -> None:
+    """Discard the global DatabaseService, closing its connections first.
+
+    The next get_database_service() builds a fresh one against whatever library
+    is configured now. Callers holding the old instance (e.g. ArchiveService and
+    TrashService cache it at construction) must be reset too - see
+    services/library_switch.py, which does this in the right order.
+    """
+    global _database_service_instance
+    if _database_service_instance is not None:
+        try:
+            _database_service_instance.close()
+        except Exception as e:
+            logger.warning(f"Error closing database service: {e}")
+        _database_service_instance = None
+
+
+__all__ = ['DatabaseService', 'get_database_service', 'reset_database_service']

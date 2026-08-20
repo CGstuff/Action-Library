@@ -8,10 +8,22 @@ import logging
 from typing import List, Dict, Any, Optional, Callable
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
+from ...services.archive_service import get_archive_service
+from ...services.database_service import get_database_service
+from ...services.service_refs import service_ref
+from ...services.trash_service import get_trash_service
+
 logger = logging.getLogger(__name__)
 
 
 class ArchiveTrashController:
+    # Resolved on every access, never cached - the library can change at runtime
+    # and this controller is built once, at startup.
+    # See services/service_refs.py.
+    _db_service = service_ref(get_database_service, '_injected_db_service')
+    _archive_service = service_ref(get_archive_service, '_injected_archive_service')
+    _trash_service = service_ref(get_trash_service, '_injected_trash_service')
+
     """
     Manages archive and trash views and operations.
 
@@ -57,9 +69,9 @@ class ArchiveTrashController:
         self._animation_view = animation_view
         self._metadata_panel = metadata_panel
         self._proxy_model = proxy_model
-        self._db_service = db_service
-        self._archive_service = archive_service
-        self._trash_service = trash_service
+        self._injected_db_service = db_service
+        self._injected_archive_service = archive_service
+        self._injected_trash_service = trash_service
         self._event_bus = event_bus
         self._status_bar = status_bar
         self._reload_animations = reload_animations_callback

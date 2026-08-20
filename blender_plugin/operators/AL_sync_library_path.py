@@ -16,14 +16,15 @@ class ANIMLIB_OT_sync_library_path(Operator):
                         "Set it in the Action Library desktop app first.")
             return {'CANCELLED'}
 
-        addon_name = __name__.split('.')[0]
-        prefs = context.preferences.addons[addon_name].preferences
-        old_path = prefs.actions_library_path
+        # Route through sync_now() rather than assigning here: it's the single
+        # place that knows how to read the pointer, and force=True refreshes the
+        # mtime cache the background timer relies on. Assigning directly would
+        # leave that cache stale.
+        from ..utils.library_path_sync import sync_now
+        changed = sync_now(force=True)
 
-        if old_path == desktop_path:
+        if changed:
+            self.report({'INFO'}, f"Library path synced: {desktop_path}")
+        else:
             self.report({'INFO'}, f"Library path already matches: {desktop_path}")
-            return {'FINISHED'}
-
-        prefs.actions_library_path = desktop_path
-        self.report({'INFO'}, f"Library path synced: {desktop_path}")
         return {'FINISHED'}

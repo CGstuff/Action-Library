@@ -14,6 +14,8 @@ from PyQt6.QtGui import QResizeEvent, QMouseEvent, QKeyEvent, QPainter, QColor, 
 from .animation_card_delegate import AnimationCardDelegate
 from ..models.animation_list_model import AnimationRole
 from ..services.database_service import get_database_service
+from ..services.recently_viewed import get_recently_viewed_store
+from ..services.service_refs import service_ref
 from ..services.socket_client import get_socket_client
 from ..events.event_bus import get_event_bus
 from ..widgets.hover_video_popup import HoverVideoPopup
@@ -21,6 +23,10 @@ from ..config import Config
 
 
 class AnimationView(QListView):
+    # Resolved on every access, never cached - the library can change at runtime.
+    # See services/service_refs.py.
+    _db_service = service_ref(get_database_service, '_injected_db_service')
+
     """
     View for displaying animations in grid or list mode
 
@@ -53,7 +59,7 @@ class AnimationView(QListView):
 
         # Services (injectable for testing)
         self._event_bus = event_bus or get_event_bus()
-        self._db_service = db_service or get_database_service()
+        self._injected_db_service = db_service  # None in production
 
         # View mode
         self._view_mode = Config.DEFAULT_VIEW_MODE
@@ -517,8 +523,9 @@ class AnimationView(QListView):
 
         uuid = index.data(AnimationRole.UUIDRole)
         if uuid:
-            # Update last viewed (double-click is a strong viewing signal)
-            self._db_service.update_last_viewed(uuid)
+            # Update last viewed (double-click is a strong viewing signal).
+            # Local to this machine - never a write to the shared library DB.
+            get_recently_viewed_store().mark_viewed(uuid)
 
             # Check modifiers
             modifiers = QApplication.keyboardModifiers()
@@ -543,11 +550,11 @@ class AnimationView(QListView):
             if uuid:
                 selected_uuids.add(uuid)
 
-        # Update last_viewed_date for newly selected items
-        for index in selected.indexes():
-            uuid = index.data(AnimationRole.UUIDRole)
-            if uuid:
-                self._db_service.update_last_viewed(uuid)
+        # Record newly selected items as viewed, on this machine only. This used
+        # to be one UPDATE per item against the shared network database on every
+        # single click; now it is one local file write for the whole selection.
+        newly_viewed = [index.data(AnimationRole.UUIDRole) for index in selected.indexes()]
+        get_recently_viewed_store().mark_many_viewed(uuid for uuid in newly_viewed if uuid)
 
         # Update event bus
         if Config.ENABLE_MULTI_SELECT:

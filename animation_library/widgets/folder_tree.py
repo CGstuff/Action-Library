@@ -15,6 +15,7 @@ from ..services.folder_icon_service import get_folder_icon_service
 from ..services.folder_move_service import FolderMoveService
 from ..services.archive_service import get_archive_service
 from ..services.trash_service import get_trash_service
+from ..services.service_refs import service_ref
 from ..events.event_bus import get_event_bus
 from ..utils.icon_loader import IconLoader
 from ..themes.theme_manager import get_theme_manager
@@ -48,21 +49,45 @@ class FolderTree(QTreeWidget):
 
     # Signals
     folder_selected = pyqtSignal(int, str, bool)  # folder_id, folder_name, recursive
+    # Emitted when a folder operation changed the ANIMATIONS, not just the tree:
+    # renaming and deleting a folder both rewrite the folder-name tag on every
+    # animation in it. The tree rebuilds itself, but the animation model is still
+    # holding the old rows - so without this the tag lingers on the card and in
+    # the metadata panel until a manual refresh.
+    animations_changed = pyqtSignal()
     recursive_search_changed = pyqtSignal(bool)  # recursive state
     empty_trash_requested = pyqtSignal()  # user requested to empty trash
     empty_archive_requested = pyqtSignal()  # user requested to empty archive (move all to trash)
+
+    # Resolved on every access, never cached: the library can change at runtime,
+    # and a cached handle would silently keep reading the old one.
+    # See services/service_refs.py.
+    _db_service = service_ref(get_database_service, '_injected_db_service')
+    _archive_service = service_ref(get_archive_service, '_injected_archive_service')
+    _trash_service = service_ref(get_trash_service, '_injected_trash_service')
+
+    @property
+    def _icon_service(self):
+        """Folder icons are per-library; the singleton is swapped on a switch."""
+        return get_folder_icon_service(self._db_service)
+
+    @property
+    def _move_service(self):
+        """Built per access: FolderMoveService is NOT a singleton, so it captures
+        whatever db_service it was constructed with - resetting the singletons
+        cannot reach inside it. It's a thin stateless wrapper, so rebuilding it
+        is cheaper than the bug."""
+        return FolderMoveService(self._db_service)
 
     def __init__(self, parent=None, db_service=None, event_bus=None,
                  archive_service=None, trash_service=None):
         super().__init__(parent)
 
-        # Services (injectable for testing)
-        self._db_service = db_service or get_database_service()
+        # Services (injectable for testing; None in production)
+        self._injected_db_service = db_service
+        self._injected_archive_service = archive_service
+        self._injected_trash_service = trash_service
         self._event_bus = event_bus or get_event_bus()
-        self._icon_service = get_folder_icon_service(self._db_service)
-        self._move_service = FolderMoveService(self._db_service)
-        self._archive_service = archive_service or get_archive_service()
-        self._trash_service = trash_service or get_trash_service()
 
         # Load folder icons
         self._folder_icons = self._load_folder_icons()
@@ -81,8 +106,11 @@ class FolderTree(QTreeWidget):
         # Initialize handlers
         self._drag_handler = FolderTreeDragHandler(
             tree_widget=self,
-            db_service=self._db_service,
-            move_service=self._move_service,
+            # Pass the INJECTED values, not the resolved properties: handing over
+            # a resolved service would freeze it in the handler and undo the
+            # deferral. With None, the handler defers back to this tree.
+            db_service=self._injected_db_service,
+            move_service=None,
             event_bus=self._event_bus,
             reload_callback=self._load_folders
         )
@@ -634,11 +662,14 @@ class FolderTree(QTreeWidget):
             )
 
     def _rename_folder(self, item: QTreeWidgetItem):
-        """Rename folder (not yet implemented)"""
-        pass
+        """Rename a folder.
 
-    def _delete_folder(self, item: QTreeWidgetItem):
-        """Delete folder"""
+        This was a `pass` for as long as the menu item existed, because folder
+        membership WAS the folder's name (matched against each animation's tags),
+        so renaming would have silently emptied the folder. Membership is by
+        folder id now, so the name is just a label and this is safe.
+        """
+        from PyQt6.QtWidgets import QInputDialog, QMessageBox
 
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if not data:
@@ -648,9 +679,86 @@ class FolderTree(QTreeWidget):
         if not folder_id:
             return
 
+        old_name = data.get('folder_name', '')
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Folder", "Folder name:", text=old_name
+        )
+        if not ok:
+            return
+
+        new_name = new_name.strip()
+        if not new_name or new_name == old_name:
+            return
+
+        if self._db_service.rename_folder(folder_id, new_name):
+            self._load_folders()
+            # The rename rewrote the folder's tag on its animations, so the
+            # model's rows are stale.
+            self.animations_changed.emit()
+        else:
+            QMessageBox.warning(
+                self,
+                "Rename Failed",
+                f"Could not rename '{old_name}' to '{new_name}'.\n\n"
+                f"A folder with that name may already exist here, or the name "
+                f"may contain characters that aren't allowed (such as '/')."
+            )
+
+    def _delete_folder(self, item: QTreeWidgetItem):
+        """Delete a folder, after confirming and saying what it affects."""
+        from PyQt6.QtWidgets import QMessageBox
+
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+
+        folder_id = data.get('folder_id')
+        if not folder_id:
+            return
+
+        folder_name = data.get('folder_name', 'this folder')
+        animation_count, subfolder_count = self._db_service.count_folder_contents(folder_id)
+
+        # Spell out the blast radius. This used to delete with no confirmation at
+        # all, and the folder's animations went with it.
+        details = []
+        if subfolder_count:
+            details.append(
+                f"{subfolder_count} subfolder{'s' if subfolder_count != 1 else ''} "
+                f"will also be removed."
+            )
+        if animation_count:
+            details.append(
+                f"{animation_count} animation{'s' if animation_count != 1 else ''} "
+                f"will move to Home. Nothing is deleted - your animations, their "
+                f"versions and their files all stay exactly as they are."
+            )
+        else:
+            details.append("It's empty.")
+
+        reply = QMessageBox.question(
+            self,
+            "Delete Folder",
+            f"Delete the folder '{folder_name}'?\n\n" + "\n\n".join(details),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
         if self._db_service.delete_folder(folder_id):
             # Reload tree
             self._load_folders()
+            # Deleting dropped the folder's tag from its animations and moved
+            # them to Home - both invisible to the model until it reloads.
+            self.animations_changed.emit()
+        else:
+            QMessageBox.warning(
+                self,
+                "Delete Failed",
+                f"Could not delete the folder '{folder_name}'."
+            )
 
     def _change_folder_icon(self, item: QTreeWidgetItem):
         """Show icon picker and change folder icon"""

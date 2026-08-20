@@ -281,8 +281,20 @@ class AnimationRepository:
             return 0
 
     def move_to_folder(self, uuid: str, folder_id: int) -> bool:
-        """
-        Move animation to a different folder and add folder name to tags.
+        """Update the MIRRORED folder info on an animation: folder_id + the tag.
+
+        This is NOT what decides folder membership - `folder_animations` is (see
+        FolderRepository.add_animation). This keeps two conveniences up to date:
+
+          - `folder_id`: the last folder the animation was added to. The library
+            scanner round-trips it through the JSON sidecar as `folder_path`.
+          - the folder's name as a tag: so search finds the animation by its
+            folder, and so the sidecar carries that label to other machines.
+
+        Nothing reads either of them to decide what shows in a folder. That's
+        deliberate - when they WERE the source of truth, folders could not be
+        renamed. Prefer DatabaseService.move_animation_to_folder(), which records
+        real membership and then calls this.
 
         Args:
             uuid: Animation UUID
@@ -317,8 +329,10 @@ class AnimationRepository:
                     except:
                         tags = []
 
-                if folder_name not in tags:
-                    tags.append(folder_name)
+                # Case-insensitive: a folder named 'Combat' must not add a second
+                # tag to an animation already tagged 'combat'. See tag_utils.
+                from ..tag_utils import dedupe_tags
+                tags = dedupe_tags(list(tags) + [folder_name])
 
                 tags_json = json.dumps(tags)
 

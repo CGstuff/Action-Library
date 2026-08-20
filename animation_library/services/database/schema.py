@@ -4,6 +4,7 @@ Database Schema - Schema initialization and migrations
 Manages database schema versions and migration logic.
 """
 
+import json
 import sqlite3
 import shutil
 from datetime import datetime
@@ -14,7 +15,7 @@ from .connection import DatabaseConnection
 
 
 # Current schema version
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Feature descriptions for each version upgrade
 VERSION_FEATURES: Dict[int, List[str]] = {
@@ -28,6 +29,9 @@ VERSION_FEATURES: Dict[int, List[str]] = {
     9: ["Studio naming engine (naming_fields, naming_template)"],
     10: ["Frame-specific review notes for dailies"],
     11: ["Human-readable folder structure"],
+    12: ["Real folder membership (an animation can be in many folders)",
+         "Folder rename",
+         "Remove an animation from a folder"],
 }
 
 
@@ -99,6 +103,8 @@ class SchemaManager:
                     self._migrate_to_v10(cursor)
                 if current_version < 11:
                     self._migrate_to_v11(cursor)
+                if current_version < 12:
+                    self._migrate_to_v12(cursor)
                 cursor.execute(
                     'INSERT OR REPLACE INTO schema_version (version) VALUES (?)',
                     (SCHEMA_VERSION,)
@@ -271,6 +277,24 @@ class SchemaManager:
         ''')
 
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_review_notes_animation ON review_notes(animation_uuid)')
+
+        # Folder membership (v12) - which animations are in which folders.
+        # Many-to-many on purpose: an animation genuinely belongs in several
+        # folders at once (a run is Locomotion AND GameDev AND Show01). This
+        # used to be inferred by matching a folder's NAME against the
+        # animation's tags, which is why folders couldn't be renamed.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS folder_animations (
+                folder_id INTEGER NOT NULL,
+                animation_uuid TEXT NOT NULL,
+                added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (folder_id, animation_uuid),
+                FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE,
+                FOREIGN KEY (animation_uuid) REFERENCES animations (uuid) ON DELETE CASCADE
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_folder_animations_folder ON folder_animations(folder_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_folder_animations_animation ON folder_animations(animation_uuid)')
 
         # Create root folder if it doesn't exist
         cursor.execute('SELECT id FROM folders WHERE parent_id IS NULL LIMIT 1')
@@ -502,6 +526,87 @@ class SchemaManager:
         """
         # No schema changes needed - just version bump
         pass
+
+    def _migrate_to_v12(self, cursor: sqlite3.Cursor):
+        """v11 -> v12: real folder membership.
+
+        Before this, "which folder is this animation in?" was answered by matching
+        the folder's NAME against the animation's TAGS. That made folder rename
+        impossible (the tags would still hold the old name), left the old folder's
+        tag behind forever when an animation was moved, and made `Combat` and
+        `combat` two different folders.
+
+        Membership is now a proper many-to-many table, keyed by folder id - so an
+        animation can be in as many folders as it likes (which it always could,
+        just by coincidence of tag naming), rename is a one-line UPDATE, and
+        removing an animation from ONE folder becomes expressible for the first
+        time.
+
+        This migration reads the old truth (tags) and writes the new one
+        (membership rows). It is deliberately non-destructive: the folder-name
+        tags are LEFT in place. Nothing reads them for filtering any more, they
+        keep working for search, and they're maintained going forward as a
+        convenience mirror of membership.
+        """
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS folder_animations (
+                folder_id INTEGER NOT NULL,
+                animation_uuid TEXT NOT NULL,
+                added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (folder_id, animation_uuid),
+                FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE,
+                FOREIGN KEY (animation_uuid) REFERENCES animations (uuid) ON DELETE CASCADE
+            )
+        ''')
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_folder_animations_folder '
+            'ON folder_animations(folder_id)'
+        )
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_folder_animations_animation '
+            'ON folder_animations(animation_uuid)'
+        )
+
+        self._backfill_folder_membership(cursor)
+
+    @staticmethod
+    def _backfill_folder_membership(cursor: sqlite3.Cursor):
+        """Rebuild membership from the old tag-based and folder_id-based truth.
+
+        Two sources, because the old system had two half-truths:
+          1. tags containing a folder's name - what the grid actually filtered on
+          2. animations.folder_id - what drag-drop also wrote, but nothing read
+
+        Both are honoured so nothing a user could see today disappears.
+        """
+        cursor.execute('SELECT id, name FROM folders WHERE parent_id IS NOT NULL')
+        folders = [(row[0], row[1]) for row in cursor.fetchall()]
+        if not folders:
+            return
+
+        cursor.execute('SELECT uuid, tags, folder_id FROM animations')
+        animations = cursor.fetchall()
+
+        rows = set()
+        for folder_id, folder_name in folders:
+            for uuid, tags_json, folder_id_col in animations:
+                # Source 1: the folder's name appears in the animation's tags.
+                try:
+                    tags = json.loads(tags_json) if tags_json else []
+                except (json.JSONDecodeError, TypeError):
+                    tags = []
+                if isinstance(tags, list) and folder_name in tags:
+                    rows.add((folder_id, uuid))
+                # Source 2: folder_id already points here.
+                if folder_id_col == folder_id:
+                    rows.add((folder_id, uuid))
+
+        if rows:
+            cursor.executemany(
+                'INSERT OR IGNORE INTO folder_animations (folder_id, animation_uuid) '
+                'VALUES (?, ?)',
+                sorted(rows),
+            )
 
     def get_database_stats(self) -> Dict[str, Any]:
         """

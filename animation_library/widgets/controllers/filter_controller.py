@@ -31,6 +31,13 @@ class FilterController:
         self._status_bar = status_bar
         self._current_context: Optional[str] = None
 
+    def get_current_folder_id(self) -> Optional[int]:
+        """The user folder currently selected, or None for Home/virtual folders.
+
+        Used to offer "Remove from '<folder>'" only where it means something.
+        """
+        return self._proxy.get_folder_filter()
+
     @property
     def row_count(self) -> int:
         """Get current filtered row count."""

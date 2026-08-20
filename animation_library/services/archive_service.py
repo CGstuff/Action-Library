@@ -588,4 +588,14 @@ def get_archive_service() -> ArchiveService:
     return _archive_service_instance
 
 
-__all__ = ['ArchiveService', 'get_archive_service']
+def reset_archive_service() -> None:
+    """Discard the global ArchiveService.
+
+    It caches a DatabaseService at construction, so it points at whichever
+    library was configured then. Must be reset on a library switch.
+    """
+    global _archive_service_instance
+    _archive_service_instance = None
+
+
+__all__ = ['ArchiveService', 'get_archive_service', 'reset_archive_service']

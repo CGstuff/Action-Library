@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Review — Action Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="top"><span class="brand">Action Library</span><a href="index.html">Home</a></nav>
+  <main>
+    <h1>Review</h1>
+    <p>Status, frame notes and drawings — for giving and receiving feedback on
+       animation without leaving the library.</p>
+
+    <h2 id="status">Status</h2>
+    <p>Every animation can carry a lifecycle status, shown as a coloured badge on
+       its card and in the metadata panel:</p>
+    <table>
+      <tr><th>Status</th><th>Means</th></tr>
+      <tr><td><b>None</b></td><td>No status. The default — fine if you're working alone.</td></tr>
+      <tr><td><b>WIP</b></td><td>In progress.</td></tr>
+      <tr><td><b>In Review</b></td><td>Waiting on feedback.</td></tr>
+      <tr><td><b>Approved</b></td><td>Signed off.</td></tr>
+      <tr><td><b>Needs Work</b></td><td>Reviewed, changes wanted.</td></tr>
+      <tr><td><b>Final</b></td><td>Done.</td></tr>
+    </table>
+    <p>Click the status badge in the metadata panel and pick from the menu. The
+       card updates immediately, and everyone pointed at the same library sees it.</p>
+    <div class="note">If Action Library is in <b>Pipeline mode</b>, status is owned
+      by Pipeline Control and changes made here won't stick. See
+      <a href="settings.html#modes">modes</a>.</div>
+
+    <h2 id="notes">Review notes</h2>
+    <p>Notes are attached to a <b>specific frame of a specific version</b>. That's
+       the point: "the hand pops" is much more useful pinned to frame 34 of v002
+       than as a sentence in a chat window.</p>
+
+    <h3>Leaving a note</h3>
+    <p>Open an animation's history (right-click &rsaquo; <b>View Lineage</b>), pick
+       a version, scrub to the frame, and add your note. It's stamped with your
+       name — the one you set on first run — so it's clear who said what.</p>
+
+    <h3>Reading notes</h3>
+    <p>The notes panel lists every note on that version. Each one has a button that
+       jumps the preview straight to its frame, so you can go through feedback
+       point by point without hunting.</p>
+    <p>Notes can be marked <b>resolved</b> as you deal with them, and a resolved
+       note can be brought back if it turns out it wasn't. Deleting a note is a
+       soft delete — it can be restored.</p>
+
+    <h3>Notes stay with their version</h3>
+    <p>Capture a new version and the old version keeps its notes. So feedback never
+       drifts onto a take it wasn't about, and you can look back at what was said
+       about v001 long after you're on v004.</p>
+
+    <div class="tip">Because notes are per version and comparison is side by side,
+      the review loop is: note on v002 → new capture → compare v002 with v003 with
+      both sets of notes visible. You can see whether the note was actually
+      addressed.</div>
+
+    <h2 id="drawover">Drawing on frames</h2>
+    <p>Sometimes a sentence isn't enough. In the history dialog, switch on
+       <b>Annotate</b> and draw directly over the preview — arrows, circles,
+       whatever makes the point. Drawings are stored per frame, per version, and
+       shown to whoever opens that version next.</p>
+    <p>The tools cover freehand, lines, arrows, rectangles and circles, with colour,
+       brush size, undo, and an onion-skin/ghost option so you can see your drawing
+       against neighbouring frames.</p>
+    <p>Drawings are attributed by colour and name, so on a shared library it's clear
+       whose scribble is whose.</p>
+
+    <h2 id="compare">Comparing</h2>
+    <p>Select two versions in the history and press <b>Compare</b>. Both previews
+       play side by side and in sync, each with its own notes and drawings. This is
+       the dailies view — the fastest way to answer "is this better?"</p>
+
+    <h2 id="export">Sending feedback to someone else</h2>
+    <p>The history dialog can <b>export with annotations</b>: it burns the drawings
+       into the preview video and writes an MP4. That's the version you send to
+       someone who doesn't have Action Library — a client, or a director who wants
+       it in their inbox rather than in a tool.</p>
+    <div class="note">Burning in annotations needs <b>FFmpeg</b> available on your
+      system. If the export fails, that's the first thing to check.</div>
+
+    <h2 id="workflow">A review workflow that works</h2>
+    <ol>
+      <li>Animator captures a take and sets it to <b>In Review</b>.</li>
+      <li>Reviewer opens the history, scrubs, leaves notes on the frames that need
+          them, draws where words won't do, and sets <b>Needs Work</b>.</li>
+      <li>Animator works through the notes, marking each <b>resolved</b>, then
+          captures a <b>new version</b>.</li>
+      <li>Reviewer <b>compares</b> the two versions, sees what changed, and sets
+          <b>Approved</b>.</li>
+    </ol>
+    <p>Everything stays attached to the animation, so in six months the history of
+       why it looks like that is still there.</p>
+
+    <footer>Next: <a href="removing.html">Archive &amp; delete</a> ·
+      Back to <a href="index.html">documentation home</a>.</footer>
+  </main>
+  <script src="nav.js"></script>
+</body>
+</html>

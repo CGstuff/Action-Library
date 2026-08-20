@@ -425,7 +425,14 @@ class Config:
         try:
             config_file = cls.get_library_config_path()
             config_file.parent.mkdir(parents=True, exist_ok=True)
-            config_file.write_text(str(path), encoding='utf-8')
+
+            # Atomic write (temp + replace). The Blender addon polls this file to
+            # follow the app's library location, so a plain write_text() - which
+            # truncates first, then writes - leaves a window where a reader sees
+            # an empty file and thinks no library is configured.
+            tmp_file = config_file.with_suffix('.tmp')
+            tmp_file.write_text(str(path), encoding='utf-8')
+            os.replace(tmp_file, config_file)
             return True
         except Exception:
             return False

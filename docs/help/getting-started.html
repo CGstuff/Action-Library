@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Getting started — Action Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="top"><span class="brand">Action Library</span><a href="index.html">Home</a></nav>
+  <main>
+    <h1>Getting started</h1>
+    <p>New to Action Library? Start here. This page covers what it is, the handful
+       of concepts worth knowing, what happens the first time you launch it, and
+       an end-to-end run through capturing an animation and applying it to another
+       rig.</p>
+
+    <h2 id="what-is-it">What Action Library is</h2>
+
+    <p>Action Library is a place to keep your animations and poses so you can find
+       them again and reuse them — across scenes, across projects, across rigs.
+       Instead of digging through old .blend files trying to remember which one had
+       the good jump, you capture it once and it's in your library forever.</p>
+
+    <h3>Two halves</h3>
+    <p>It comes as two pieces that work together:</p>
+    <ul>
+      <li><b>The desktop app</b> — the browser. Thumbnails, folders, search, tags,
+          versions, notes. This is where you look at things.</li>
+      <li><b>The Blender addon</b> — the hands. It captures animation out of
+          Blender into the library, and applies animation from the library back
+          onto a rig.</li>
+    </ul>
+    <p>You install the addon from inside the app — see
+       <a href="installation.html">Install &amp; update</a>. The two talk to each
+       other automatically over a local connection, so a capture in Blender shows
+       up in the app within a few seconds without you doing anything.</p>
+
+    <h3>Where your animations live</h3>
+    <p>Everything lives in one folder you choose: the <b>storage folder</b>, or
+       <b>library</b>. Inside it, each animation gets its own folder holding a
+       <code>.blend</code> file with the animation data, a thumbnail, a preview
+       video, and a small <code>.json</code> file of metadata. Alongside those
+       sits a database the app uses as its index.</p>
+    <p>Two things follow from that, and they're worth knowing up front:</p>
+    <ul>
+      <li>Your animations are <b>plain files on disk</b>. Nothing is locked inside
+          a proprietary format, and you can back the folder up by copying it.</li>
+      <li>If the folder is on a <b>shared drive</b>, everyone pointed at it sees the
+          same library. That's how a small team shares animations.</li>
+    </ul>
+
+    <h2 id="key-concepts">Key concepts</h2>
+
+    <table>
+      <tr><th>Term</th><th>What it means</th></tr>
+      <tr><td><b>Library</b></td><td>The storage folder holding all your animations. You can have more than one and switch between them.</td></tr>
+      <tr><td><b>Action</b></td><td>An animation over multiple frames — a walk, a jump, a take.</td></tr>
+      <tr><td><b>Pose</b></td><td>A single frame. Captured and applied the same way; kept separate because you use them differently.</td></tr>
+      <tr><td><b>Version</b></td><td>Capture over an existing name and the old one is kept as a previous version rather than being lost. The newest is the "latest".</td></tr>
+      <tr><td><b>Rig type</b></td><td>A label for which rig an animation was made for, so you can filter to the ones that'll actually fit.</td></tr>
+      <tr><td><b>Tag</b></td><td>A free-form label. Tags also drive folders — see <a href="#folders">a note on folders</a> below.</td></tr>
+    </table>
+
+    <h3>Actions and poses</h3>
+    <p>The split is just frame count: capture a single frame and it's a pose,
+       capture a range and it's an action. They're stored in separate folders
+       (<code>actions/</code> and <code>poses/</code>) and the folder tree gives
+       each its own view, so a library full of poses doesn't bury your animations.</p>
+
+    <h2 id="first-run">First run</h2>
+
+    <p>The first time you launch Action Library it asks you two things.</p>
+
+    <h3>Where to keep your library</h3>
+    <p>Pick an empty folder, or one you've used before. An empty folder becomes a
+       new, empty library — the app creates everything it needs inside it. Put it
+       somewhere you'd be happy backing up. If you work with other people, put it
+       on the shared drive and point everyone at the same path.</p>
+    <p>You can change this later, and you can keep several libraries and switch
+       between them — see the library picker at the top-left of the window.</p>
+
+    <h3>Who you are</h3>
+    <p>Action Library then asks for a name. This is only used to attribute review
+       notes and drawings, so your colleagues know who wrote what. It's stored on
+       your machine, not in the library — which means everyone pointed at a shared
+       library keeps their own identity, and nobody overwrites anyone else's.</p>
+
+    <h2 id="interface">The interface</h2>
+
+    <p>The window is three panels, left to right.</p>
+
+    <h3>Folder tree (left)</h3>
+    <p>Your way around the library:</p>
+    <ul>
+      <li><b>Home</b> — everything.</li>
+      <li><b>Actions</b> / <b>Poses</b> — split by type.</li>
+      <li><b>Recent</b> — what you've looked at lately, on this machine.</li>
+      <li><b>Favorites</b> — anything you've starred.</li>
+      <li><b>Your folders</b> — the ones you make.</li>
+      <li><b>Archive</b> / <b>Trash</b> — things you've put aside or deleted.</li>
+    </ul>
+
+    <h3 id="folders">Cards (middle)</h3>
+    <p>Your animations, as thumbnails. Click one to select it — its preview video
+       plays in the panel on the right. Double-click to apply it to your rig in
+       Blender. The slider in the header changes the card size, and there's a
+       grid/list toggle next to it.</p>
+    <div class="note">An animation can live in <b>several folders at once</b> — a
+      run belongs in Locomotion and GameDev and Show01 together. Dragging a card
+      into a folder adds it there and leaves it wherever else it is, and nothing
+      moves on disk.</div>
+
+    <h3>Metadata and apply (right)</h3>
+    <p>Details of whatever's selected — name, description, rig type, tags, status,
+       and a video preview. Underneath is the <b>Apply</b> panel, with the options
+       used when you send it to Blender.</p>
+
+    <h3>Header</h3>
+    <p>Left to right: the <b>library picker</b> (which library you're in), new
+       folder, search, filters, sort, the view controls, and refresh. On the right:
+       archive/delete, your identity, and the about, console, shortcuts and
+       settings buttons.</p>
+
+    <div class="tip">Press <kbd>H</kbd> for the keyboard shortcuts overlay, and
+      <kbd>F1</kbd> for this documentation.</div>
+
+    <h2 id="quick-start">Quick start</h2>
+
+    <p>End to end: get an animation in, then get it back out onto a different rig.
+       Assumes the addon is installed — if not, do
+       <a href="installation.html">that</a> first.</p>
+
+    <h3>1. Capture an animation</h3>
+    <ol>
+      <li>In Blender, open a scene with an animated rig.</li>
+      <li>Select the armature.</li>
+      <li>In the 3D Viewport press <kbd>N</kbd>, choose the <b>Animation</b> tab,
+          and find the <b>Capture</b> panel.</li>
+      <li>Give it a name — something you'd search for later. <code>jump_heavy</code>
+          beats <code>Action.003</code>.</li>
+      <li>Set the frame range you want.</li>
+      <li>Press <b>Capture</b>.</li>
+    </ol>
+    <p>Blender writes the animation, renders a thumbnail and a preview, and tells
+       the app. Within a few seconds a new card appears in your library. If it
+       doesn't, hit refresh in the header.</p>
+
+    <h3>2. Find it again</h3>
+    <p>Type part of the name in the search box, or narrow down with the rig-type
+       and tag filters. Select the card and the right-hand panel fills in — give it
+       a description and a couple of tags now, while you still remember what it
+       was for. Future you will be grateful.</p>
+
+    <h3>3. Apply it to a rig</h3>
+    <ol>
+      <li>In Blender, select the armature you want to animate.</li>
+      <li>In Action Library, <b>double-click</b> the card.</li>
+    </ol>
+    <p>The animation lands on your rig. Hold a modifier while you double-click to
+       change what happens:</p>
+    <table>
+      <tr><th>Hold</th><th>Effect</th></tr>
+      <tr><td><kbd>Ctrl</kbd></td><td>Mirror it left-to-right.</td></tr>
+      <tr><td><kbd>Shift</kbd></td><td>Use action slots (Blender 4.4+).</td></tr>
+      <tr><td><kbd>Alt</kbd></td><td>Insert at the playhead instead of replacing the action.</td></tr>
+    </table>
+    <p>The <b>Apply</b> panel on the right has the same options as checkboxes, if
+       you'd rather see them than remember them.</p>
+
+    <h3>4. Capture a new version</h3>
+    <p>Improved it? Capture again with the <b>same name</b>. Action Library keeps
+       the old one as a previous version instead of overwriting it — the card shows
+       the newest, and the older ones are a right-click away under version history,
+       where you can look at any of them or promote one back to being the latest.</p>
+
+    <div class="tip">That's the loop: capture, name it well, apply, capture again
+      when it improves. Everything else in Action Library exists to help you find
+      the thing you captured six months ago.</div>
+
+    <footer>Next: <a href="installation.html">Install &amp; update</a> ·
+      Back to <a href="index.html">documentation home</a>.</footer>
+  </main>
+  <script src="nav.js"></script>
+</body>
+</html>

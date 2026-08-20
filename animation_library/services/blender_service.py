@@ -365,4 +365,14 @@ def get_blender_service() -> BlenderService:
     return _blender_service_instance
 
 
-__all__ = ['BlenderService', 'get_blender_service']
+def reset_blender_service() -> None:
+    """Discard the global BlenderService.
+
+    It resolves the .queue folder from the configured library, so it must be
+    rebuilt on a library switch or it keeps polling the old library's queue.
+    """
+    global _blender_service_instance
+    _blender_service_instance = None
+
+
+__all__ = ['BlenderService', 'get_blender_service', 'reset_blender_service']

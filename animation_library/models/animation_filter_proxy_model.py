@@ -5,7 +5,7 @@ Pattern: Proxy pattern with QSortFilterProxyModel
 Inspired by: Hybrid plan for instant filtering
 """
 
-from typing import Optional, Set
+from typing import Dict, Optional, Set
 from PyQt6.QtCore import QSortFilterProxyModel, QModelIndex, Qt
 
 from .animation_list_model import AnimationRole
@@ -37,8 +37,12 @@ class AnimationFilterProxyModel(QSortFilterProxyModel):
         # Filter criteria
         self._search_text: str = ""
         self._folder_id: Optional[int] = None
-        self._folder_ids: Set[int] = set()  # For recursive folder filtering
-        self._folder_name: Optional[str] = None  # For tag-based folder filtering
+        self._folder_ids: Set[int] = set()  # Selected folder + descendants if recursive
+        self._folder_name: Optional[str] = None  # Display only - see set_folder_filter
+        # {animation_uuid: {folder_id, ...}} - supplied by the owner, see
+        # set_membership(). Empty until then, which correctly shows nothing for a
+        # user folder rather than guessing.
+        self._membership: Dict[str, Set[int]] = {}
         self._filter_tags: Set[str] = set()
         self._filter_rig_types: Set[str] = set()
         self._favorites_only: bool = False
@@ -65,14 +69,28 @@ class AnimationFilterProxyModel(QSortFilterProxyModel):
             self._search_text = text.strip().lower()
             self.invalidateFilter()
 
+    def set_membership(self, membership: Dict[str, Set[int]]):
+        """Supply which folders each animation is in: {uuid: {folder_id, ...}}.
+
+        Held on the proxy rather than looked up per row: filterAcceptsRow runs for
+        every animation on every filter change, and a database round-trip per row
+        would be thousands of queries per keystroke. The owner (MainWindow)
+        refreshes this whenever membership changes.
+        """
+        self._membership = membership
+        self.invalidateFilter()
+
     def set_folder_filter(self, folder_id: Optional[int], folder_ids: Optional[Set[int]] = None, folder_name: Optional[str] = None):
         """
         Set folder filter
 
         Args:
             folder_id: Single folder ID to filter by, or None for all folders
-            folder_ids: Set of folder IDs for recursive filtering (optional)
-            folder_name: Folder name to filter by tags (optional)
+            folder_ids: Folder IDs to accept - the selected folder, plus its
+                        descendants when recursive search is on. This is what
+                        actually filters.
+            folder_name: The selected folder's name. Display only (the status
+                         bar); membership is by id.
         """
         changed = False
 
@@ -85,7 +103,6 @@ class AnimationFilterProxyModel(QSortFilterProxyModel):
             self._folder_ids = new_folder_ids
             changed = True
 
-        # NEW: Store folder name for tag-based filtering
         if self._folder_name != folder_name:
             self._folder_name = folder_name
             changed = True
@@ -293,20 +310,21 @@ class AnimationFilterProxyModel(QSortFilterProxyModel):
             if is_pose:
                 return False
 
-        # Folder filter - check tags instead of folder_id
-        if self._folder_name and self._folder_name not in ["Home", "Actions", "Poses", "Favorites", "Recent"]:
-            # Get animation tags
-            animation_tags = source_model.data(index, AnimationRole.TagsRole)
-
-            # Check if folder name is in animation's tags
-            if not animation_tags or self._folder_name not in animation_tags:
-                return False
-
-        # Legacy folder_id filtering for recursive mode (if still needed)
-        elif self._folder_ids:
-            # Recursive folder filtering (check if in any of the folder IDs)
-            folder_id = source_model.data(index, AnimationRole.FolderIdRole)
-            if folder_id not in self._folder_ids:
+        # Folder filter - real membership, by folder id.
+        #
+        # This used to compare the folder's NAME against the animation's TAGS.
+        # That's why folders couldn't be renamed (the tags kept the old name),
+        # why an animation stayed in every folder it had ever been dragged to
+        # (moving only ever appended a tag), and why `Combat` and `combat` were
+        # two different folders. Membership now lives in folder_animations, so
+        # the folder's name is just a label.
+        #
+        # _folder_ids holds the selected folder plus its descendants when
+        # recursive search is on, or just the selected folder when it's off.
+        if self._folder_ids:
+            uuid = source_model.data(index, AnimationRole.UUIDRole)
+            member_of = self._membership.get(uuid)
+            if not member_of or self._folder_ids.isdisjoint(member_of):
                 return False
 
         # Tag filter (animation must have ALL specified tags)

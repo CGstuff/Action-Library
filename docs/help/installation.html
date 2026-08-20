@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Install &amp; update — Action Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="top"><span class="brand">Action Library</span><a href="index.html">Home</a></nav>
+  <main>
+    <h1>Install &amp; update</h1>
+    <p>Action Library is two pieces: the <b>desktop app</b> (where you browse your
+       animations) and the <b>Blender addon</b> (which captures animations out of
+       Blender and applies them back). The app installs the addon for you — you
+       don't download it separately.</p>
+
+    <div class="warn">Close Blender before installing. See
+      <a href="#close-blender">Why Blender must be closed</a> — this is the single
+      most common reason an install appears to "not work".</div>
+
+    <h2 id="installing-the-addon">Installing the Blender addon</h2>
+
+    <p>Everything happens inside Action Library:</p>
+
+    <ol>
+      <li><b>Close Blender</b> completely.</li>
+      <li>In Action Library, open <b>Settings</b> (the gear icon, top right).</li>
+      <li>Go to the <b>Blender Integration</b> tab.</li>
+      <li>Set <b>Path</b> to your Blender executable — on Windows that's
+          <code>blender.exe</code>, typically under
+          <code>C:\Program Files\Blender Foundation\Blender 4.5\blender.exe</code>.
+          Click <b>Verify</b>; you should see a green tick and the detected version.</li>
+      <li>Click <b>Install Addon</b>.</li>
+      <li>Start Blender.</li>
+    </ol>
+
+    <p>That's it. You do <b>not</b> need to enable the addon by hand.</p>
+
+    <h3>What the installer actually does</h3>
+    <p>Clicking Install launches Blender once, invisibly, in the background, and
+       has it do four things:</p>
+    <ul>
+      <li>Install the addon.</li>
+      <li><b>Enable</b> it — so it's already ticked in Preferences when you look.</li>
+      <li>Point it at your Action Library storage folder, so the addon and the app
+          are talking about the same library from the first launch.</li>
+      <li>Save your Blender preferences, so all of the above survives a restart.</li>
+    </ul>
+    <p>Because it launches Blender itself, Blender must be closed while it runs.</p>
+
+    <h3 id="close-blender">Why Blender must be closed</h3>
+    <p>The installer works by starting its own background copy of Blender and
+       saving preferences from it. If you already have Blender open at the same
+       time:</p>
+    <ul>
+      <li>Your open Blender <b>will not see the addon</b> — it read its preferences
+          when it started, and it won't re-read them.</li>
+      <li>Worse, that open Blender has its own copy of the preferences in memory.
+          When it writes them back, it can overwrite what the installer just
+          saved — leaving you with no addon and no explanation.</li>
+    </ul>
+    <p>So: close Blender, install, then start Blender. If you forget, just close
+       Blender and run the install again.</p>
+
+    <h2 id="verifying">Checking it worked</h2>
+
+    <p>Start Blender and look in the <b>3D Viewport</b>. Press <kbd>N</kbd> to open
+       the sidebar if it isn't showing, and choose the <b>Animation</b> tab down
+       the right-hand edge. You should see an <b>Animation Library</b> panel,
+       with <b>Capture</b> and <b>Extra</b> panels below it.</p>
+
+    <div class="note">The sidebar tab is called <b>Animation</b> — not "Action
+      Library". The panel <i>inside</i> that tab is the Action Library one. If
+      you're hunting for a tab with the app's name, you won't find it.</div>
+
+    <p>The panel shows the library path it's using. That should match the storage
+       folder shown in Action Library under <b>Settings &rsaquo; Storage
+       Locations</b>. If it does, the two halves are linked and you're done.</p>
+
+    <h3>Confirming from the app side</h3>
+    <p>Back in Action Library, <b>Settings &rsaquo; Blender Integration</b> shows
+       the addon's status once a Blender path is set:</p>
+    <table>
+      <tr><th>What it says</th><th>What it means</th></tr>
+      <tr><td><b>✓ Installed (v1.5.1)</b></td><td>Addon present and matching this version of the app.</td></tr>
+      <tr><td><b>⚠ Update available: v1.4.0 → v1.5.1</b></td><td>The addon is older than the app. Reinstall — see below.</td></tr>
+      <tr><td><b>✓ Installed (Unknown version)</b></td><td>Present, but too old to report a version. Reinstall to be sure.</td></tr>
+      <tr><td>(blank)</td><td>Not installed, or Blender's path isn't set yet.</td></tr>
+    </table>
+
+    <h2 id="reinstalling">Reinstalling and updating</h2>
+
+    <p><b>Whenever you update Action Library, reinstall the addon.</b> The app and
+       the addon are one product in two halves and they're versioned together —
+       an old addon talking to a new app is the source of most odd behaviour.</p>
+
+    <p>It's the same button, which renames itself to tell you what it will do:</p>
+    <ul>
+      <li><b>Install Addon</b> — nothing is installed yet.</li>
+      <li><b>Update Addon (v1.5.1 Available)</b> — an older addon is installed.</li>
+      <li><b>Re-install Addon</b> — the addon already matches the app; pressing it
+          is harmless and is the first thing to try if something's misbehaving.</li>
+    </ul>
+
+    <p>The steps are identical to a first install: close Blender, press the button,
+       start Blender. Reinstalling overwrites the addon in place — it does not
+       touch your library, your animations, or any of your settings.</p>
+
+    <div class="tip">Reinstalling is safe and takes seconds. It is never the wrong
+      thing to try.</div>
+
+    <h2 id="troubleshooting">When it doesn't work</h2>
+
+    <h3>"Installation failed"</h3>
+    <p>The app couldn't drive Blender. Check the <b>Path</b> points at the real
+       Blender executable (<code>blender.exe</code>, not a shortcut or the
+       installer), and press <b>Verify</b> — it must report a version. If Blender
+       is installed somewhere needing admin rights, try running Action Library as
+       administrator once, just for the install.</p>
+
+    <h3>Blender starts, but there's no Animation Library panel</h3>
+    <ul>
+      <li>Is the sidebar open? Press <kbd>N</kbd> in the 3D Viewport.</li>
+      <li>Are you on the <b>Animation</b> tab? It's easy to miss — the tabs are
+          vertical text along the right edge.</li>
+      <li>Was Blender open during the install? Close it and install again.</li>
+      <li>Check <b>Edit &rsaquo; Preferences &rsaquo; Add-ons</b> and search for
+          <b>Action Library</b>. It should be listed and ticked. If it's listed but
+          unticked, tick it — then tell us, because the installer is supposed to
+          do that for you.</li>
+    </ul>
+
+    <h3>The addon is there, but nothing reaches the app</h3>
+    <p>The addon and the app talk over a local port, which must match on both
+       sides. In Action Library it's under <b>Settings &rsaquo; Blender
+       Integration &rsaquo; Port</b>; in Blender it's in
+       <b>Edit &rsaquo; Preferences &rsaquo; Add-ons &rsaquo; Action Library</b>.
+       They both default to <code>9876</code>. If you changed one, change the
+       other.</p>
+    <p>If a capture doesn't appear in the app straight away, give it about five
+       seconds — the app checks for new captures on a short timer. It will also
+       pick anything up on the next refresh.</p>
+
+    <h3>The addon points at the wrong library</h3>
+    <p>The app owns the library location and the addon follows it automatically,
+       within a couple of seconds — you shouldn't have to set it in Blender at
+       all. The path shown in the addon's preferences is a mirror of the app's
+       setting, which is why it's greyed out. If it ever looks stale, press the
+       refresh button next to it.</p>
+
+    <h3>Still stuck</h3>
+    <p>Action Library keeps a log. Open the <b>console</b> icon in the header to
+       see what it recorded during the install — the error is usually in there in
+       plain English.</p>
+
+    <footer>Back to <a href="index.html">documentation home</a>.</footer>
+  </main>
+  <script src="nav.js"></script>
+</body>
+</html>

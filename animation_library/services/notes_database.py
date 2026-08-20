@@ -1304,6 +1304,22 @@ class NotesDatabase:
 _notes_db_instance: Optional[NotesDatabase] = None
 
 
+def reset_notes_database() -> None:
+    """Discard the global NotesDatabase, closing its connection first.
+
+    Review notes live in their OWN database inside the library's .meta folder
+    (see __init__), so this must be reset alongside the main database service on
+    a library switch - otherwise notes stay attached to the previous library.
+    """
+    global _notes_db_instance
+    if _notes_db_instance is not None:
+        try:
+            _notes_db_instance.close()
+        except Exception:
+            pass
+        _notes_db_instance = None
+
+
 def get_notes_database() -> NotesDatabase:
     """Get global NotesDatabase singleton instance."""
     global _notes_db_instance

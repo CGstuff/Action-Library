@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Versions — Action Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="top"><span class="brand">Action Library</span><a href="index.html">Home</a></nav>
+  <main>
+    <h1>Versions</h1>
+    <p>Action Library never overwrites an animation. Capture over one and the old
+       take is kept as a previous version. This page covers how that works and how
+       to get an old version back.</p>
+
+    <h2 id="how-it-works">How versioning works</h2>
+    <p>Capture with the name of something already in the library and you're offered
+       <b>New Version</b>. Take it, and:</p>
+    <ul>
+      <li>the new capture becomes the <b>latest</b>,</li>
+      <li>the previous one is moved into version storage and kept,</li>
+      <li>both stay linked together as one animation's history.</li>
+    </ul>
+    <p>Versions are numbered <code>v001</code>, <code>v002</code> and so on. The
+       library grid shows you the <b>latest</b> of each — you don't have to look at
+       six versions of a jump while browsing.</p>
+
+    <div class="tip">Nothing is deleted by versioning. Every take you've ever
+      captured is still on disk.</div>
+
+    <h2 id="history">Looking at the history</h2>
+    <p>Right-click a card and choose <b>View Lineage</b> — or press
+       <b>View History</b> in the metadata panel. You get a table of every version
+       of that animation, each with its own thumbnail, preview video, notes and
+       annotations.</p>
+    <p>From there you can:</p>
+    <ul>
+      <li><b>Play</b> any version's preview.</li>
+      <li><b>Apply This Version</b> — push an old version onto your rig without
+          changing which one is the latest. Double-clicking a row does the same.</li>
+      <li><b>Set as Latest</b> — promote an old version back to being the current
+          one.</li>
+      <li><b>Compare</b> — see <a href="#compare">below</a>.</li>
+      <li>Read the <b>review notes</b> left on each version.</li>
+    </ul>
+
+    <h3>Set as Latest</h3>
+    <p>Decided v002 was better than v003? Select it and press <b>Set as Latest</b>.
+       The card in the library goes back to showing v002, and v003 stays in the
+       history — you can flip back at any time. Nothing is lost either way.</p>
+
+    <h2 id="compare">Comparing two versions</h2>
+    <p>Select two rows in the history and press <b>Compare</b>. Their previews play
+       side by side, in sync, with each version's review notes and annotations
+       alongside. It's the fastest way to see what actually changed between takes —
+       and the honest way to check whether the note got addressed.</p>
+
+    <h2 id="on-disk">Where versions live</h2>
+    <p>Your library keeps the latest version of each animation in the main folder,
+       and older versions in a <code>_versions</code> folder alongside it. That's
+       why browsing is quick: the app isn't wading through history to show you your
+       library.</p>
+    <div class="note">You don't need to touch these folders, but it's worth knowing
+      they're there — if you back up your library folder, you're backing up every
+      version too.</div>
+
+    <h2 id="deleting">Deleting a version</h2>
+    <p>Delete the latest version of something and Action Library <b>promotes the
+       next newest</b> automatically, so the animation stays in your library — just
+       one take older. Deleting doesn't leave you with a gap in the grid where an
+       animation used to be.</p>
+    <p>See <a href="removing.html">Archive &amp; delete</a> for what deleting
+       involves.</p>
+
+    <h2 id="tips">Working with versions</h2>
+    <ul>
+      <li><b>Use the same name deliberately.</b> Same name = version. Different name
+          = different animation. That's the whole rule.</li>
+      <li><b>Don't put version numbers in your names by hand.</b> Action Library
+          adds and tracks them. A name like <code>jump_v2_final_FIXED</code> fights
+          the system that already does this for you.</li>
+      <li><b>Notes are per version.</b> A note on v002 stays with v002, so feedback
+          doesn't drift onto a take it wasn't about.</li>
+    </ul>
+
+    <footer>Next: <a href="organizing.html">Organizing</a> ·
+      Back to <a href="index.html">documentation home</a>.</footer>
+  </main>
+  <script src="nav.js"></script>
+</body>
+</html>

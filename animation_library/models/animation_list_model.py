@@ -16,6 +16,8 @@ from PyQt6.QtCore import (
 from ..config import Config
 from ..services.database_service import get_database_service
 from ..services.notes_database import get_notes_database
+from ..services.recently_viewed import get_recently_viewed_store
+from ..services.service_refs import service_ref
 
 
 class AnimationRole(IntEnum):
@@ -103,10 +105,16 @@ class AnimationListModel(QAbstractListModel):
         view.setModel(model)
     """
 
+    # Resolved on every access, never cached - the library can change at runtime
+    # and a cached handle would silently keep reading the old one. The previous
+    # version of this memoized into self._db_service on first use, which meant it
+    # could never pick up a new library at all. See services/service_refs.py.
+    _db_service = service_ref(get_database_service, '_injected_db_service')
+
     def __init__(self, parent=None, db_service=None):
         super().__init__(parent)
         self._animations: List[Dict[str, Any]] = []
-        self._db_service = db_service  # Lazy init - use get_db_service()
+        self._injected_db_service = db_service  # None in production
 
         # Performance monitoring (Maya-inspired)
         self._load_time: float = 0.0
@@ -117,9 +125,7 @@ class AnimationListModel(QAbstractListModel):
         self._unresolved_counts: dict = {}
 
     def _get_db_service(self):
-        """Get database service (lazy initialization)"""
-        if self._db_service is None:
-            self._db_service = get_database_service()
+        """Get database service (always current - see _db_service above)."""
         return self._db_service
 
     def set_animations(self, animations: List[Dict[str, Any]]):
@@ -392,7 +398,11 @@ class AnimationListModel(QAbstractListModel):
             return animation.get('is_favorite', 0)
 
         elif role == AnimationRole.LastViewedDateRole:
-            return animation.get('last_viewed_date')
+            # Per-machine, NOT the shared DB column: "recently viewed" is yours,
+            # not the whole studio's. See services/recently_viewed.py. Both the
+            # Recent filter and the "Sort: Recent" order read this role, so
+            # backing it locally keeps them working with no DB traffic.
+            return get_recently_viewed_store().get_viewed_at(animation.get('uuid'))
 
         elif role == AnimationRole.CustomOrderRole:
             return animation.get('custom_order')

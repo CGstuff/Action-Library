@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<!-- Action Library documentation - landing page / master directory.
+
+     Opens in the user's default browser (the Docs button in the header, or F1).
+     Full HTML/CSS works: animated GIFs, images, layout. No internet needed.
+
+     KEEP THIS DIRECTORY IN SYNC as pages are added, so everything stays
+     reachable from Home, and add the page to nav.js as well.
+
+     Images: drop them in docs/help/images/ and reference relatively, e.g.
+     <img src="images/capture_panel.png" alt="...">. Always write real alt text. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Action Library Documentation</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="top"><span class="brand">Action Library</span><a href="index.html">Home</a></nav>
+  <main data-no-toc>
+    <h1>Action Library Documentation</h1>
+    <p>Help for <b>Action Library</b> — save, organize and reuse animations and
+       poses across your Blender projects. Browse the topics below, or use the
+       bar at the top.</p>
+
+    <div class="tip">Press <kbd>F1</kbd> any time in Action Library to open this
+      documentation.</div>
+
+    <div class="cards">
+      <div class="card">
+        <h3><a href="getting-started.html">Getting started</a></h3>
+        <p>What Action Library is, how the app and the Blender addon fit
+           together, and your first capture and apply.</p>
+      </div>
+      <div class="card">
+        <h3><a href="installation.html">Install &amp; update</a></h3>
+        <p>Installing the Blender addon, reinstalling it after an update, and
+           what to do when Blender can't see it.</p>
+      </div>
+      <div class="card">
+        <h3><a href="reference.html#troubleshooting">Something's wrong</a></h3>
+        <p>Straight to troubleshooting: the addon's missing, a capture didn't
+           show up, apply does nothing.</p>
+      </div>
+    </div>
+
+    <h2>Getting started</h2>
+    <ul>
+      <li><a href="getting-started.html#what-is-it">What Action Library is</a> — the app, the addon, and how they talk.</li>
+      <li><a href="getting-started.html#key-concepts">Key concepts</a> — library, actions and poses, versions, the storage folder.</li>
+      <li><a href="getting-started.html#first-run">First run</a> — choosing a storage location and setting your identity.</li>
+      <li><a href="getting-started.html#interface">The interface</a> — folder tree, cards, metadata panel, header.</li>
+      <li><a href="getting-started.html#quick-start">Quick start</a> — capture an animation, then apply it to another rig.</li>
+    </ul>
+
+    <h2>Install &amp; update</h2>
+    <ul>
+      <li><a href="installation.html#installing-the-addon">Installing the Blender addon</a> — from Action Library's own Settings.</li>
+      <li><a href="installation.html#close-blender">Why Blender must be closed</a> — the usual reason an install "doesn't work".</li>
+      <li><a href="installation.html#reinstalling">Reinstalling / updating the addon</a> — what to do after updating the app.</li>
+      <li><a href="installation.html#verifying">Checking it worked</a> — where the panel appears and how to confirm the link.</li>
+      <li><a href="installation.html#troubleshooting">When it doesn't work</a> — the addon isn't listed, the panel is missing, nothing reaches the app.</li>
+    </ul>
+
+    <h2><a href="library.html">The Library</a></h2>
+    <ul>
+      <li><a href="library.html#folder-tree">The folder tree</a> — virtual folders, your folders, Archive and Trash.</li>
+      <li><a href="library.html#search">Search</a> and <a href="library.html#filters">filters</a> — finding things by name, tag or rig.</li>
+      <li><a href="library.html#views">Views</a> — grid and list, card size, badges.</li>
+      <li><a href="library.html#refresh">Refreshing</a> — when new captures appear.</li>
+    </ul>
+
+    <h2><a href="capturing.html">Capturing</a></h2>
+    <ul>
+      <li><a href="capturing.html#capture-action">Capturing an animation</a> — and naming it so you find it again.</li>
+      <li><a href="capturing.html#capture-pose">Poses</a> and <a href="capturing.html#capture-selected">partial captures</a> — single frames, selected bones, selected keyframes.</li>
+      <li><a href="capturing.html#versions">Capturing over something</a> — new version or new animation.</li>
+      <li><a href="capturing.html#update-preview">Updating a preview</a> — fixing a bad thumbnail without re-capturing.</li>
+    </ul>
+
+    <h2><a href="applying.html">Applying</a></h2>
+    <ul>
+      <li><a href="applying.html#modifiers">Modifiers</a> — mirror, slots, insert at playhead.</li>
+      <li><a href="applying.html#poses">Poses</a> and <a href="applying.html#blending">pose blending</a> — drag to dial a pose in.</li>
+      <li><a href="applying.html#rig-types">Rig compatibility</a> — what happens when rigs don't match.</li>
+    </ul>
+
+    <h2><a href="versions.html">Versions</a></h2>
+    <ul>
+      <li><a href="versions.html#how-it-works">How versioning works</a> — nothing is ever overwritten.</li>
+      <li><a href="versions.html#history">Version history</a> — browse, apply, set as latest.</li>
+      <li><a href="versions.html#compare">Comparing versions</a> — side by side.</li>
+    </ul>
+
+    <h2><a href="organizing.html">Organizing</a></h2>
+    <ul>
+      <li><a href="organizing.html#many-folders">Folders</a> and <a href="organizing.html#tags">tags</a> — an animation can be in several folders at once.</li>
+      <li><a href="organizing.html#folder-rename">Renaming and deleting folders</a> — safe, and what happens to your animations.</li>
+      <li><a href="organizing.html#renaming">Renaming</a> — safe, on disk and in the database together.</li>
+      <li><a href="organizing.html#metadata">Metadata</a> and <a href="organizing.html#bulk">bulk edits</a>.</li>
+    </ul>
+
+    <h2><a href="review.html">Review</a></h2>
+    <ul>
+      <li><a href="review.html#status">Status</a> — WIP, in review, approved.</li>
+      <li><a href="review.html#notes">Frame notes</a> and <a href="review.html#drawover">drawing on frames</a>.</li>
+      <li><a href="review.html#export">Exporting annotated video</a> — for people without Action Library.</li>
+    </ul>
+
+    <h2><a href="removing.html">Archive &amp; delete</a></h2>
+    <ul>
+      <li><a href="removing.html#two-modes">Solo vs Studio</a> — instant delete, or a safety net.</li>
+      <li><a href="removing.html#studio">Archive, Trash and restoring</a>.</li>
+    </ul>
+
+    <h2><a href="storage.html">Storage</a></h2>
+    <ul>
+      <li><a href="storage.html#the-library-folder">The library folder</a> — what's inside it.</li>
+      <li><a href="storage.html#switching">Several libraries</a> — the picker, adding, forgetting.</li>
+      <li><a href="storage.html#shared">Sharing a library</a> — what's shared and what isn't.</li>
+      <li><a href="storage.html#backups">Backups</a>.</li>
+    </ul>
+
+    <h2><a href="settings.html">Settings</a></h2>
+    <ul>
+      <li><a href="settings.html#modes">Operation mode</a> — solo, studio, pipeline.</li>
+      <li><a href="settings.html#blender-integration">Blender integration</a> and <a href="settings.html#identity">identity</a>.</li>
+      <li><a href="settings.html#maintenance">Maintenance</a> — integrity, backups, rebuild.</li>
+    </ul>
+
+    <h2><a href="reference.html">Reference</a></h2>
+    <ul>
+      <li><a href="reference.html#shortcuts">Shortcuts</a></li>
+      <li><a href="reference.html#glossary">Glossary</a></li>
+      <li><a href="reference.html#troubleshooting">Troubleshooting</a></li>
+    </ul>
+
+    <footer>
+      This documentation ships with Action Library and opens in your browser —
+      no internet needed.
+    </footer>
+  </main>
+  <script src="nav.js"></script>
+</body>
+</html>

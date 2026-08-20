@@ -8,8 +8,16 @@ import json
 from typing import List, Tuple, Callable, Optional
 from PyQt6.QtWidgets import QWidget, QMessageBox, QInputDialog
 
+from ...services.database_service import get_database_service
+from ...services.service_refs import service_ref
+
 
 class BulkEditController:
+    # Resolved on every access, never cached - the library can change at runtime
+    # and this controller is built once, at startup.
+    # See services/service_refs.py.
+    _db_service = service_ref(get_database_service, '_injected_db_service')
+
     """
     Manages bulk edit operations on animations.
 
@@ -45,7 +53,7 @@ class BulkEditController:
         self._parent = parent
         self._animation_view = animation_view
         self._animation_model = animation_model
-        self._db_service = db_service
+        self._injected_db_service = db_service
         self._event_bus = event_bus
         self._status_bar = status_bar
         self._reload_animations = reload_animations_callback

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Settings — Action Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="top"><span class="brand">Action Library</span><a href="index.html">Home</a></nav>
+  <main>
+    <h1>Settings</h1>
+    <p>The gear icon, top-right. Seven pages down the left-hand side.</p>
+
+    <h2 id="storage-locations">Storage Locations</h2>
+    <p>Where your library lives, and where Action Library keeps its own files.
+       <b>Change Library Location…</b> does the same as the picker in the header —
+       see <a href="storage.html">Storage</a>.</p>
+    <p>This page also holds <b>Allow permanent deletion</b>, off by default. While
+       it's off, nothing can be destroyed permanently — see
+       <a href="removing.html#studio">Archive &amp; delete</a>.</p>
+
+    <h2 id="blender-integration">Blender Integration</h2>
+    <p>The link between the app and Blender. Set the path to your Blender
+       executable, <b>Verify</b> it, and <b>Install Addon</b>.</p>
+    <p><b>Close Blender before installing</b>, and reinstall after every Action
+       Library update — the two halves are versioned together. The full story is on
+       the <a href="installation.html">Install &amp; update</a> page, and there's a
+       button on this tab that opens it.</p>
+    <p><b>Port</b> is how the app talks to the addon. It defaults to
+       <code>9876</code> and must match the port in the addon's own preferences in
+       Blender. Only change it if something else on your machine wants that port.</p>
+
+    <h2 id="appearance">Appearance</h2>
+    <p>Themes. Pick one, or build your own in the theme editor — colours for every
+       part of the interface, including the card backgrounds.</p>
+
+    <h2 id="backup">Backup</h2>
+    <p>Shows where the database lives, and lets you <b>export</b> and <b>import</b>
+       your library.</p>
+    <div class="note">Export is a way to move or share a library as a single file.
+      For an actual backup, copy the library folder — see
+      <a href="storage.html#backups">Backups</a>.</div>
+
+    <h2 id="maintenance">Maintenance</h2>
+    <p>Database health. Most people never need this page — it's here for when
+       something has gone wrong.</p>
+    <ul>
+      <li><b>Schema version</b> and <b>Upgrade</b> — the database's format version.</li>
+      <li><b>Run Integrity Check</b> — verifies the database isn't damaged.</li>
+      <li><b>Optimize Database</b> — reclaims unused space.</li>
+      <li><b>View Backups</b> — automatic database backups, and a button to make one now.</li>
+      <li><b>Rebuild Database</b> — clears the index and re-imports every animation
+          by re-scanning your library folder. Your animation files aren't touched.
+          This is the "everything looks wrong" button: since the files on disk are
+          the truth and the database is only an index, rebuilding it is safe.</li>
+      <li><b>Library Repair</b> — one-time repairs for older libraries. Both are
+          harmless no-ops on a healthy library.</li>
+      <li><b>Activity Log</b> — a record of recent actions on review notes.</li>
+    </ul>
+
+    <h2 id="modes">Operation Mode</h2>
+    <p>The setting with the widest reach — it changes how deleting works and who
+       controls status.</p>
+
+    <table>
+      <tr><th>Mode</th><th>For</th><th>Deleting</th><th>Status</th></tr>
+      <tr><td><b>Solo</b></td><td>One person, one library.</td><td>Immediate and permanent. No Archive or Trash.</td><td>Yours to set.</td></tr>
+      <tr><td><b>Studio</b></td><td>A shared library.</td><td>Goes to Archive, then Trash. Restorable.</td><td>Yours to set.</td></tr>
+      <tr><td><b>Pipeline</b></td><td>Driven by Pipeline Control.</td><td>Same as Studio.</td><td>Read-only — Pipeline Control owns it.</td></tr>
+    </table>
+
+    <div class="tip">If anyone else touches your library, use <b>Studio</b>. The
+      safety net costs you two clicks and saves someone else's week.</div>
+
+    <div class="note">In <b>Pipeline mode</b> the status badge still looks clickable,
+      but changes won't stick — status belongs to Pipeline Control.</div>
+
+    <h2 id="identity">Identity</h2>
+    <p>Your name and colour, used to attribute review notes and drawings. Stored on
+       your machine, not in the library — so everyone sharing a library keeps their
+       own, and nobody overwrites anyone else's. Click the identity pill in the
+       header to come straight here.</p>
+
+    <h2 id="naming">Naming templates</h2>
+    <p>Action Library can build names from a template instead of free text, so a
+       whole team names things the same way — something like
+       <code>{character}_{action}_v{version:03}</code>. When a template is
+       configured, Blender's capture panel shows fields to fill rather than a name
+       box, and the app's rename dialog does the same.</p>
+    <p>This is a studio nicety. Working alone, plain descriptive names are fine —
+       search covers names, tags, descriptions and rig type either way.</p>
+
+    <footer>Next: <a href="reference.html">Reference</a> ·
+      Back to <a href="index.html">documentation home</a>.</footer>
+  </main>
+  <script src="nav.js"></script>
+</body>
+</html>

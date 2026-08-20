@@ -38,13 +38,25 @@ class FolderTreeDragHandler:
             reload_callback: Callback to reload folder tree
         """
         self._tree = tree_widget
-        self._db_service = db_service
-        self._move_service = move_service
+        self._injected_db_service = db_service
+        self._injected_move_service = move_service
         self._event_bus = event_bus
         self._reload_folders = reload_callback
 
         # Track dragged folder for folder-to-folder dragging
         self._dragged_folder_item: Optional[QTreeWidgetItem] = None
+
+    # Defer to the tree, which resolves these fresh on every access. Caching them
+    # here would freeze whichever library was configured when the tree was built,
+    # and this handler lives as long as the tree does.
+    # See services/service_refs.py.
+    @property
+    def _db_service(self):
+        return self._injected_db_service or self._tree._db_service
+
+    @property
+    def _move_service(self):
+        return self._injected_move_service or self._tree._move_service
 
     def start_drag(self, selected_items):
         """Store dragged folder item before drag starts."""

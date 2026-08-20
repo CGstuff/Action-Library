@@ -43,6 +43,7 @@ class HelpOverlay(QWidget):
         ]),
         ("General", [
             ("H", "Toggle this help"),
+            ("F1", "Open the documentation"),
             ("Escape", "Close dialogs / Cancel"),
         ]),
     ]

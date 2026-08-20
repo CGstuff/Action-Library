@@ -5,11 +5,13 @@ Pattern: QMainWindow with splitter layout
 Inspired by: Current animation_library structure
 """
 
+import logging
 import sys
 from pathlib import Path
+from typing import List, Tuple
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QStatusBar, QDialog, QMessageBox, QMenu
+    QSplitter, QStatusBar, QDialog, QFileDialog, QMessageBox, QMenu
 )
 from PyQt6.QtCore import Qt, QSettings, QTimer, QFileSystemWatcher, QThreadPool, QRunnable, QObject, pyqtSignal
 from PyQt6.QtGui import QCloseEvent
@@ -22,6 +24,8 @@ from ..services.blender_service import get_blender_service, APPLY_QUEUED
 from ..services.archive_service import get_archive_service
 from ..services.trash_service import get_trash_service
 from ..services.thumbnail_loader import get_thumbnail_loader
+from ..services.library_switch import reset_library_services, switch_library
+from ..services.service_refs import service_ref
 from ..services.update_service import UpdateService
 from ..themes.theme_manager import get_theme_manager
 from ..models.animation_list_model import AnimationListModel
@@ -36,6 +40,8 @@ from .bulk_edit_toolbar import BulkEditToolbar
 from .settings.settings_dialog import SettingsDialog
 from .help_overlay import HelpOverlay
 from .controllers import ArchiveTrashController, BulkEditController, FilterController
+
+logger = logging.getLogger(__name__)
 
 
 class _ApplyWorkerSignals(QObject):
@@ -66,6 +72,15 @@ class _ApplyWorker(QRunnable):
 
 
 class MainWindow(QMainWindow):
+    # Resolved on every access, never cached: the library can be switched at
+    # runtime, which resets these singletons, and this window is built once at
+    # startup. A cached handle would silently keep reading the old library.
+    # See services/service_refs.py.
+    _db_service = service_ref(get_database_service, '_injected_db_service')
+    _blender_service = service_ref(get_blender_service, '_injected_blender_service')
+    _archive_service = service_ref(get_archive_service, '_injected_archive_service')
+    _trash_service = service_ref(get_trash_service, '_injected_trash_service')
+
     """
     Main application window
 
@@ -120,17 +135,25 @@ class MainWindow(QMainWindow):
                 sys.exit(0)
             Config.save_identity(identity_wizard.get_identity())
 
-        # Services and event bus (injectable for testing)
+        # Services and event bus (injectable for testing; None in production, in
+        # which case the properties above resolve the current singleton on every
+        # access - see services/service_refs.py).
         self._event_bus = event_bus or get_event_bus()
-        self._db_service = db_service or get_database_service()
-        self._blender_service = blender_service or get_blender_service()
-        self._archive_service = archive_service or get_archive_service()
-        self._trash_service = trash_service or get_trash_service()
-        self._thumbnail_loader = thumbnail_loader or get_thumbnail_loader()
+        self._injected_db_service = db_service
+        self._injected_blender_service = blender_service
+        self._injected_archive_service = archive_service
+        self._injected_trash_service = trash_service
         self._theme_manager = theme_manager or get_theme_manager()
 
-        # Models (pass db_service for DI)
-        self._animation_model = AnimationListModel(db_service=self._db_service)
+        # The thumbnail loader is NOT library-bound (paths are passed per
+        # request) and views connect to its signals, so it stays a plain cached
+        # reference. Only its caches are library-specific, and
+        # reset_thumbnail_loader() clears those in place.
+        self._thumbnail_loader = thumbnail_loader or get_thumbnail_loader()
+
+        # Models. Pass the INJECTED value, not self._db_service: handing over the
+        # resolved service would freeze it inside the model and undo the deferral.
+        self._animation_model = AnimationListModel(db_service=self._injected_db_service)
         self._proxy_model = AnimationFilterProxyModel()
         self._proxy_model.setSourceModel(self._animation_model)
 
@@ -144,9 +167,9 @@ class MainWindow(QMainWindow):
         self._init_controllers()
         self._connect_signals()
         self._load_settings()
-        self._load_animations()
-        self._setup_queue_watcher()
-        self._setup_library_watcher()
+        # Startup is just "bind to the configured library" - the exact same path
+        # a switch takes, so the switch path is exercised on every launch.
+        self._load_library(initial=True)
 
     def _setup_window(self):
         """Configure window properties"""
@@ -244,9 +267,10 @@ class MainWindow(QMainWindow):
             animation_view=self._animation_view,
             metadata_panel=self._metadata_panel,
             proxy_model=self._proxy_model,
-            db_service=self._db_service,
-            archive_service=self._archive_service,
-            trash_service=self._trash_service,
+            # Injected values, not resolved ones - see the note in __init__.
+            db_service=self._injected_db_service,
+            archive_service=self._injected_archive_service,
+            trash_service=self._injected_trash_service,
             event_bus=self._event_bus,
             status_bar=self._status_bar,
             reload_animations_callback=self._reload_animations_from_db
@@ -257,7 +281,7 @@ class MainWindow(QMainWindow):
             parent=self,
             animation_view=self._animation_view,
             animation_model=self._animation_model,
-            db_service=self._db_service,
+            db_service=self._injected_db_service,
             event_bus=self._event_bus,
             status_bar=self._status_bar,
             reload_animations_callback=self._reload_animations_from_db
@@ -267,6 +291,7 @@ class MainWindow(QMainWindow):
         """Reload all animations from database - used by controllers"""
         animations = self._db_service.get_all_animations()
         self._animation_model.set_animations(animations)
+        self._refresh_folder_membership()
 
     def _track_connection(self, signal, slot):
         """Connect signal to slot and track for cleanup on close"""
@@ -312,6 +337,20 @@ class MainWindow(QMainWindow):
         self._track_connection(self._animation_view.animation_context_menu, self._on_animation_context_menu)
 
         # Header toolbar search -> filter animations
+        self._track_connection(self._header_toolbar.library_switch_requested,
+                               self._on_library_switch_requested)
+        self._track_connection(self._header_toolbar.library_browse_requested,
+                               self._on_library_browse_requested)
+        self._track_connection(self._header_toolbar.library_forget_requested,
+                               self._on_library_forget_requested)
+        self._track_connection(self._header_toolbar.docs_clicked,
+                               self._open_documentation)
+
+        # A folder rename/delete rewrites tags on its animations - reload the
+        # model so the change shows immediately instead of at the next refresh.
+        self._track_connection(self._folder_tree.animations_changed,
+                               self._on_folder_animations_changed)
+
         self._track_connection(self._header_toolbar.search_text_changed, self._on_search_text_changed)
 
         # Header toolbar view mode -> update view
@@ -331,6 +370,11 @@ class MainWindow(QMainWindow):
 
         # Metadata panel notes changed -> refresh notes badges
         self._track_connection(self._metadata_panel.notes_changed, self._on_notes_changed)
+
+        # Tags changed anywhere -> rebuild the tag dropdown. This signal existed
+        # with no subscribers, which is why removing a tag left it in the filter
+        # dropdown until the next library refresh.
+        self._track_connection(self._event_bus.tags_updated, self._on_tags_updated)
 
         # Header toolbar refresh -> sync library with database
         self._track_connection(self._header_toolbar.refresh_library_clicked, self._on_refresh_library)
@@ -356,6 +400,7 @@ class MainWindow(QMainWindow):
         self._track_connection(self._header_toolbar.sort_changed, self._on_sort_changed)
 
         # Bulk edit toolbar signals
+        self._track_connection(self._bulk_edit_toolbar.add_tags_clicked, self._on_add_tags)
         self._track_connection(self._bulk_edit_toolbar.remove_tags_clicked, self._on_remove_tags)
         self._track_connection(self._bulk_edit_toolbar.move_to_folder_clicked, self._on_move_to_folder)
         self._track_connection(self._bulk_edit_toolbar.gradient_preset_selected, self._on_gradient_preset_selected)
@@ -421,8 +466,14 @@ class MainWindow(QMainWindow):
             self._status_bar.showMessage("Scanning library...")
             self._db_service.sync_library()
 
-        # Fix pose flags for any animations with frame_count=1 that aren't marked as poses
-        self._db_service.fix_pose_flags()
+            # Legacy repair, only for a freshly-populated database: mark
+            # single-frame animations imported before is_pose existed as poses.
+            # This used to run on EVERY launch of EVERY client, taking a write
+            # lock on the shared network database for a repair that is a no-op
+            # on any healthy library. It belongs with a fresh import (or an
+            # explicit maintenance run), not on every startup.
+            self._db_service.fix_pose_flags()
+            self._db_service.migrate_to_actions_poses_folders()
 
         # Apply any pending metadata from import
         if BackupService.has_pending_metadata():
@@ -434,6 +485,7 @@ class MainWindow(QMainWindow):
 
         # Load into model
         self._animation_model.set_animations(animations)
+        self._refresh_folder_membership()
 
         # Update status
         count = len(animations)
@@ -441,55 +493,307 @@ class MainWindow(QMainWindow):
 
         self._event_bus.finish_loading("Loading animations")
 
+    # ==================== LIBRARY BINDING ====================
+
+    def _load_library(self, initial: bool = False):
+        """Bind the window to whatever library is currently configured.
+
+        This is the ONE path that binds the UI to a library, and it runs BOTH at
+        startup and on every switch. That's deliberate: a separate switch-only
+        path would only run on the rare occasions someone switches, so it would
+        rot unnoticed. This way, if it breaks, the app doesn't start.
+
+        Args:
+            initial: True on the startup call, where there is no previous library
+                     to unbind from and the widgets were just built empty.
+        """
+        if not initial:
+            self._teardown_library_bindings()
+            reset_library_services()
+            self._reset_library_ui_state()
+
+        # Write the protocol schema into the (possibly brand new) library. At
+        # startup main() does this before the window exists; on a switch nothing
+        # else would, and the Blender addon needs it to be there.
+        try:
+            from ..main import sync_protocol_to_library
+            sync_protocol_to_library()
+        except Exception as e:
+            logger.warning(f"Could not sync protocol to library: {e}")
+
+        self._load_animations()
+
+        if not initial:
+            # Rebuilt from the new library's database. At startup these widgets
+            # load themselves as they're constructed.
+            self._folder_tree.refresh()
+            self._header_toolbar.refresh_filters()
+
+        self._setup_queue_watcher()
+        self._setup_library_watcher()
+
+    def _teardown_library_bindings(self):
+        """Stop watching/polling the current library and release its open files.
+
+        Shared by the library switch and closeEvent - both need exactly this.
+        """
+        # Stop polling before anything else, so a timer can't fire mid-teardown
+        # and repopulate what we're about to clear.
+        if hasattr(self, '_queue_check_timer') and self._queue_check_timer.isActive():
+            self._queue_check_timer.stop()
+        if hasattr(self, '_library_refresh_timer') and self._library_refresh_timer.isActive():
+            self._library_refresh_timer.stop()
+
+        for attr in ('_queue_watcher', '_library_watcher'):
+            watcher = getattr(self, attr, None)
+            if watcher is not None:
+                self._unwatch_all(watcher)
+
+        # Release open file handles pointing INTO the library. The video preview
+        # and the hover popup both hold a video file open; on Windows those pin
+        # the folder, so a switch would leave the old library undeletable and the
+        # handles leaked.
+        try:
+            self._metadata_panel.clear()
+        except Exception as e:
+            logger.warning(f"Error clearing metadata panel: {e}")
+        try:
+            self._apply_panel.clear()
+        except Exception as e:
+            logger.warning(f"Error clearing apply panel: {e}")
+        try:
+            if getattr(self._animation_view, '_hover_popup', None):
+                self._animation_view._hover_popup.hide_preview()
+        except Exception as e:
+            logger.warning(f"Error releasing hover preview: {e}")
+
+    def _reset_library_ui_state(self):
+        """Clear view state that refers to the previous library's rows.
+
+        Every uuid, folder id and tag belongs to the library we just left, so
+        anything holding one has to go. Deliberately does NOT touch window
+        geometry, splitter sizes, theme, view mode, card size or sort order -
+        those are user preferences, not library data.
+        """
+        # Leave Archive/Trash view if we're in it: the model would otherwise hold
+        # converted archive rows from the old library. Set the flags directly -
+        # exit_special_views() early-returns when both are already False, so it
+        # can't be used as an unconditional reset.
+        self._archive_trash_ctrl._in_archive_view = False
+        self._archive_trash_ctrl._in_trash_view = False
+        self._bulk_edit_toolbar.set_special_view_mode()
+
+        # Filters reference old folder ids, tags and rig types. Use the proxy's
+        # own method: FilterController.clear_all_filters() misses poses_only and
+        # animations_only.
+        self._proxy_model.clear_all_filters()
+        self._filter_ctrl._current_context = None
+
+        # Clear the search box itself, not just the proxy - otherwise the box
+        # still shows a query that is no longer being applied.
+        self._header_toolbar._search_box.clear()
+
+        # Selection is old uuids.
+        self._animation_view.clearSelection()
+        self._event_bus.clear_selection()
+        self._event_bus._search_text = ""
+        # Assign directly rather than via set_folder("Home"): set_folder is
+        # guarded by an inequality check, so if the current folder is already
+        # "Home" it emits nothing and listeners never re-drive.
+        self._event_bus._current_folder = "Home"
+
+    def _on_library_switch_requested(self, path: str):
+        """User picked a library from the header picker."""
+        from ..services.known_libraries import get_known_libraries_store
+
+        label = path
+        for lib in get_known_libraries_store().list_libraries():
+            if lib['path'] == path:
+                label = lib['label']
+                break
+
+        reply = QMessageBox.question(
+            self,
+            "Switch Library",
+            f"Switch to '{label}'?\n\n{path}\n\n"
+            "Blender follows automatically.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            ok, message = self.switch_to_library(path)
+            if not ok:
+                QMessageBox.warning(
+                    self, "Switch Failed",
+                    f"Could not switch library:\n\n{message}"
+                )
+
+        # Always resync the picker from what's actually loaded - that's the whole
+        # revert-on-cancel story. The combo already moved to the clicked entry, so
+        # without this a declined or failed switch would leave it pointing at a
+        # library we are not using.
+        self._header_toolbar.refresh_libraries()
+
+    def _on_library_forget_requested(self, path: str):
+        """User asked to drop a library from the picker's list."""
+        from ..services.known_libraries import get_known_libraries_store
+
+        store = get_known_libraries_store()
+
+        label = path
+        for lib in store.list_libraries():
+            if lib['path'] == path:
+                label = lib['label']
+                break
+
+        reply = QMessageBox.question(
+            self,
+            "Forget Library",
+            f"Remove '{label}' from the library list?\n\n{path}\n\n"
+            "This only removes it from this menu. Nothing is deleted - the "
+            "folder and every animation in it stay exactly as they are, and you "
+            "can add it back with 'Browse for another folder...'.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            store.forget(path)
+            self._header_toolbar.refresh_libraries()
+            self._status_bar.showMessage(f"Removed '{label}' from the library list")
+
+    def _on_library_browse_requested(self):
+        """User picked 'Browse for another folder...' in the header picker."""
+        current = Config.load_library_path() or Path.home()
+
+        new_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Animation Library Folder",
+            str(current),
+            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
+        )
+
+        if new_path:
+            reply = QMessageBox.question(
+                self,
+                "Switch Library",
+                f"Use this folder as the animation library?\n\n{new_path}\n\n"
+                "An empty folder becomes a new, empty library. Existing "
+                "animations are NOT moved.\n\n"
+                "Blender follows automatically.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                ok, message = self.switch_to_library(new_path)
+                if not ok:
+                    QMessageBox.warning(
+                        self, "Switch Failed",
+                        f"Could not switch library:\n\n{message}"
+                    )
+
+        # Resync regardless: the combo is currently showing "Browse...".
+        self._header_toolbar.refresh_libraries()
+
+    def switch_to_library(self, new_path) -> Tuple[bool, str]:
+        """Switch the app to a different library, in place, without restarting.
+
+        Returns:
+            (success, message) - message is the resolved path, or the reason.
+        """
+        # reset_services=False: _load_library() owns the teardown ordering (stop
+        # timers and release files BEFORE the services go away).
+        ok, message = switch_library(new_path, reset_services=False)
+        if not ok:
+            return False, message
+
+        self._load_library()
+        self._header_toolbar.refresh_libraries()
+        self._status_bar.showMessage(f"Switched library: {message}")
+        logger.info(f"Switched library in place: {message}")
+        return True, message
+
     def _setup_queue_watcher(self):
-        """Setup file system watcher for queue directory to detect Blender notifications"""
-        self._queue_watcher = QFileSystemWatcher(self)
-        self._queue_check_timer = QTimer(self)
-        self._queue_check_timer.timeout.connect(self._check_queue_notifications)
+        """Point the queue watcher at the CURRENT library's .queue folder.
 
-        # Get queue directory path
-        library_path = Config.load_library_path()
-        if library_path:
-            queue_dir = Path(library_path) / ".queue"
-            queue_dir.mkdir(parents=True, exist_ok=True)
-
-            # Watch the queue directory for changes
-            self._queue_watcher.addPath(str(queue_dir))
+        Idempotent - safe to call again after a library switch. The watcher, the
+        timer and their signal connections are created once and then reused; only
+        the watched paths change. Creating fresh ones per call would leave the
+        previous watcher alive and still firing for the old library, and would
+        stack a second timer on top of the first.
+        """
+        if not hasattr(self, '_queue_watcher'):
+            self._queue_watcher = QFileSystemWatcher(self)
             self._queue_watcher.directoryChanged.connect(self._on_queue_directory_changed)
+            self._queue_check_timer = QTimer(self)
+            self._queue_check_timer.timeout.connect(self._check_queue_notifications)
 
-            # Also start periodic check (backup in case watcher misses events)
-            self._queue_check_timer.start(Config.QUEUE_CHECK_INTERVAL_MS)
+        self._unwatch_all(self._queue_watcher)
+        self._queue_check_timer.stop()
+
+        library_path = Config.load_library_path()
+        if not library_path:
+            return
+
+        queue_dir = Path(library_path) / ".queue"
+        queue_dir.mkdir(parents=True, exist_ok=True)
+
+        self._queue_watcher.addPath(str(queue_dir))
+
+        # Periodic check as a backup in case the watcher misses events (it does,
+        # over SMB).
+        self._queue_check_timer.start(Config.QUEUE_CHECK_INTERVAL_MS)
+
+    @staticmethod
+    def _unwatch_all(watcher: QFileSystemWatcher):
+        """Drop every path a watcher is watching.
+
+        QFileSystemWatcher.addPath is additive and has no 'replace' - so without
+        this, re-pointing at a new library would keep watching the old one's
+        folders forever, on top of the new ones.
+        """
+        directories = watcher.directories()
+        if directories:
+            watcher.removePaths(directories)
+        files = watcher.files()
+        if files:
+            watcher.removePaths(files)
 
     def _setup_library_watcher(self):
-        """Setup file system watcher for library folders to auto-refresh on new captures"""
-        self._library_watcher = QFileSystemWatcher(self)
-        self._library_refresh_timer = QTimer(self)
-        self._library_refresh_timer.setSingleShot(True)
-        self._library_refresh_timer.timeout.connect(self._on_library_auto_refresh)
+        """Point the library watcher at the CURRENT library's folders.
 
-        # Get library path
-        library_path = Config.load_library_path()
-        if library_path:
-            library_dir = Path(library_path) / "library"
-
-            # Watch actions and poses folders
-            actions_dir = library_dir / "actions"
-            poses_dir = library_dir / "poses"
-
-            watch_count = 0
-            for folder in [actions_dir, poses_dir]:
-                if folder.exists() and watch_count < self.MAX_WATCHED_DIRECTORIES:
-                    self._library_watcher.addPath(str(folder))
-                    watch_count += 1
-                    # Also watch immediate subfolders (animation folders)
-                    for subfolder in folder.iterdir():
-                        if watch_count >= self.MAX_WATCHED_DIRECTORIES:
-                            break
-                        if subfolder.is_dir():
-                            self._library_watcher.addPath(str(subfolder))
-                            watch_count += 1
-
+        Idempotent - see _setup_queue_watcher for why that matters.
+        """
+        if not hasattr(self, '_library_watcher'):
+            self._library_watcher = QFileSystemWatcher(self)
             self._library_watcher.directoryChanged.connect(self._on_library_folder_changed)
+            self._library_refresh_timer = QTimer(self)
+            self._library_refresh_timer.setSingleShot(True)
+            self._library_refresh_timer.timeout.connect(self._on_library_auto_refresh)
+
+        self._unwatch_all(self._library_watcher)
+        self._library_refresh_timer.stop()
+
+        library_path = Config.load_library_path()
+        if not library_path:
+            return
+
+        library_dir = Path(library_path) / "library"
+
+        # Watch actions and poses folders
+        actions_dir = library_dir / "actions"
+        poses_dir = library_dir / "poses"
+
+        watch_count = 0
+        for folder in [actions_dir, poses_dir]:
+            if folder.exists() and watch_count < self.MAX_WATCHED_DIRECTORIES:
+                self._library_watcher.addPath(str(folder))
+                watch_count += 1
+                # Also watch immediate subfolders (animation folders)
+                for subfolder in folder.iterdir():
+                    if watch_count >= self.MAX_WATCHED_DIRECTORIES:
+                        break
+                    if subfolder.is_dir():
+                        self._library_watcher.addPath(str(subfolder))
+                        watch_count += 1
 
     def _on_library_folder_changed(self, path: str):
         """Handle changes in library folders - debounce and auto-refresh"""
@@ -527,6 +831,7 @@ class MainWindow(QMainWindow):
             # Reload animations from database
             animations = self._db_service.get_all_animations()
             self._animation_model.set_animations(animations)
+            self._refresh_folder_membership()
 
             # Refresh filter dropdowns
             self._header_toolbar.refresh_filters()
@@ -579,10 +884,32 @@ class MainWindow(QMainWindow):
                     data = json.load(f)
 
                 animation_name = data.get('animation_name', 'Unknown')
-                
+                animation_id = data.get('animation_id')
+
                 # Trigger full library refresh to import the new animation
                 self._on_library_auto_refresh()
-                
+
+                # Only CONSUME the notification once the animation actually landed
+                # in the database. The scan can legitimately miss it on the first
+                # try - on a network share the directory listing is briefly cached
+                # by the SMB client, or the files are still being flushed. Deleting
+                # the notification anyway threw the trigger away forever, and the
+                # capture then only showed up when the user refreshed by hand
+                # (the "sometimes I have to hit refresh" symptom). Leave it in
+                # place and let the next queue poll retry instead.
+                if animation_id and not self._db_service.get_animation_by_uuid(animation_id):
+                    attempts = int(data.get('_refresh_attempts', 0)) + 1
+                    if attempts < 6:  # ~30s at the 5s queue-poll interval
+                        data['_refresh_attempts'] = attempts
+                        try:
+                            with open(notification_file, 'w', encoding='utf-8') as f:
+                                json.dump(data, f)
+                        except OSError:
+                            pass
+                        continue  # not imported yet - retry on the next poll
+                    # Out of attempts: fall through and clean the notification up
+                    # so it can't linger forever.
+
                 # Update status bar
                 self._status_bar.showMessage(f"New animation captured: {animation_name}")
 
@@ -675,16 +1002,29 @@ class MainWindow(QMainWindow):
     # ==================== SLOT HANDLERS ====================
 
     def _on_folder_selected(self, folder_id: int, folder_name: str, recursive: bool = True):
-        """Handle folder selection with optional recursive filtering"""
+        """Handle folder selection with optional recursive filtering.
+
+        Dispatches on WHAT the item is, not what it's called. The built-in
+        folders (Home / Actions / Poses / Favorites / Recent / Archive / Trash)
+        carry no folder_id and the tree emits -1 for them; anything with a real
+        id is one of the user's own folders.
+
+        This used to switch on the folder's NAME, which silently made those seven
+        names reserved: a user folder called "Poses" never reached the folder
+        branch, so it showed every pose in the library instead of its own
+        contents - no error, no clue. Same disease as folder membership being a
+        name-matched tag: identity by name instead of by id.
+        """
+        is_virtual = folder_id is None or folder_id < 0
 
         # Clear special filters first
         self._filter_ctrl.clear_special_filters()
 
-        if folder_name == "Archive":
+        if is_virtual and folder_name == "Archive":
             self._archive_trash_ctrl.show_archive_view()
             self._bulk_edit_toolbar.set_special_view_mode(in_archive=True)
             return
-        elif folder_name == "Trash":
+        elif is_virtual and folder_name == "Trash":
             self._archive_trash_ctrl.show_trash_view()
             self._bulk_edit_toolbar.set_special_view_mode(in_trash=True)
             return
@@ -693,25 +1033,46 @@ class MainWindow(QMainWindow):
         self._archive_trash_ctrl.exit_special_views()
         self._bulk_edit_toolbar.set_special_view_mode()  # Reset to normal mode
 
-        if folder_name == "Home":
+        if is_virtual:
+            # Built-in views. Name-matching is safe here precisely because we
+            # know these have no folder_id - they're ours, not the user's.
             self._filter_ctrl.clear_folder_filter()
-        elif folder_name == "Actions":
-            self._filter_ctrl.clear_folder_filter()
-            self._filter_ctrl.set_animations_only(True)
-        elif folder_name == "Poses":
-            self._filter_ctrl.clear_folder_filter()
-            self._filter_ctrl.set_poses_only(True)
-        elif folder_name == "Favorites":
-            self._filter_ctrl.clear_folder_filter()
-            self._filter_ctrl.set_favorites_only(True)
-        elif folder_name == "Recent":
-            self._filter_ctrl.clear_folder_filter()
-            self._filter_ctrl.set_recent_only(True)
+            if folder_name == "Actions":
+                self._filter_ctrl.set_animations_only(True)
+            elif folder_name == "Poses":
+                self._filter_ctrl.set_poses_only(True)
+            elif folder_name == "Favorites":
+                self._filter_ctrl.set_favorites_only(True)
+            elif folder_name == "Recent":
+                self._filter_ctrl.set_recent_only(True)
+            # "Home" (and anything unrecognised) = no filter at all.
         else:
-            # Filter by folder name (tags-based)
-            self._filter_ctrl.set_folder_filter(folder_id, folder_name, set())
+            # Filter by real folder membership, by id.
+            #
+            # This used to pass an empty set here and let the proxy match the
+            # folder's NAME against each animation's tags - which is why folders
+            # could never be renamed. `recursive` (the tree's toggle) decides
+            # whether subfolders' contents are included.
+            if recursive:
+                folder_ids = set(self._db_service.get_folder_descendants(folder_id))
+            else:
+                folder_ids = {folder_id}
+            self._filter_ctrl.set_folder_filter(folder_id, folder_name, folder_ids)
 
         self._filter_ctrl.update_status(folder_name)
+
+    def _refresh_folder_membership(self):
+        """Reload which animations are in which folders, and hand it to the proxy.
+
+        Called whenever membership could have changed (load, drag-drop, folder
+        delete/rename). One query for the whole map, because the filter needs it
+        per row.
+        """
+        membership = {
+            uuid: set(folder_ids)
+            for uuid, folder_ids in self._db_service.get_folder_membership_map().items()
+        }
+        self._proxy_model.set_membership(membership)
 
     def _on_animation_selection_changed(self, selected, deselected):
         """Handle animation selection change"""
@@ -854,6 +1215,26 @@ class MainWindow(QMainWindow):
         fav_action = menu.addAction(fav_text)
         fav_action.triggered.connect(lambda: self._toggle_favorite(uuid))
 
+        # Add tags
+        tag_action = menu.addAction("Add Tags...")
+        tag_action.triggered.connect(lambda: self._add_tags_to_animations([uuid]))
+
+        # Remove from the folder we're currently looking at. Only offered when a
+        # real folder is selected, because "remove from folder" is meaningless in
+        # Home or a virtual folder - and it says WHICH folder, since an animation
+        # is usually in several.
+        current_folder_id = self._filter_ctrl.get_current_folder_id()
+        if current_folder_id and current_folder_id in set(
+            self._db_service.get_folders_for_animation(uuid)
+        ):
+            folder = self._db_service.get_folder_by_id(current_folder_id)
+            folder_name = folder.get('name') if folder else None
+            if folder_name:
+                remove_action = menu.addAction(f"Remove from '{folder_name}'")
+                remove_action.triggered.connect(
+                    lambda: self._remove_from_folder([uuid], current_folder_id)
+                )
+
         menu.addSeparator()
 
         # Delete/Archive action based on mode
@@ -867,6 +1248,62 @@ class MainWindow(QMainWindow):
 
         # Show menu at cursor position
         menu.exec(position)
+
+    def _add_tags_to_animations(self, uuids: List[str]):
+        """Ask for tags and add them to the given animations.
+
+        Adding a tag wasn't possible from the app at all before this: the dialog
+        existed but nothing ever opened it, so a tag typed wrongly at capture
+        could never be corrected here.
+        """
+        from .dialogs.tag_input_dialog import TagInputDialog
+
+        if not uuids:
+            return
+
+        dialog = TagInputDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_tags = dialog.get_tags()
+        if not new_tags:
+            return
+
+        # add_tags_to_animation() owns the normalization: trims, and steers to the
+        # spelling the library already uses so `combat` can't become a second
+        # `Combat`. See services/tag_utils.py.
+        updated = sum(
+            1 for uuid in uuids
+            if self._db_service.add_tags_to_animation(uuid, new_tags)
+        )
+
+        if updated:
+            self._reload_animations_from_db()
+            # The tag dropdown is built from the tags in use, so it has to be
+            # rebuilt or the new tag won't be filterable until a refresh.
+            self._header_toolbar.refresh_filters()
+
+        self._status_bar.showMessage(
+            f"Added {', '.join(new_tags)} to {updated} animation(s)"
+            if updated else "No tags added (already present)"
+        )
+
+    def _remove_from_folder(self, uuids: List[str], folder_id: int):
+        """Take animations out of one folder, leaving them in any others."""
+        folder = self._db_service.get_folder_by_id(folder_id)
+        folder_name = folder.get('name', 'folder') if folder else 'folder'
+
+        removed = sum(
+            1 for uuid in uuids
+            if self._db_service.remove_animation_from_folder(uuid, folder_id)
+        )
+
+        if removed:
+            self._reload_animations_from_db()
+            self._header_toolbar.refresh_filters()
+            self._status_bar.showMessage(
+                f"Removed {removed} animation(s) from '{folder_name}'"
+            )
 
     def _show_version_history(self, version_group_id: str):
         """Show version history dialog"""
@@ -1047,6 +1484,7 @@ class MainWindow(QMainWindow):
         # Reload animations from database
         animations = self._db_service.get_all_animations()
         self._animation_model.set_animations(animations)
+        self._refresh_folder_membership()
 
         # Refresh filter dropdowns (rig types, tags)
         self._header_toolbar.refresh_filters()
@@ -1069,6 +1507,36 @@ class MainWindow(QMainWindow):
         """Handle create new folder request from header button"""
         # Delegate to folder tree widget
         self._folder_tree.create_folder_with_dialog()
+
+    def _on_tags_updated(self, uuid: str, tags: list):
+        """A tag changed - the filter dropdown is built from tags in use."""
+        self._header_toolbar.refresh_filters()
+
+    def _on_folder_animations_changed(self):
+        """A folder operation changed the animations themselves.
+
+        Renaming or deleting a folder rewrites its tag on every animation in it,
+        and deleting moves them to Home. The folder tree rebuilds itself, but the
+        animation model is still holding the rows it loaded earlier - so the old
+        tag stays on the card and in the metadata panel until something reloads
+        them. That something is this.
+        """
+        self._reload_animations_from_db()   # also refreshes folder membership
+        self._header_toolbar.refresh_filters()
+
+        # The metadata panel keeps its own copy of the selected animation, so it
+        # needs re-pointing at the fresh row rather than just repainting.
+        selected = self._event_bus.get_selected_animation()
+        if selected:
+            fresh = self._db_service.get_animation_by_uuid(selected)
+            if fresh:
+                self._metadata_panel.set_animation(fresh)
+            else:
+                self._metadata_panel.clear()
+
+    def _on_add_tags(self):
+        """Handle add tags to selected animations"""
+        self._add_tags_to_animations(self._animation_view.get_selected_uuids())
 
     def _on_remove_tags(self):
         """Handle remove tags from selected animations"""
@@ -1117,6 +1585,9 @@ class MainWindow(QMainWindow):
         """Handle animations moved to different folder"""
         # Reload ALL animations from database to get updated tags
         self._reload_animations_from_db()
+        # Adding to a folder mirrors the folder's name onto the animation's tags,
+        # and the dropdown is built from the tags in use.
+        self._header_toolbar.refresh_filters()
 
         # If the changed folder is currently selected, keep it selected
         selected_items = self._folder_tree.selectedItems()
@@ -1156,6 +1627,13 @@ class MainWindow(QMainWindow):
         from PyQt6.QtCore import Qt
         from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit
 
+        # F1 opens the documentation. No text-field guard: F1 isn't a character,
+        # so it can't collide with typing.
+        if event.key() == Qt.Key.Key_F1:
+            self._open_documentation()
+            event.accept()
+            return
+
         # 'H' toggles help overlay
         if event.key() == Qt.Key.Key_H:
             # Don't trigger if typing in a text input field
@@ -1166,6 +1644,28 @@ class MainWindow(QMainWindow):
                 return
 
         super().keyPressEvent(event)
+
+    def _open_documentation(self, page: str = None):
+        """Open the local documentation in the user's default browser.
+
+        Args:
+            page: Optional page to deep-link, e.g. 'installation.html'.
+        """
+        from ..utils.docs import get_expected_docs_location, open_documentation
+
+        if open_documentation(page):
+            return
+
+        # Not installed. Say where they were expected rather than just failing -
+        # a missing docs folder is a packaging problem, and the path is the clue.
+        QMessageBox.information(
+            self,
+            "Documentation",
+            "The documentation files weren't found.\n\n"
+            f"They're expected at:\n{get_expected_docs_location()}\n\n"
+            "The docs ship with Action Library, so this usually means the "
+            "install is incomplete."
+        )
 
     def resizeEvent(self, event):
         """Handle window resize - update help overlay size"""
@@ -1178,13 +1678,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent):
         """Handle window close"""
 
-        # Stop queue check timer
-        if hasattr(self, '_queue_check_timer') and self._queue_check_timer.isActive():
-            self._queue_check_timer.stop()
-
-        # Stop library refresh timer
-        if hasattr(self, '_library_refresh_timer') and self._library_refresh_timer.isActive():
-            self._library_refresh_timer.stop()
+        # Stop the timers/watchers and release the library's open video handles.
+        # Same teardown a library switch performs.
+        self._teardown_library_bindings()
 
         # Disconnect all tracked signal connections to prevent memory leaks
         self._disconnect_all_signals()

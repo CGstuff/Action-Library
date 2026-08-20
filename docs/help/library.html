@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>The Library — Action Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="top"><span class="brand">Action Library</span><a href="index.html">Home</a></nav>
+  <main>
+    <h1>The Library</h1>
+    <p>Finding things again is the whole job. This page covers the folder tree,
+       search, filters, sorting, and the two ways of viewing your cards.</p>
+
+    <h2 id="folder-tree">The folder tree</h2>
+
+    <p>The left panel is your way around. The top part is fixed and built for you;
+       the middle is yours; the bottom is what you've thrown away.</p>
+
+    <table>
+      <tr><th>Folder</th><th>Shows</th></tr>
+      <tr><td><b>Home</b></td><td>Everything in the library.</td></tr>
+      <tr><td><b>Actions</b></td><td>Multi-frame animations only.</td></tr>
+      <tr><td><b>Poses</b></td><td>Single-frame poses only.</td></tr>
+      <tr><td><b>Recent</b></td><td>What you've looked at lately — see below.</td></tr>
+      <tr><td><b>Favorites</b></td><td>Anything you've starred.</td></tr>
+      <tr><td><b>Your folders</b></td><td>The ones you create.</td></tr>
+      <tr><td><b>Archive</b> / <b>Trash</b></td><td>Set aside or deleted. Only in Studio mode — see <a href="removing.html">Archive &amp; delete</a>.</td></tr>
+    </table>
+
+    <h3>Recent is yours alone</h3>
+    <p>"Recent" is tracked <b>per machine</b>, not in the library. If you share a
+       library with other people, their browsing never shows up in your Recent —
+       and yours never shows up in theirs. Your desktop and your laptop also keep
+       separate lists, because "what I was just looking at" is a fact about a
+       machine, not about the library.</p>
+
+    <h3>Your folders</h3>
+    <p>Make one with the <b>+</b> button in the header, or right-click in the tree.
+       Drag a card onto a folder to put it there. Drag folders onto each other to
+       nest them. Right-click a folder to rename or delete it, or to give it an
+       icon.</p>
+
+    <div class="note">An animation can be in <b>several folders at once</b> — a run
+      is Locomotion and GameDev and Show01 all at the same time. Dragging a card
+      into a folder <b>adds</b> it there and leaves it wherever else it already is,
+      and it moves nothing on disk. To take it out of one folder, use <b>Remove
+      from folder</b> on its right-click menu. See
+      <a href="organizing.html#many-folders">Organizing</a>.</div>
+
+    <h3>Recursive search</h3>
+    <p>The tree has a <b>recursive</b> toggle. On (the default), selecting a folder
+       also shows what's in its subfolders. Off, you see only that folder's own
+       animations.</p>
+
+    <h2 id="search">Search</h2>
+    <p>The search box filters as you type, across the animation's <b>name</b>,
+       <b>description</b>, <b>tags</b> and <b>rig type</b>. So a search for
+       <code>run</code> finds a <code>run_cycle</code>, anything tagged
+       <code>running</code>, and anything you described as "runs then stops".</p>
+    <div class="tip">That's the argument for filling in the description. Search only
+      finds what you wrote down.</div>
+
+    <h2 id="filters">Filters</h2>
+
+    <h3>Rig type</h3>
+    <p>Every animation records the rig it was made for. The rig-type dropdown
+       narrows the grid to one of them — useful when your library holds work for
+       several characters and only some of it will fit the rig in front of you.</p>
+
+    <h3>Tags</h3>
+    <p>The tags dropdown narrows to animations carrying a given tag. It selects one
+       tag at a time.</p>
+
+    <h3>Combining</h3>
+    <p>Filters stack: a folder, plus a rig type, plus a tag, plus a search, all
+       apply together. If the grid looks emptier than expected, something is
+       probably still set — the status bar tells you what's being shown, and
+       clicking <b>Home</b> clears the folder side of it.</p>
+
+    <h2 id="sorting">Sorting</h2>
+    <p>The sort dropdown offers <b>Name</b>, <b>Date</b>, <b>Duration</b> and
+       <b>Recent</b>, each ascending or descending. Sorting is a display preference
+       and survives switching folders. "Recent" sorts by your own per-machine
+       history, same as the Recent folder.</p>
+
+    <h2 id="views">Views</h2>
+
+    <h3>Grid and list</h3>
+    <p>The toggle switches between thumbnail cards and compact rows. Grid is for
+       recognising an animation by eye; list is for scanning names when you have a
+       lot of them.</p>
+
+    <h3>Card size</h3>
+    <p>The slider next to the toggle scales the cards.</p>
+    <div class="note">Card size isn't remembered between sessions yet — it goes back
+      to its default each time you launch.</div>
+
+    <h3>Badges</h3>
+    <p>Cards carry small markers: whether it's an action or a pose, a star if it's
+       a favorite, its review status if it has one, and a note marker if someone
+       has left review notes on it.</p>
+
+    <h2 id="selecting">Selecting and previewing</h2>
+    <p>Click to select. <kbd>Ctrl</kbd>+click adds to the selection,
+       <kbd>Shift</kbd>+click selects a range. With something selected, the right
+       panel shows its details and plays its preview video — with play/pause,
+       looping, speed and scrubbing.</p>
+    <p>Right-click a card for its menu: apply it, view its version history,
+       favorite it, or remove it.</p>
+
+    <h2 id="refresh">Refreshing</h2>
+    <p>Action Library notices new captures on its own — it watches the library
+       folder and checks for messages from Blender every few seconds. If something
+       hasn't appeared, the <b>refresh</b> button in the header re-scans the
+       library and rebuilds the tree.</p>
+    <div class="note">On a shared network drive, expect a few seconds' delay before
+      a colleague's capture shows up. If it takes much longer than that, refresh —
+      and see <a href="storage.html#shared">Sharing a library</a>.</div>
+
+    <footer>Next: <a href="capturing.html">Capturing</a> ·
+      Back to <a href="index.html">documentation home</a>.</footer>
+  </main>
+  <script src="nav.js"></script>
+</body>
+</html>

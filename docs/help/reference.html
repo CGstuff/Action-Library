@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Reference — Action Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="top"><span class="brand">Action Library</span><a href="index.html">Home</a></nav>
+  <main>
+    <h1>Reference</h1>
+    <p>Shortcuts, terms, and what to do when something's wrong.</p>
+
+    <h2 id="shortcuts">Shortcuts</h2>
+
+    <h3>Applying</h3>
+    <table>
+      <tr><th>Do this</th><th>Get this</th></tr>
+      <tr><td>Double-click a card</td><td>Apply to the selected armature</td></tr>
+      <tr><td><kbd>Ctrl</kbd> + double-click</td><td>Apply mirrored</td></tr>
+      <tr><td><kbd>Shift</kbd> + double-click</td><td>Apply as an action slot (actions only)</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd> + double-click</td><td>Apply mirrored, as a slot</td></tr>
+      <tr><td><kbd>Alt</kbd> + double-click</td><td>Insert at the playhead</td></tr>
+    </table>
+
+    <h3>Pose blending</h3>
+    <table>
+      <tr><th>Do this</th><th>Get this</th></tr>
+      <tr><td>Right-click + drag a pose card</td><td>Blend toward the pose — drag right for more</td></tr>
+      <tr><td><kbd>Ctrl</kbd> while dragging</td><td>Blend toward the mirrored pose</td></tr>
+      <tr><td>Left-click, or <kbd>Escape</kbd></td><td>Cancel the blend</td></tr>
+    </table>
+
+    <h3>Selecting</h3>
+    <table>
+      <tr><th>Do this</th><th>Get this</th></tr>
+      <tr><td>Click</td><td>Select</td></tr>
+      <tr><td><kbd>Ctrl</kbd> + click</td><td>Add to the selection</td></tr>
+      <tr><td><kbd>Shift</kbd> + click</td><td>Select a range</td></tr>
+    </table>
+
+    <h3>General</h3>
+    <table>
+      <tr><th>Key</th><th>Does</th></tr>
+      <tr><td><kbd>H</kbd></td><td>Show the shortcuts overlay</td></tr>
+      <tr><td><kbd>F1</kbd></td><td>Open this documentation</td></tr>
+      <tr><td><kbd>Escape</kbd></td><td>Close a dialog / cancel a blend</td></tr>
+    </table>
+    <div class="note">Some buttons show a shortcut in their tooltip that isn't
+      actually wired up yet (the delete button's "Del", for instance). Trust this
+      table and the <kbd>H</kbd> overlay.</div>
+
+    <h2 id="glossary">Glossary</h2>
+    <table>
+      <tr><th>Term</th><th>Means</th></tr>
+      <tr><td><b>Action</b></td><td>A multi-frame animation. Blender's word for an animation datablock.</td></tr>
+      <tr><td><b>Pose</b></td><td>A single frame.</td></tr>
+      <tr><td><b>Armature</b></td><td>Blender's skeleton — the rig you apply animation to.</td></tr>
+      <tr><td><b>Rig type</b></td><td>A label for which rig an animation was built for.</td></tr>
+      <tr><td><b>Library</b> / <b>storage folder</b></td><td>The folder holding all your animations.</td></tr>
+      <tr><td><b>Version</b></td><td>One take of an animation. Same name = new version.</td></tr>
+      <tr><td><b>Latest</b></td><td>The version currently shown in the grid.</td></tr>
+      <tr><td><b>Lineage</b> / <b>history</b></td><td>All versions of one animation.</td></tr>
+      <tr><td><b>Slot</b></td><td>Blender 4.5+ — several animations on one layered action.</td></tr>
+      <tr><td><b>Drawover</b></td><td>A drawing on a frame of a preview, for review.</td></tr>
+      <tr><td><b>Tag</b></td><td>A free-form label you can search and filter by. Each folder also tags its animations with its own name.</td></tr>
+      <tr><td><b>Solo / Studio / Pipeline</b></td><td>Operation modes — see <a href="settings.html#modes">Settings</a>.</td></tr>
+    </table>
+
+    <h2 id="troubleshooting">Troubleshooting</h2>
+
+    <h3>The addon isn't in Blender</h3>
+    <p>Close Blender, reinstall from
+       <b>Settings &rsaquo; Blender Integration</b>, start Blender. Full details:
+       <a href="installation.html#troubleshooting">Install &amp; update</a>.</p>
+
+    <h3>I captured something and it's not in the library</h3>
+    <p>Wait five seconds, then press <b>refresh</b>. If it's still missing, check
+       that the addon's library path matches the app's — the addon panel shows the
+       path it's using.</p>
+
+    <h3>Applying does nothing</h3>
+    <p>Select an armature in Blender first. If you get a connection error, Blender
+       must be running with the addon enabled and the port must match on both
+       sides.</p>
+
+    <h3>My folder looks empty</h3>
+    <p>Check the header — a search or a rig-type/tag filter narrows what's shown
+       inside a folder too, so a filter left on from earlier can empty it. Also
+       check the <b>recursive</b> toggle in the folder tree: with it off, you see
+       only that folder's own animations, not its subfolders'.</p>
+    <p>Renaming a folder is safe and won't empty it — what's in a folder doesn't
+       depend on what it's called.</p>
+
+    <h3>A colleague's animation isn't showing up</h3>
+    <p>Give it a few seconds, then refresh. If it takes minutes, or things appear
+       much later than they should, check you're on a real network share and not a
+       cloud-sync folder — see <a href="storage.html#shared">Sharing a library</a>.
+       Also make sure everyone's running the same version of Action Library.</p>
+
+    <h3>Empty Trash doesn't delete anything</h3>
+    <p><b>Allow permanent deletion</b> is off by default, under
+       <b>Settings &rsaquo; Storage Locations</b>.</p>
+
+    <h3>The status badge won't change</h3>
+    <p>You're probably in <b>Pipeline mode</b>, where Pipeline Control owns status.
+       Check <b>Settings &rsaquo; Operation Mode</b>.</p>
+
+    <h3>The library looks wrong or things are missing</h3>
+    <p>Try <b>Settings &rsaquo; Maintenance &rsaquo; Rebuild Database</b>. It throws
+       away the index and rebuilds it from your actual files, which are the truth.
+       Your animations aren't touched.</p>
+
+    <h3>Something else</h3>
+    <p>The <b>console</b> button in the header shows what Action Library has
+       recorded. The error is usually in there in plain English, and it's the most
+       useful thing to include if you report a problem.</p>
+
+    <footer>Back to <a href="index.html">documentation home</a>.</footer>
+  </main>
+  <script src="nav.js"></script>
+</body>
+</html>

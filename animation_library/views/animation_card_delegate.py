@@ -17,6 +17,7 @@ from PyQt6.QtGui import QPainter, QPixmap, QColor, QPen
 from ..models.animation_list_model import AnimationRole
 from ..services.thumbnail_loader import get_thumbnail_loader
 from ..services.database_service import get_database_service
+from ..services.service_refs import service_ref
 from ..themes.theme_manager import get_theme_manager
 from ..utils.icon_loader import IconLoader
 from ..config import Config
@@ -25,6 +26,10 @@ from .renderers import BadgeRenderer, ThumbnailRenderer, TextRenderer
 
 
 class AnimationCardDelegate(QStyledItemDelegate):
+    # Resolved on every access, never cached - the library can change at runtime.
+    # See services/service_refs.py.
+    _db_service = service_ref(get_database_service, '_injected_db_service')
+
     """
     Custom delegate for rendering animation cards in grid and list modes
 
@@ -42,9 +47,13 @@ class AnimationCardDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self._view_mode = view_mode
         self._card_size = Config.DEFAULT_CARD_SIZE
+        # The thumbnail loader is deliberately cached: it is NOT library-bound
+        # (paths are passed per request), it's only its cache that is - and we
+        # connect to its signals below, so it must stay the same object across a
+        # library switch. reset_thumbnail_loader() clears its caches in place.
         self._thumbnail_loader = thumbnail_loader or get_thumbnail_loader()
         self._theme_manager = theme_manager or get_theme_manager()
-        self._db_service = db_service or get_database_service()
+        self._injected_db_service = db_service  # None in production
         self._edit_mode = False
 
         # Cache type badge pixmaps

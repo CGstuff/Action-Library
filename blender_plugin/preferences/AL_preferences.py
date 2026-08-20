@@ -14,8 +14,15 @@ class ANIMLIB_AddonPreferences(AddonPreferences, ANIMLIB_PreferencesProperties):
         box = layout.box()
         box.label(text="Animation Library Settings", icon='PREFERENCES')
         
+        # The desktop app owns the library location - this field mirrors it and
+        # is kept in sync automatically (see utils/library_path_sync.py). It's
+        # shown disabled rather than editable because anything typed here would
+        # be silently overwritten within a couple of seconds; the refresh button
+        # stays live as a manual escape hatch.
         row = box.row()
-        row.prop(self, "actions_library_path")
+        path_field = row.row()
+        path_field.enabled = False
+        path_field.prop(self, "actions_library_path")
         row.operator("animlib.sync_library_path", text="", icon='FILE_REFRESH')
 
         # Show current path status
@@ -25,7 +32,7 @@ class ANIMLIB_AddonPreferences(AddonPreferences, ANIMLIB_PreferencesProperties):
             else:
                 box.label(text=f"✗ Path not found: {self.actions_library_path}", icon='ERROR')
         else:
-            box.label(text="Please set the actions library path", icon='INFO')
+            box.label(text="Set the library path in the Action Library desktop app", icon='INFO')
         
         # Helper buttons
         row = box.row()
@@ -252,17 +259,20 @@ def get_library_path():
         return ""
 
 
-def get_desktop_app_library_path() -> str:
+def get_desktop_app_config_file() -> str:
     """
-    Read the library path configured in the Action Library desktop app.
+    Locate the desktop app's library pointer file.
 
     The desktop app stores its library path in:
       Windows: %LOCALAPPDATA%/ActionLibrary/library_path.txt
       macOS:   ~/Library/Application Support/ActionLibrary/library_path.txt
       Linux:   ~/.local/share/ActionLibrary/library_path.txt
 
+    This is deliberately on LOCAL disk, not in the library: it's the address OF
+    the library, so it can't live inside it.
+
     Returns:
-        The library path string, or empty string if not found.
+        Absolute path to library_path.txt, or empty string if it can't be built.
     """
     try:
         if sys.platform == 'win32':
@@ -276,16 +286,36 @@ def get_desktop_app_library_path() -> str:
         if not base:
             return ""
 
-        config_file = os.path.join(base, 'ActionLibrary', 'library_path.txt')
-        if not os.path.exists(config_file):
+        return os.path.join(base, 'ActionLibrary', 'library_path.txt')
+    except Exception:
+        return ""
+
+
+def get_desktop_app_library_path() -> str:
+    """
+    Read the library path configured in the Action Library desktop app.
+
+    Returns:
+        The library path string, or empty string if not found.
+    """
+    try:
+        config_file = get_desktop_app_config_file()
+        if not config_file or not os.path.exists(config_file):
             return ""
 
         with open(config_file, 'r', encoding='utf-8') as f:
             path = f.read().strip()
 
+        # Bail BEFORE normpath: os.path.normpath("") returns "." (the current
+        # working directory), not "". Normalizing first turns "no library
+        # configured" into a truthy path pointing at wherever Blender happens to
+        # have been launched from, which then sails past every `if not path`
+        # guard downstream.
+        if not path:
+            return ""
+
         # Normalize forward slashes to OS path separators
-        path = os.path.normpath(path)
-        return path if path else ""
+        return os.path.normpath(path)
     except Exception:
         return ""
 

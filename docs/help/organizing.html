@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Organizing — Action Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="top"><span class="brand">Action Library</span><a href="index.html">Home</a></nav>
+  <main>
+    <h1>Organizing</h1>
+    <p>Folders, tags, favorites, renaming and metadata — the work that makes a
+       library findable instead of just large.</p>
+
+    <h2 id="folders">Folders</h2>
+    <p>Create a folder with the <b>+</b> button in the header or by right-clicking
+       in the tree. Drag cards onto it to put them in. Drag folders onto each other
+       to nest them; drag one onto empty space to move it back to the top level.</p>
+
+    <h3 id="many-folders">An animation can be in many folders</h3>
+    <p>This is the important one, and it's deliberate. A <code>run</code> is
+       genuinely Locomotion <i>and</i> GameDev <i>and</i> Show01 at the same time —
+       so drag it into all three and it lives in all three. Folders here aren't a
+       filing cabinet where a thing can only be in one drawer.</p>
+    <ul>
+      <li>Dragging a card into a folder <b>adds</b> it there. It stays wherever
+          else it already is.</li>
+      <li>Dragging <b>moves nothing on disk</b>. Your files never move; a folder is
+          a way of looking at your library, not a place your files live.</li>
+      <li>To take an animation out of one folder, use <b>Remove from folder</b> on
+          its right-click menu. It stays in the others.</li>
+    </ul>
+
+    <h3 id="folder-rename">Renaming and deleting folders</h3>
+    <p>Right-click a folder to <b>rename</b> it. Renaming is safe: what's in a
+       folder doesn't depend on what the folder is called, so nothing is lost and
+       nothing needs re-filing. Subfolders come along with it.</p>
+    <p><b>Deleting</b> a folder asks first, and tells you what it will affect.
+       Your animations are <b>not</b> deleted — they, their versions and their
+       files all stay exactly as they are, and anything that was only in that
+       folder goes back to Home.</p>
+    <div class="note">Each folder also puts its name on its animations as a tag, so
+      you can find them by searching for the folder. Delete the folder and that tag
+      goes too — the folder owns it. Tags you added yourself are never touched.</div>
+
+    <h3>Folder icons</h3>
+    <p>Right-click a folder to give it an icon from a set of presets. Purely
+       cosmetic, genuinely useful once you have a dozen folders. Icons follow their
+       folder when you rename or move it.</p>
+
+    <h2 id="tags">Tags</h2>
+    <p>Tags are free-form labels: <code>combat</code>, <code>wip</code>,
+       <code>client_approved</code>, <code>needs_polish</code>. They're searchable,
+       and they drive the tag filter.</p>
+    <p>Tags come from three places: you set them when you capture, from the Blender
+       panel; each folder adds its own name to whatever's in it; and you can add
+       your own in the app. Turn on <b>edit mode</b> in the header, and the metadata
+       panel lets you add a tag with <b>+</b> and remove one with the <b>×</b> on
+       its badge. The bulk toolbar adds and removes tags across many animations at
+       once.</p>
+    <div class="note">Capitalisation doesn't create duplicates. Type
+      <code>combat</code> when the library already has <code>Combat</code> and you
+      get the existing tag, not a second one — whichever spelling was used first
+      is the one that sticks. Same for folder names: you can't have
+      <code>Combat</code> and <code>combat</code> side by side.</div>
+
+    <h2 id="favorites">Favorites</h2>
+    <p>Click the star on a card, or use its right-click menu. Starred animations
+       show up in the <b>Favorites</b> folder. It's the fastest thing in the app —
+       use it for the twenty animations you actually reach for.</p>
+
+    <h2 id="renaming">Renaming</h2>
+    <p>Select an animation and press <b>Rename</b> in the metadata panel. Action
+       Library renames the folder and every file inside it to match, and updates its
+       records — so the rename survives restarting, and nothing goes missing.</p>
+    <p>Which dialog you get depends on the animation:</p>
+    <ul>
+      <li><b>Simple rename</b> — edit the base name. The version suffix is managed
+          for you.</li>
+      <li><b>Template rename</b> — if the animation was named from a studio
+          template, you get the individual fields instead of one text box, and can
+          apply the rename to <b>all versions</b> at once.</li>
+    </ul>
+    <div class="tip">Renaming is safe. It's a real rename on disk and in the
+      database together, not a display name papering over the old one.</div>
+
+    <h2 id="metadata">Metadata</h2>
+    <p>The right-hand panel shows everything known about the selected animation:</p>
+    <table>
+      <tr><th>Field</th><th>Where it comes from</th></tr>
+      <tr><td><b>Name</b></td><td>Set at capture; changeable with Rename.</td></tr>
+      <tr><td><b>Description</b></td><td>Set at capture.</td></tr>
+      <tr><td><b>Tags</b></td><td>Capture, or folders. Removable in edit mode.</td></tr>
+      <tr><td><b>Rig type</b></td><td>Detected at capture. Drives the rig filter and the compatibility check.</td></tr>
+      <tr><td><b>Frame range / duration</b></td><td>Recorded at capture.</td></tr>
+      <tr><td><b>Author</b></td><td>Whoever captured it.</td></tr>
+      <tr><td><b>Status</b></td><td>You set it — see <a href="review.html">Review</a>.</td></tr>
+      <tr><td><b>Files</b></td><td>Where it lives on disk.</td></tr>
+    </table>
+    <div class="note">Description and author are set at capture and displayed
+      read-only in the app. If a description matters, write it in Blender's capture
+      panel while you still remember what it was for.</div>
+
+    <h2 id="bulk">Bulk edits</h2>
+    <p>Turn on <b>edit mode</b> in the header and select several cards
+       (<kbd>Ctrl</kbd>+click, or <kbd>Shift</kbd>+click for a range). The bulk
+       toolbar appears, and can:</p>
+    <ul>
+      <li>add a tag to everything selected, or remove one,</li>
+      <li>add the selection to a folder,</li>
+      <li>set a custom thumbnail <b>gradient</b> — a two-colour background behind
+          the cards. Colour-coding a group is a quick way to make it findable by
+          eye,</li>
+      <li>archive or delete the selection — see
+          <a href="removing.html">Archive &amp; delete</a>.</li>
+    </ul>
+
+    <h2 id="advice">What's actually worth doing</h2>
+    <p>The library only pays you back if you can find things. In rough order of
+       value for effort:</p>
+    <ol>
+      <li><b>Name things properly at capture.</b> Everything else is a workaround
+          for not having done this.</li>
+      <li><b>Star your top twenty.</b> Ten seconds, used daily.</li>
+      <li><b>Tag by context</b> — the character, the shot, the project.</li>
+      <li><b>Write descriptions</b> for anything unusual. Search reads them.</li>
+      <li><b>Folders whenever you like.</b> They're a view onto your library, not a
+          place your files live — so they're cheap to change your mind about, and
+          an animation can sit in as many as make sense.</li>
+    </ol>
+
+    <footer>Next: <a href="review.html">Review</a> ·
+      Back to <a href="index.html">documentation home</a>.</footer>
+  </main>
+  <script src="nav.js"></script>
+</body>
+</html>

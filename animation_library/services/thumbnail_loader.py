@@ -139,6 +139,11 @@ class ThumbnailLoader(QObject):
         # Load deduplication (Maya-inspired)
         self.pending_requests: Set[str] = set()
 
+        # Cache keys we inserted, per animation uuid. Lets invalidate_animation()
+        # remove EXACTLY this animation's entries instead of clearing the whole
+        # QPixmapCache (which nuked every thumbnail to refresh one).
+        self._cache_keys_by_uuid: Dict[str, Set[str]] = {}
+
         # Performance monitoring (Maya-inspired)
         self.load_times: list[float] = []
         self.cache_hits: int = 0
@@ -169,7 +174,8 @@ class ThumbnailLoader(QObject):
         """
         self.total_requests += 1
 
-        # Generate cache key
+        # Stable cache key (no filesystem access - this runs on every paint).
+        # Freshness comes from invalidate_animation(), not from the key.
         cache_key = self._generate_cache_key(
             animation_uuid,
             gradient_top,
@@ -223,8 +229,10 @@ class ThumbnailLoader(QObject):
         # Convert to pixmap
         pixmap = QPixmap.fromImage(image)
 
-        # Store in cache
+        # Store in cache, and remember the key so invalidate_animation() can
+        # remove exactly this animation's entries later.
         QPixmapCache.insert(cache_key, pixmap)
+        self._cache_keys_by_uuid.setdefault(uuid, set()).add(cache_key)
 
         # Emit signal
         self.thumbnail_loaded.emit(uuid, pixmap)
@@ -247,7 +255,7 @@ class ThumbnailLoader(QObject):
         gradient_bottom: Tuple[float, float, float]
     ) -> str:
         """
-        Generate cache key for thumbnail
+        Generate a STABLE cache key for a thumbnail.
 
         Args:
             animation_uuid: Animation UUID
@@ -257,7 +265,13 @@ class ThumbnailLoader(QObject):
         Returns:
             Unique cache key string
         """
-        # Include gradient colors in key so custom gradients cache separately
+        # NOTE: deliberately does NOT stat() the file. This runs on every repaint
+        # of every visible card, so a stat() here is a network round-trip per card
+        # per paint on a shared library - and worse, if that stat momentarily
+        # fails (or the path doesn't resolve) the key silently changes, so the
+        # cache misses and the thumbnail reloads/flickers. The key is kept STABLE
+        # and freshness is handled by explicit invalidate_animation() calls, which
+        # remove exactly this animation's keys (see _cache_keys_by_uuid).
         return f"{animation_uuid}_{gradient_top}_{gradient_bottom}"
 
     def _log_performance(self):
@@ -285,24 +299,31 @@ class ThumbnailLoader(QObject):
         }
 
     def clear_cache(self):
-        """Clear QPixmapCache"""
+        """Clear QPixmapCache (all thumbnails)"""
         QPixmapCache.clear()
+        self._cache_keys_by_uuid.clear()
 
     def invalidate_animation(self, animation_uuid: str):
         """
         Invalidate cached thumbnails for a specific animation.
 
-        Since QPixmapCache doesn't support wildcard removal, this clears
-        the entire cache. The thumbnails will be reloaded on demand.
+        Removes EXACTLY this animation's cache entries (every gradient variant we
+        inserted for it), so the next paint reloads the file from disk. Previously
+        this called QPixmapCache.clear(), which threw away every thumbnail in the
+        app just to refresh one.
+
+        Call this whenever an animation's thumbnail file changes on disk (e.g. the
+        preview_updated notification from Blender).
 
         Args:
             animation_uuid: UUID of the animation to invalidate
         """
-        # QPixmapCache.remove() requires exact key, but we don't track
-        # which gradient combinations were used. Clear all for safety.
-        QPixmapCache.clear()
+        # Remove this animation's cached pixmaps by their exact keys.
+        for key in self._cache_keys_by_uuid.pop(animation_uuid, set()):
+            QPixmapCache.remove(key)
 
-        # Also remove from pending requests if any
+        # Drop any in-flight requests for this animation so a stale load can't
+        # land in the cache after the file changed.
         keys_to_remove = [k for k in self.pending_requests if k.startswith(animation_uuid)]
         for key in keys_to_remove:
             self.pending_requests.discard(key)
@@ -332,4 +353,31 @@ def get_thumbnail_loader() -> ThumbnailLoader:
     return _thumbnail_loader_instance
 
 
-__all__ = ['ThumbnailLoader', 'ThumbnailLoadTask', 'get_thumbnail_loader']
+def reset_thumbnail_loader() -> None:
+    """Drop every cached thumbnail - e.g. when switching library.
+
+    Deliberately KEEPS the loader object and only clears its caches. The loader
+    isn't library-bound (paths are passed per request), and views connect to its
+    signals, so replacing the instance would silently break those connections and
+    thumbnails would simply stop appearing.
+
+    This is the one place where clearing the whole QPixmapCache is correct: on a
+    switch, every cached pixmap belongs to the previous library. Per-animation
+    refreshes must still use invalidate_animation().
+    """
+    global _thumbnail_loader_instance
+    if _thumbnail_loader_instance is None:
+        return
+
+    _thumbnail_loader_instance.clear_cache()
+    # Forget in-flight loads too, so a request issued against the old library
+    # can't land in the cache after the switch.
+    _thumbnail_loader_instance.pending_requests.clear()
+
+
+__all__ = [
+    'ThumbnailLoader',
+    'ThumbnailLoadTask',
+    'get_thumbnail_loader',
+    'reset_thumbnail_loader',
+]

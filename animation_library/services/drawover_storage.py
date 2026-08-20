@@ -914,9 +914,21 @@ def get_drawover_cache() -> DrawoverCache:
     return _cache_instance
 
 
+def reset_drawover_storage() -> None:
+    """Discard the global drawover storage and its cache.
+
+    Storage resolves its base path from the configured library, and the cache
+    holds rendered frames from it - both are library-specific.
+    """
+    global _storage_instance, _cache_instance
+    _storage_instance = None
+    _cache_instance = None
+
+
 __all__ = [
     'DrawoverStorage',
     'DrawoverCache',
     'get_drawover_storage',
-    'get_drawover_cache'
+    'get_drawover_cache',
+    'reset_drawover_storage'
 ]
