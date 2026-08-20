@@ -109,10 +109,38 @@ class ANIMLIB_PT_main_panel(Panel):
             else:
                 short_path = library_path
             status_box.label(text=short_path, icon='FILE_FOLDER')
+
+            # Version check against the app that owns the library. They're
+            # versioned together, so an older addon means "reinstall".
+            try:
+                from ..utils.version_check import check_outdated
+                outdated, addon_ver, app_ver = check_outdated(library_path)
+                if outdated:
+                    warn_box = layout.box()
+                    warn_box.alert = True
+                    warn_box.label(text="Addon is out of date", icon='ERROR')
+                    warn_box.label(text=f"Addon v{addon_ver}, library needs v{app_ver}")
+                    warn_box.label(text="Reinstall from the desktop app:")
+                    warn_box.label(text="Settings > Blender Integration")
+                elif app_ver != '?':
+                    # Confirmed match (or newer) - reassure the user it's current.
+                    # Silent when app_ver is unknown ('?'), since we can't confirm.
+                    status_box.label(text=f"Addon up to date (v{addon_ver})", icon='CHECKMARK')
+            except Exception:
+                # A version-check failure must never break the panel.
+                pass
         else:
             status_row.label(text="Not Configured", icon='ERROR')
             op = status_box.operator("preferences.addon_show", text="Open Preferences")
             op.module = __name__.split('.')[0]
+
+        # Addon updater notice - shows an "update available / install" box only
+        # when a newer release tag was found on the configured GitHub repo.
+        try:
+            from ..addon_updater_ops import update_notice_box_ui
+            update_notice_box_ui(self, context)
+        except Exception:
+            pass
 
         # Desktop App Launch Button - Prominent!
         layout.separator()

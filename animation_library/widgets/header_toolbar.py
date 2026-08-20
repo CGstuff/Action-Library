@@ -560,6 +560,17 @@ class HeaderToolbar(QWidget):
         self.card_size_changed.emit(size)
         self._event_bus.set_card_size(size)
 
+    def get_card_size(self) -> int:
+        """Current card size - for persisting across sessions."""
+        return self._card_size
+
+    def set_card_size(self, size: int):
+        """Restore a saved card size. Moving the slider drives the view through
+        the normal change signal, so this both updates the control and resizes
+        the cards."""
+        size = max(Config.MIN_CARD_SIZE, min(Config.MAX_CARD_SIZE, int(size)))
+        self._size_slider.setValue(size)
+
     def _on_edit_mode_clicked(self):
         """Handle edit mode button click"""
 

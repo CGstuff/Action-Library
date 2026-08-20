@@ -18,26 +18,39 @@ _auto_sync_handler_added = False
 
 @persistent
 def _auto_sync_library_path(dummy):
-    """Auto-sync library path from desktop app on file load (first-time setup only)."""
+    """Sync the library path from the desktop app on file load.
+
+    This used to bail out early whenever the addon already had *any* path set,
+    which made it a one-time setup step: the first sync worked, and after that
+    the addon never looked at the desktop app again. Changing the library
+    location in the app therefore left Blender pointed at the old one until you
+    hit the refresh button by hand.
+
+    The desktop app owns the library location, so we always take its value.
+    """
     try:
-        addon_name = __name__.split('.')[0]
-        if addon_name not in bpy.context.preferences.addons:
-            return
-        prefs = bpy.context.preferences.addons[addon_name].preferences
-        # Only auto-sync if the addon has no path configured
-        if prefs.actions_library_path:
-            return
-        from .preferences.AL_preferences import get_desktop_app_library_path
-        desktop_path = get_desktop_app_library_path()
-        if desktop_path:
-            prefs.actions_library_path = desktop_path
-            print(f"[Action Library] Auto-synced library path: {desktop_path}")
+        from .utils.library_path_sync import sync_now
+        sync_now(force=True)
     except Exception:
         pass
 
 
 def register():
     global _auto_sync_handler_added
+
+    # Addon updater - checks github.com/CGstuff/Action-Library for newer release
+    # tags and can update the addon in place.
+    #
+    # Wrapped: the updater is an OPTIONAL extra, so a failure inside it must
+    # never stop Action Library itself from loading. (It did exactly that once -
+    # an invalid config value raised during its register(), which aborted this
+    # whole function and left the addon with no panel and no preferences.)
+    try:
+        from . import addon_updater_ops
+        addon_updater_ops.register(bl_info)
+    except Exception as e:
+        print(f"[Action Library] Addon updater failed to register (continuing without it): {e}")
+
     # Register icon loader first
     icon_loader.register()
     # Register all classes AFTER properties are defined
@@ -48,8 +61,24 @@ def register():
         bpy.app.handlers.load_post.append(_auto_sync_library_path)
         _auto_sync_handler_added = True
 
+    # Watch the desktop app's pointer file, so changing the library location in
+    # the app reaches Blender within a couple of seconds instead of waiting for
+    # the next file load.
+    from .utils.library_path_sync import start_path_sync
+    start_path_sync()
+
 def unregister():
     global _auto_sync_handler_added
+
+    try:
+        from . import addon_updater_ops
+        addon_updater_ops.unregister()
+    except Exception:
+        pass
+
+    from .utils.library_path_sync import stop_path_sync
+    stop_path_sync()
+
     # Remove auto-sync handler
     if _auto_sync_handler_added and _auto_sync_library_path in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_auto_sync_library_path)

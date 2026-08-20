@@ -246,6 +246,16 @@ class ANIMLIB_AddonPreferences(AddonPreferences, ANIMLIB_PreferencesProperties):
         if self.experimental_features:
             box.label(text="Experimental: Slot Management", icon='DOCUMENTS')
 
+        # Addon updater UI - "Check now", auto-check interval, update button.
+        try:
+            from .. import addon_updater_ops
+            box = layout.box()
+            box.label(text="Updates", icon='FILE_REFRESH')
+            addon_updater_ops.update_settings_ui(self, context, box)
+        except Exception:
+            # The updater UI must never break the preferences panel.
+            pass
+
 
 def get_library_path():
     """Get the actions library path from preferences"""

@@ -665,11 +665,9 @@ class MetadataPanel(QWidget):
             self._add_info_row(grid, row, "File Size:", f"{file_size:.2f} MB")
             row += 1
 
-        # Author
-        author = self._animation.get('author')
-        if author:
-            self._add_info_row(grid, row, "Author:", author)
-            row += 1
+        # Author - editable (always shown, so there's somewhere to add one).
+        self._add_author_row(grid, row, self._animation.get('author') or '')
+        row += 1
 
         # Created date
         created = self._animation.get('created_date')
@@ -926,6 +924,60 @@ class MetadataPanel(QWidget):
 
         grid.addWidget(label_widget, row, 0, Qt.AlignmentFlag.AlignTop)
         grid.addWidget(value_container, row, 1)
+
+    def _add_author_row(self, grid: QGridLayout, row: int, author: str):
+        """Author row with an Edit button. Author used to be capture-only; this
+        makes it fixable in the app (writes DB + JSON - see set_author)."""
+        label_widget = QLabel("Author:")
+        label_font = QFont()
+        label_font.setBold(True)
+        label_widget.setFont(label_font)
+
+        value_container = QWidget()
+        value_layout = QHBoxLayout(value_container)
+        value_layout.setContentsMargins(0, 0, 0, 0)
+        value_layout.setSpacing(8)
+
+        author_label = QLabel(author if author else "—")
+        author_label.setWordWrap(True)
+        if not author:
+            author_label.setStyleSheet("color: gray; font-style: italic;")
+        value_layout.addWidget(author_label, 1)
+
+        edit_btn = QPushButton("Edit")
+        edit_btn.setFixedWidth(50)
+        edit_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        edit_btn.setStyleSheet("QPushButton { padding: 2px 8px; font-size: 9pt; }")
+        edit_btn.clicked.connect(self._on_edit_author_clicked)
+        value_layout.addWidget(edit_btn)
+
+        grid.addWidget(label_widget, row, 0, Qt.AlignmentFlag.AlignTop)
+        grid.addWidget(value_container, row, 1)
+
+    def _on_edit_author_clicked(self):
+        """Prompt for a new author and save it (database + JSON sidecar)."""
+        from PyQt6.QtWidgets import QInputDialog
+
+        if not self._animation:
+            return
+
+        current = self._animation.get('author') or ''
+        new_author, ok = QInputDialog.getText(self, "Edit Author", "Author:", text=current)
+        if not ok:
+            return
+
+        new_author = new_author.strip()
+        if new_author == current:
+            return
+
+        uuid = self._animation.get('uuid')
+        if self._get_db_service().set_author(uuid, new_author):
+            # Update the in-memory copy only after the write succeeds.
+            self._animation['author'] = new_author
+            self._update_file_section()
+            self._event_bus.animation_updated.emit(uuid)
+        else:
+            QMessageBox.warning(self, "Edit Author", "Could not save the author.")
 
     def _on_rename_clicked(self):
         """Handle rename button click"""

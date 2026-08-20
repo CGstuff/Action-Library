@@ -276,6 +276,19 @@ class DatabaseService:
         self.sync_metadata_to_json(uuid)
         return True
 
+    def set_author(self, uuid: str, author: str) -> bool:
+        """Set an animation's author, in the database AND the JSON sidecar.
+
+        Same rationale as set_description: author is capture-only otherwise, and
+        a hand-edited sidecar never reaches the app (the scanner doesn't re-read
+        that field for an animation it already knows). Writing both keeps the app
+        the one place to change it, with the sidecar always in step.
+        """
+        if not self.animations.update(uuid, {'author': author}):
+            return False
+        self.sync_metadata_to_json(uuid)
+        return True
+
     def _update_animation_json_tags(self, animation_uuid: str, tags) -> bool:
         """Update animation's JSON file with current tags.
 

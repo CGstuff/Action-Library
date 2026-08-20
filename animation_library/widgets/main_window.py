@@ -6,6 +6,7 @@ Inspired by: Current animation_library structure
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import List, Tuple
@@ -441,6 +442,13 @@ class MainWindow(QMainWindow):
                     # If conversion fails, use defaults
                     self._splitter.setSizes(Config.DEFAULT_SPLITTER_SIZES)
 
+        # Card size - previously reset to the default on every launch.
+        if settings.contains("view/card_size"):
+            try:
+                self._header_toolbar.set_card_size(int(settings.value("view/card_size")))
+            except (ValueError, TypeError):
+                pass
+
     def _save_settings(self):
         """Save window and splitter settings"""
 
@@ -454,6 +462,9 @@ class MainWindow(QMainWindow):
 
         # Splitter sizes
         settings.setValue("splitter/sizes", self._splitter.sizes())
+
+        # Card size
+        settings.setValue("view/card_size", self._header_toolbar.get_card_size())
 
     def _load_animations(self):
         """Load animations from database, auto-sync if needed"""
@@ -521,6 +532,11 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning(f"Could not sync protocol to library: {e}")
 
+        # Stamp the app's version into the library so the Blender addon can warn
+        # when it's older than the app (the two are versioned together, so an old
+        # addon on a new library is the source of most odd behaviour).
+        self._write_app_version_marker()
+
         self._load_animations()
 
         if not initial:
@@ -531,6 +547,21 @@ class MainWindow(QMainWindow):
 
         self._setup_queue_watcher()
         self._setup_library_watcher()
+
+    def _write_app_version_marker(self):
+        """Write the app version to {library}/.meta/app_version.txt.
+
+        The Blender addon reads this and compares it to its own version, so it
+        can tell the user to reinstall when it's out of date. Best-effort - a
+        read-only or offline library must not stop the app loading.
+        """
+        try:
+            marker = Config.get_database_folder() / 'app_version.txt'
+            tmp = marker.with_suffix('.tmp')
+            tmp.write_text(Config.APP_VERSION, encoding='utf-8')
+            os.replace(tmp, marker)
+        except OSError as e:
+            logger.warning(f"Could not write app version marker: {e}")
 
     def _teardown_library_bindings(self):
         """Stop watching/polling the current library and release its open files.

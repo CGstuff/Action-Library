@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.3] - 2026-08-20
+
+### Added
+
+- **Update the Addon from Blender** - The Blender addon can now check GitHub for new releases and update itself in place, from its own preferences (Edit > Preferences > Add-ons > Action Library > Updates). It backs up the current addon before updating, and an available update is also flagged in the N-panel. Installing from the desktop app still works as before.
+- **Addon Version Warning in the N-panel** - The addon now shows whether it matches the desktop app that owns your library: a confirmation when it's current, or a warning telling you to reinstall when it's older. The app and the addon are versioned together, so a mismatch is the cause of most odd behaviour.
+- **Edit Author in the App** - The author field is now editable from the metadata panel, alongside the description. Writes to both the database and the JSON sidecar.
+
+### Changed
+
+- **Card Size is Remembered** - The grid card-size slider now persists between sessions instead of resetting to the default on every launch.
+
 ## [1.5.2] - 2026-08-20
 
 ### Added
