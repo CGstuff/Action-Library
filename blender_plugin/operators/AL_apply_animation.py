@@ -874,10 +874,30 @@ class ANIMLIB_OT_apply_animation(Operator):
             # Get or create action
             existing_action = target_armature.animation_data.action
             if not existing_action:
-                # No existing action, create new one
+                # No existing action, create new one.
+                #
+                # A bare bpy.data.actions.new() has no layer, strip or slot. On
+                # Blender 5.0+ new_action_fcurve() needs all three to place an
+                # fcurve, so without this every fcurve came back None and the
+                # whole insert failed - leaving an empty, slotless action that
+                # drives nothing. Applying "At Playhead" onto a rig with no
+                # action at all hit this every time.
                 logger.debug("INSERT mode: No existing action, creating new action")
                 existing_action = bpy.data.actions.new(name=f"Inserted_{source_action.name}")
                 target_armature.animation_data.action = existing_action
+
+                from ..utils.utils import init_action_for_blender_5
+                new_slot = init_action_for_blender_5(
+                    existing_action, slot_name=f"Slot_{int(time.time())}"
+                )
+                if new_slot:
+                    # Bind the slot, or the action still won't drive the rig.
+                    # Picked up below as active_slot, so no duplicate is made.
+                    try:
+                        target_armature.animation_data.action_slot = new_slot
+                        logger.debug(f"INSERT mode: bound new slot '{new_slot.name}'")
+                    except Exception as e:
+                        logger.warning(f"Could not bind action slot: {e}")
             else:
                 logger.debug(f"INSERT mode: Inserting into existing action '{existing_action.name}'")
 
@@ -1030,6 +1050,16 @@ class ANIMLIB_OT_apply_animation(Operator):
                 if not existing_fcurve:
                     existing_fcurve = new_action_fcurve(existing_action, source_fcurve.data_path, index=source_fcurve.array_index)
 
+                    if not existing_fcurve:
+                        # Couldn't create the channel - skip it rather than
+                        # crashing the whole insert on a None further down, and
+                        # name the channel so the cause is findable.
+                        logger.warning(
+                            f"INSERT mode: could not create fcurve for "
+                            f"{source_fcurve.data_path}[{source_fcurve.array_index}] - skipping"
+                        )
+                        continue
+
                     # Assign to active slot if using slot mode
                     if active_slot and hasattr(existing_fcurve, 'action_slot'):
                         existing_fcurve.action_slot = active_slot
@@ -1087,7 +1117,60 @@ class ANIMLIB_OT_apply_animation(Operator):
                         # Extract the component for this fcurve (array_index: 0=W, 1=X, 2=Y, 3=Z)
                         value = new_quat[source_fcurve.array_index]
 
-                    existing_fcurve.keyframe_points.insert(new_frame, value)
+                    new_kf = existing_fcurve.keyframe_points.insert(new_frame, value)
+
+                    # Carry the SOURCE's curve shape across.
+                    #
+                    # insert() only stores frame + value. Everything else is
+                    # taken from the preceding key in the destination channel -
+                    # or, when that channel is empty, from Blender's "Default
+                    # Interpolation" preference. That's why applying at the
+                    # playhead onto a rig with no action smoothed out stepped
+                    # blocking, while doing it after another apply looked fine:
+                    # it was inheriting, never preserving.
+                    if new_kf is not None:
+                        try:
+                            new_kf.interpolation = keyframe.interpolation
+                            new_kf.easing = keyframe.easing
+                            new_kf.type = keyframe.type
+                            new_kf.amplitude = keyframe.amplitude
+                            new_kf.back = keyframe.back
+                            new_kf.period = keyframe.period
+
+                            # Handles are ABSOLUTE positions, so they have to
+                            # travel with the key: the same frame offset, plus
+                            # the same value delta when the value was changed
+                            # (root-motion continuity).
+                            dy = value - keyframe.co.y
+                            if reverse_animation:
+                                # Time is mirrored, so handles swap sides too.
+                                def _map_x(hx):
+                                    return (frame_end - (hx - frame_start)) + frame_offset
+                                l_type = keyframe.handle_right_type
+                                r_type = keyframe.handle_left_type
+                                l_pos = (_map_x(keyframe.handle_right.x),
+                                         keyframe.handle_right.y + dy)
+                                r_pos = (_map_x(keyframe.handle_left.x),
+                                         keyframe.handle_left.y + dy)
+                            else:
+                                l_type = keyframe.handle_left_type
+                                r_type = keyframe.handle_right_type
+                                l_pos = (keyframe.handle_left.x + frame_offset,
+                                         keyframe.handle_left.y + dy)
+                                r_pos = (keyframe.handle_right.x + frame_offset,
+                                         keyframe.handle_right.y + dy)
+
+                            # Types before positions: AUTO/VECTOR recompute
+                            # their own positions, FREE/ALIGNED keep what we set.
+                            new_kf.handle_left_type = l_type
+                            new_kf.handle_right_type = r_type
+                            new_kf.handle_left = l_pos
+                            new_kf.handle_right = r_pos
+                        except Exception as e:
+                            # Curve shape is a refinement - never lose the
+                            # keyframe itself over it.
+                            logger.debug(f"Could not copy curve shape: {e}")
+
                     copied_count += 1
 
                 # Update fcurve

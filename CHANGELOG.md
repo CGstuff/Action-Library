@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.4] - 2026-08-20
+
+### Fixed
+
+- **Apply At Playhead Did Nothing on a Rig With No Action** - Applying at the playhead onto a rig that had no action yet produced an empty action that didn't drive anything. The action was created without the layer/strip/slot structure Blender 4.4+ needs, so no keyframe channels could be made and the whole insert failed silently. It now builds and binds the slot properly. A channel that still can't be created is skipped with a named warning instead of aborting the rest of the animation.
+- **Apply At Playhead Flattened Curve Interpolation** - Pasting at the playhead only carried each keyframe's frame and value, so interpolation was inherited from whatever was already in the destination channel — or from Blender's Default Interpolation preference when the channel was empty. Stepped blocking came back smoothed, and hand-tuned eases were lost. Interpolation, easing, keyframe type and bezier handles now come across from the source, with handles offset to the paste position (and mirrored when applying reversed). Thanks to the report on GitHub that pinned this down.
+
 ## [1.5.3] - 2026-08-20
 
 ### Added
