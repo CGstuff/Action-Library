@@ -1,16 +1,9 @@
 {
-    "last_check": "2026-08-20 13:11:51.322620",
+    "last_check": "",
     "backup_date": "",
-    "update_ready": true,
+    "update_ready": false,
     "ignore": false,
     "just_restored": false,
     "just_updated": false,
-    "version_text": {
-        "link": "https://api.github.com/repos/CGstuff/Action-Library/zipball/refs/tags/1.5.2",
-        "version": [
-            1,
-            5,
-            2
-        ]
-    }
+    "version_text": {}
 }

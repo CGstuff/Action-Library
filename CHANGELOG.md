@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.6] - 2026-08-25
+
+### Fixed
+
+- **The App Reported the Wrong Version** - 1.5.4 and 1.5.5 both installed and reported themselves as "1.5.3". The build stamps the version from the newest git tag it can see, and the clone the releases are built from was missing the newer tags, so both releases went out carrying the old number. The Blender addon bundled with those builds was stamped from the same number, so its `bl_info` was wrong too - which could produce a spurious version-mismatch warning in the N-panel against an addon that was actually up to date. The build now refuses to run if the tag it detects doesn't match the top entry in this changelog, instead of silently shipping a mislabelled build.
+- **Antivirus Flagging and Closing the App** - the Windows build was compressed with UPX, an executable packer commonly used to obfuscate malware, which meant antivirus heuristics flagged it on sight - in some cases terminating the app a few seconds after launch. In this build layout UPX was also compressing every bundled library, multiplying the detections. It's now disabled. The download is larger as a result. This reduces false positives but does not eliminate them: the application is not yet code-signed, and unsigned installers are always treated with suspicion. If your antivirus still objects, reporting it to your vendor as a false positive is the fastest route, and it genuinely helps other users.
+
 ## [1.5.5] - 2026-08-25
 
 ### Added

@@ -125,7 +125,11 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX packing is one of the biggest antivirus false-positive triggers -
+    # compressed/packed executables are a malware staple, so heuristic engines
+    # flag them on sight. Users reported AV killing the app seconds after launch.
+    # The build is bigger without it; that is the correct trade.
+    upx=False,
     console=False,  # No console window (windowed mode)
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -141,7 +145,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,          # see the note on EXE() above - covers bundled DLLs too
     upx_exclude=[],
     name='ActionLibrary',
 )

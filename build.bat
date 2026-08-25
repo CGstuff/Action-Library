@@ -71,6 +71,34 @@ if defined MAJOR (
     echo       Parsed version: %MAJOR%.%MINOR%.%PATCH%
 )
 
+REM Cross-check the tag against the changelog before building.
+REM `git describe` returns the newest tag REACHABLE IN THIS CLONE. Releases are
+REM tagged on the public mirror, so building from a clone that lacks those tags
+REM silently stamps an old version - 1.5.4 and 1.5.5 both shipped labelled 1.5.3
+REM that way, and the same number is injected into the addon's bl_info below.
+REM Fail loudly rather than ship a mislabelled build.
+powershell -NoProfile -Command "$m=[regex]::Match((Get-Content CHANGELOG.md -Raw), '##\s*\[([0-9.]+)\]'); Write-Output $m.Groups[1].Value" > "%TEMP%\al_changelog_ver.txt"
+set /p CHANGELOG_VERSION=<"%TEMP%\al_changelog_ver.txt"
+del "%TEMP%\al_changelog_ver.txt"
+if not "%CHANGELOG_VERSION%"=="" if not "%CLEAN_VERSION%"=="%CHANGELOG_VERSION%" (
+    echo.
+    echo   ============================================================
+    echo   ERROR: version mismatch - refusing to build.
+    echo.
+    echo     newest git tag in this clone : %CLEAN_VERSION%
+    echo     newest CHANGELOG.md entry    : %CHANGELOG_VERSION%
+    echo.
+    echo   The app version and the addon bl_info are both stamped from
+    echo   the git tag, so this build would ship labelled %CLEAN_VERSION%.
+    echo.
+    echo   Fix: tag this clone before building -
+    echo        git tag %CHANGELOG_VERSION%
+    echo   ============================================================
+    echo.
+    if exist animation_library\version.txt del animation_library\version.txt
+    exit /b 1
+)
+
 REM Inject version into Blender addon __init__.py.
 REM The addon source's bl_info["version"] tuple gets rewritten so the bundled
 REM copy (PyInstaller picks up blender_plugin/ as-is) ships with the right

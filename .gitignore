@@ -26,8 +26,10 @@ MANIFEST
 
 # Virtual Environment
 venv/
+.venv/
 ENV/
 env/
+.env/
 
 # IDEs
 .vscode/
@@ -72,3 +74,23 @@ storage/
 
 # Theme cache
 animation_library/themes/custom/*.json.bak
+
+# Blender addon updater scratch space.
+# The CGCookie updater backs up the current addon, downloads the release zip and
+# extracts it - all inside the addon folder. On a DEV install (Blender's addon
+# symlinked to blender_plugin/) that lands in the working tree: ~260MB of
+# backups, an extracted copy of the whole repo, and a ~47MB source.zip. Worse,
+# each run backs up the PREVIOUS run's scratch, so it nests.
+# The folder is named after updater.addon, which has already changed twice
+# (bp_updater -> blender_plugin_updater -> animlib_updater), so match the
+# suffix rather than any one name.
+blender_plugin/*_updater/
+
+# Filenames that are actually a broken shell command.
+# A quoting slip turns `mkdir "...dir" && cp a b` into a single file literally
+# named `dir" && cp a b`. It has happened twice here (two stale theme copies,
+# and a pair in the addon folder), and it spreads by copying a folder between
+# the private and public repos. Windows stores the illegal characters as
+# private-use codepoints (U+F022 for `"`, U+F03A for `:`), so match the ASCII
+# ` && ` that survives in the name instead.
+* && *
