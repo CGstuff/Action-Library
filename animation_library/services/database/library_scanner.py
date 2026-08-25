@@ -293,19 +293,28 @@ class LibraryScanner:
                     self._animations.update(uuid, updates)
                 return False  # Already exists (but may have updated flags/naming)
 
-            # Ensure folder_id is set
-            # Priority: folder_id from JSON > folder_path lookup > root folder
-            if 'folder_id' not in animation_data or animation_data['folder_id'] is None:
-                # Try to resolve folder_path to folder_id
+            # Ensure folder_id points at a folder that EXISTS in THIS library.
+            # Priority: valid folder_id from JSON > folder_path lookup > root.
+            #
+            # The id in the sidecar was assigned by whichever library the
+            # animation was captured in. Copy an animation folder into a
+            # different library and that id means nothing here - it used to be
+            # trusted blindly, so the insert hit a FOREIGN KEY violation and the
+            # animation was silently dropped. Anything filed in a folder simply
+            # vanished when moved between libraries. folder_path is the portable
+            # one; the id is only a local shortcut.
+            folder_id = animation_data.get('folder_id')
+            if folder_id is not None and not self._folders.get_by_id(folder_id):
+                print(f"[SCAN] folder_id {folder_id} from '{name}' is not in this "
+                      f"library - resolving by folder_path instead")
+                folder_id = None
+
+            if folder_id is None:
                 folder_path = animation_data.get('folder_path')
-                if folder_path:
-                    folder = self._folders.get_by_path(folder_path)
-                    if folder:
-                        animation_data['folder_id'] = folder['id']
-                    else:
-                        animation_data['folder_id'] = self._folders.get_root_id()
-                else:
-                    animation_data['folder_id'] = self._folders.get_root_id()
+                folder = self._folders.get_by_path(folder_path) if folder_path else None
+                folder_id = folder['id'] if folder else self._folders.get_root_id()
+
+            animation_data['folder_id'] = folder_id
 
             # Handle versioning: if this is a new version in an existing group,
             # clear is_latest on other versions in the same group

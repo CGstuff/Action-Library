@@ -151,6 +151,23 @@ class ThemeTab(QWidget):
         """)
         ui_layout.addWidget(self.hide_toggles_check)
 
+        # Animated previews - mirrors the header's "Previews" toggle. Here too
+        # because a toggle only in the toolbar is easy to never notice, and this
+        # is where people look for display preferences.
+        self.animated_previews_check = QCheckBox("Play previews on the cards")
+        self.animated_previews_check.setToolTip(
+            "Animate each card in the grid instead of showing a still thumbnail. "
+            "Previews are prepared the first time you view them and cached."
+        )
+        self.animated_previews_check.setStyleSheet(self.hide_toggles_check.styleSheet())
+        settings = QSettings(Config.APP_AUTHOR, Config.APP_NAME)
+        from ...services.sprite_playback import DEFAULT_ANIMATED_PREVIEWS
+        self.animated_previews_check.setChecked(
+            settings.value(
+                "view/animated_previews", DEFAULT_ANIMATED_PREVIEWS, type=bool))
+        self.animated_previews_check.toggled.connect(self._on_animated_previews_toggled)
+        ui_layout.addWidget(self.animated_previews_check)
+
         layout.addWidget(ui_group)
 
         # Management Buttons
@@ -336,6 +353,23 @@ class ThemeTab(QWidget):
         from ...events.event_bus import get_event_bus
         event_bus = get_event_bus()
         event_bus.settings_changed.emit("hide_shortcut_toggles", hide)
+
+
+    def _on_animated_previews_toggled(self, enabled: bool):
+        """Keep the header toggle and this checkbox in agreement.
+
+        The header button owns the behaviour (it persists the setting and starts
+        the service), so drive that rather than duplicating the logic here.
+        """
+        from PyQt6.QtWidgets import QApplication
+        from ..main_window import MainWindow
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, MainWindow):
+                widget._header_toolbar._animated_btn.setChecked(enabled)
+                return
+        # No window found - at least persist the choice.
+        QSettings(Config.APP_AUTHOR, Config.APP_NAME).setValue(
+            "view/animated_previews", enabled)
 
     def _on_customize_clicked(self):
         """Open theme editor dialog"""

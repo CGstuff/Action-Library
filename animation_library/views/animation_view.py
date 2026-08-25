@@ -5,6 +5,7 @@ Pattern: QListView with Model/View architecture
 Inspired by: Hybrid plan + Maya Studio Library
 """
 
+import logging
 import os
 from typing import Optional
 from PyQt6.QtWidgets import QListView, QAbstractItemView
@@ -20,6 +21,8 @@ from ..services.socket_client import get_socket_client
 from ..events.event_bus import get_event_bus
 from ..widgets.hover_video_popup import HoverVideoPopup
 from ..config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class AnimationView(QListView):
@@ -83,6 +86,21 @@ class AnimationView(QListView):
 
         # Hover video popup (lazy loading - only create when first needed)
         self._hover_popup: Optional[HoverVideoPopup] = None
+
+        # Animated previews. The service only builds sheets for cards that are
+        # actually on screen, so it needs telling when that set changes - and it
+        # asks for a repaint when a frame advances.
+        from ..services.sprite_playback import get_sprite_playback
+        self._sprite_playback = get_sprite_playback()
+        self._sprite_playback.frame_advanced.connect(self._repaint_animated_cards)
+        # Scrolling fires continuously; coalesce so a flick doesn't queue a build
+        # for every row it passes over.
+        self._sprite_visibility_timer = QTimer(self)
+        self._sprite_visibility_timer.setSingleShot(True)
+        self._sprite_visibility_timer.setInterval(120)
+        self._sprite_visibility_timer.timeout.connect(self._report_visible_sprites)
+        self.verticalScrollBar().valueChanged.connect(
+            lambda _: self._sprite_visibility_timer.start())
 
         # Pose blending state
         self._blend_active = False
@@ -585,6 +603,73 @@ class AnimationView(QListView):
             uuid = index.data(AnimationRole.UUIDRole)
             if uuid:
                 self.animation_context_menu.emit(uuid, event.globalPos())
+
+
+    # ==================== ANIMATED PREVIEWS ====================
+
+    def _visible_entries(self) -> dict:
+        """{uuid: preview_path} for the cards currently on screen.
+
+        Walks outward from the first visible index rather than scanning the whole
+        model, so the cost is proportional to what's on screen, not to library
+        size.
+        """
+        model = self.model()
+        if model is None:
+            return {}
+        viewport_rect = self.viewport().rect()
+        first = self.indexAt(viewport_rect.topLeft())
+        row = first.row() if first.isValid() else 0
+        entries = {}
+        total = model.rowCount()
+        while 0 <= row < total:
+            index = model.index(row, 0)
+            rect = self.visualRect(index)
+            if rect.top() > viewport_rect.bottom():
+                break
+            if rect.intersects(viewport_rect):
+                uuid = index.data(AnimationRole.UUIDRole)
+                if uuid:
+                    entries[uuid] = index.data(AnimationRole.PreviewPathRole) or ""
+            row += 1
+        return entries
+
+    def _repaint_animated_cards(self):
+        """Repaint only the cards that are actually animating.
+
+        Repainting the whole viewport meant every visible card was redrawn 15
+        times a second - background, badges and text included - even the ones
+        with no sheet. Measured at 500 animations that was ~22% of a core with
+        only 6 of 26 cards animating.
+        """
+        model = self.model()
+        if model is None:
+            return
+        viewport_rect = self.viewport().rect()
+        first = self.indexAt(viewport_rect.topLeft())
+        row = first.row() if first.isValid() else 0
+        total = model.rowCount()
+        while 0 <= row < total:
+            index = model.index(row, 0)
+            rect = self.visualRect(index)
+            if rect.top() > viewport_rect.bottom():
+                break
+            if rect.intersects(viewport_rect):
+                uuid = index.data(AnimationRole.UUIDRole)
+                if uuid and self._sprite_playback.has_sheet(uuid):
+                    self.viewport().update(rect)
+            row += 1
+
+    def _report_visible_sprites(self):
+        """Hand the playback service the current on-screen set."""
+        try:
+            self._sprite_playback.set_visible(self._visible_entries())
+        except Exception as e:
+            logger.debug(f"Could not update sprite visibility: {e}")
+
+    def refresh_animated_previews(self):
+        """Re-report visibility - after a model reload, resize or mode change."""
+        self._sprite_visibility_timer.start()
 
     def resizeEvent(self, event: QResizeEvent):
         """Handle resize to adjust grid layout"""

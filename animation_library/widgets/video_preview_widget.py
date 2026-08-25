@@ -195,12 +195,16 @@ class VideoPreviewWidget(QWidget):
 
     # ==================== PUBLIC API ====================
 
-    def load_video(self, video_path: str) -> bool:
+    def load_video(self, video_path: str, autoplay: bool = False) -> bool:
         """
         Load video file for preview.
 
         Args:
             video_path: Path to video file
+            autoplay: Start playing as soon as it's loaded. Off by default so
+                compare mode keeps its synced manual control - only the metadata
+                panel opts in, where having to press play on every card you click
+                is just friction.
 
         Returns:
             True if loaded successfully
@@ -236,6 +240,8 @@ class VideoPreviewWidget(QWidget):
         # Show first frame
         if self._show_current_frame():
             self._enable_controls()
+            if autoplay:
+                self.play()
             return True
         else:
             self._video_label.setText("Failed to read video")

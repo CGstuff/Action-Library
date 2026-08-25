@@ -55,6 +55,21 @@ class ThumbnailRenderer:
         if not gradient_top or not gradient_bottom:
             gradient_top, gradient_bottom = theme_manager.get_gradient_colors()
 
+        # Animated preview, if this card has one playing. Sprite frames are
+        # keyed to transparent like the thumbnails are, so they composite onto
+        # the same gradient and a card looks identical playing or still.
+        try:
+            from ...services.sprite_playback import get_sprite_playback
+            frame = get_sprite_playback().get_frame(uuid)
+        except Exception:
+            frame = None
+
+        if frame is not None:
+            sheet, src = frame
+            ThumbnailRenderer._fill_gradient(painter, rect, gradient_top, gradient_bottom)
+            painter.drawPixmap(rect, sheet, src)
+            return
+
         # Try to load thumbnail
         thumbnail_path = Path(thumbnail_path_str)
 
@@ -88,6 +103,20 @@ class ThumbnailRenderer:
             ThumbnailRenderer.draw_loading_placeholder(painter, rect, theme_manager)
 
     @staticmethod
+    def _fill_gradient(painter: QPainter, rect: QRect, top, bottom) -> None:
+        """Paint the card's gradient behind a transparent sprite frame.
+
+        Thumbnails get composited onto this gradient when they're loaded; sprite
+        frames keep their alpha and are drawn over it here instead, so both
+        routes end up looking the same.
+        """
+        from PyQt6.QtGui import QLinearGradient, QBrush
+        grad = QLinearGradient(rect.x(), rect.y(), rect.x(), rect.y() + rect.height())
+        grad.setColorAt(0.0, QColor(int(top[0] * 255), int(top[1] * 255), int(top[2] * 255)))
+        grad.setColorAt(1.0, QColor(int(bottom[0] * 255), int(bottom[1] * 255), int(bottom[2] * 255)))
+        painter.fillRect(rect, QBrush(grad))
+
+    @staticmethod 
     def draw_placeholder(painter: QPainter, rect: QRect, theme_manager) -> None:
         """
         Draw placeholder when no thumbnail exists.

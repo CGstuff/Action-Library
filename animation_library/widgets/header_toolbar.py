@@ -130,6 +130,7 @@ class HeaderToolbar(QWidget):
     view_mode_changed = pyqtSignal(str)  # "grid" or "list"
     card_size_changed = pyqtSignal(int)
     edit_mode_changed = pyqtSignal(bool)
+    animated_previews_toggled = pyqtSignal(bool)  # play previews on the cards
     delete_clicked = pyqtSignal()
     refresh_library_clicked = pyqtSignal()
     settings_clicked = pyqtSignal()  # New: settings button
@@ -244,6 +245,21 @@ class HeaderToolbar(QWidget):
         self._size_slider.setPageStep(Config.CARD_SIZE_STEP * 2)
         self._size_slider.setFixedWidth(120)
         self._size_slider.setToolTip(f"Card size ({Config.MIN_CARD_SIZE}-{Config.MAX_CARD_SIZE}px)")
+
+        # Animated previews toggle. LABELLED, not a bare glyph: as a 32px "play"
+        # icon squeezed between the view controls it was effectively invisible.
+        self._animated_btn = QPushButton("▶ Previews")
+        self._animated_btn.setFixedHeight(32)
+        self._animated_btn.setMinimumWidth(96)
+        self._animated_btn.setCheckable(True)
+        # Left off at construction on purpose: MainWindow applies the stored
+        # (or default) value once the service exists, so nothing starts
+        # building sheets before then.
+        self._animated_btn.setChecked(False)
+        self._animated_btn.setToolTip(
+            "Play each card's preview in the grid. "
+            "Previews are prepared the first time you view them."
+        )
 
         # Edit mode toggle (icon-only)
         self._edit_mode_btn = QPushButton()
@@ -365,6 +381,8 @@ class HeaderToolbar(QWidget):
         # Group with tight spacing (4px between items)
         layout.addWidget(self._view_mode_btn)  # Moved from position 2 to here
         layout.addSpacing(4)
+        layout.addWidget(self._animated_btn)
+        layout.addSpacing(4)
         layout.addWidget(self._grid_icon_label)
         layout.addWidget(self._size_slider)
         layout.addSpacing(4)
@@ -419,6 +437,7 @@ class HeaderToolbar(QWidget):
 
         # Edit mode button
         self._edit_mode_btn.clicked.connect(self._on_edit_mode_clicked)
+        self._animated_btn.toggled.connect(self.animated_previews_toggled.emit)
 
         # Delete button
         self._delete_btn.clicked.connect(self._on_delete_clicked)
@@ -559,6 +578,15 @@ class HeaderToolbar(QWidget):
         # Emit signals
         self.card_size_changed.emit(size)
         self._event_bus.set_card_size(size)
+
+    def is_animated_previews_on(self) -> bool:
+        return self._animated_btn.isChecked()
+
+    def set_animated_previews(self, enabled: bool):
+        """Restore the saved state without re-emitting during startup."""
+        self._animated_btn.blockSignals(True)
+        self._animated_btn.setChecked(bool(enabled))
+        self._animated_btn.blockSignals(False)
 
     def get_card_size(self) -> int:
         """Current card size - for persisting across sessions."""

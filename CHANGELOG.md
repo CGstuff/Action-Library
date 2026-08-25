@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.5] - 2026-08-25
+
+### Added
+
+- **Animated Previews in the Grid** - Every card in the grid plays its animation at once, the way a browsing library should behave, instead of showing a still thumbnail until you hover. It's on by default; turn it off with the **▶ Previews** button in the header or in Settings > Appearance. Decoding a video per card would have been far too expensive to do for a whole screenful, so each preview is baked once into a sprite sheet and played back from that: a full screen of animating cards costs a fraction of a percent of one CPU core, and sheets are released as you scroll past so memory stays flat no matter how large the library. Sheets are cached per machine rather than in the library, so they cost no network traffic and nothing is written to a shared disk. Each card starts on a slightly different frame so the grid doesn't pulse in lockstep, and previews pause while the app is in the background. Hovering a card still opens the larger popup preview as before - animated cards are in addition to it, not a replacement.
+- **The Preview Panel Plays on Its Own** - Selecting a card now starts the large preview on the right immediately instead of waiting for you to press play. Looping is already on by default, so it keeps running while you look at it. Compare mode and version history are unchanged - those play on demand so the clips you're comparing stay in step.
+
 ## [1.5.4] - 2026-08-20
 
 ### Fixed

@@ -1358,6 +1358,32 @@ classes = (
 )
 
 
+def is_development_install():
+    """True when this addon is a dev checkout rather than a normal install.
+
+    Two tells: the addon folder is a symlink (the usual dev setup - Blender's
+    addons directory pointing at a git working tree), or it sits inside a git
+    repo. Installing an update onto either would overwrite your SOURCE with the
+    released version, and dump the updater's backup/ and staging folders into
+    your working tree - roughly 260MB of them, including the release zip.
+    """
+    addon_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        if os.path.islink(addon_dir):
+            return True
+        d = addon_dir
+        for _ in range(6):                     # walk up looking for a .git
+            if os.path.exists(os.path.join(d, ".git")):
+                return True
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+    except OSError:
+        pass
+    return False
+
+
 def register(bl_info):
     """Registering the operators in this module"""
     # safer failure in case of issue loading module
@@ -1411,6 +1437,7 @@ def register(bl_info):
     if not updater.user or not updater.repo:
         print("[Action Library] Addon updater not configured (user/repo unset) - disabled.")
         updater.auto_check_update = False
+
         # Leave everything else registered so the prefs UI can still render; the
         # check operators simply won't find a repo.
 
@@ -1493,7 +1520,14 @@ def register(bl_info):
     # the addon's web page to download, specifically: updater.website
     # Useful if only wanting to get notification of updates but not
     # directly install.
-    updater.manual_only = False
+    # Normally False (the updater installs in place). But on a DEVELOPMENT
+    # checkout, installing would overwrite your source with the released version
+    # and dump ~260MB of backup/staging into your working tree - so there we only
+    # report the update and link to the release page.
+    updater.manual_only = is_development_install()
+    if updater.manual_only:
+        print("[Action Library] Development install detected - updates will be "
+              "reported but not installed (that would overwrite your source).")
 
     # Used for development only, "pretend" to install an update to test
     # reloading conditions

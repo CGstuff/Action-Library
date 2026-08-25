@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import List, Tuple
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QStatusBar, QDialog, QFileDialog, QMessageBox, QMenu
+    QSplitter, QStatusBar, QDialog, QFileDialog, QMessageBox, QMenu,
+    QApplication
 )
 from PyQt6.QtCore import Qt, QSettings, QTimer, QFileSystemWatcher, QThreadPool, QRunnable, QObject, pyqtSignal
 from PyQt6.QtGui import QCloseEvent
@@ -293,6 +294,7 @@ class MainWindow(QMainWindow):
         animations = self._db_service.get_all_animations()
         self._animation_model.set_animations(animations)
         self._refresh_folder_membership()
+        self._animation_view.refresh_animated_previews()
 
     def _track_connection(self, signal, slot):
         """Connect signal to slot and track for cleanup on close"""
@@ -362,6 +364,13 @@ class MainWindow(QMainWindow):
 
         # Header toolbar edit mode -> show/hide bulk toolbar
         self._track_connection(self._header_toolbar.edit_mode_changed, self._on_edit_mode_changed)
+        self._track_connection(self._header_toolbar.animated_previews_toggled,
+                               self._on_animated_previews_toggled)
+
+        # Pause animated previews when the app goes to the background.
+        app = QApplication.instance()
+        if app is not None:
+            self._track_connection(app.applicationStateChanged, self._on_app_state_changed)
 
         # Header toolbar archive -> archive selected animations (soft delete)
         self._track_connection(self._header_toolbar.delete_clicked, self._on_archive_clicked)
@@ -441,6 +450,15 @@ class MainWindow(QMainWindow):
                 except (ValueError, TypeError):
                     # If conversion fails, use defaults
                     self._splitter.setSizes(Config.DEFAULT_SPLITTER_SIZES)
+
+        # Animated previews. On by default; anyone who has explicitly turned
+        # them off keeps that, since their setting is already stored.
+        from ..services.sprite_playback import DEFAULT_ANIMATED_PREVIEWS
+        animated = settings.value(
+            "view/animated_previews", DEFAULT_ANIMATED_PREVIEWS, type=bool)
+        self._header_toolbar.set_animated_previews(animated)
+        if animated:
+            self._on_animated_previews_toggled(True)
 
         # Card size - previously reset to the default on every launch.
         if settings.contains("view/card_size"):
@@ -1516,6 +1534,7 @@ class MainWindow(QMainWindow):
         animations = self._db_service.get_all_animations()
         self._animation_model.set_animations(animations)
         self._refresh_folder_membership()
+        self._animation_view.refresh_animated_previews()
 
         # Refresh filter dropdowns (rig types, tags)
         self._header_toolbar.refresh_filters()
@@ -1538,6 +1557,32 @@ class MainWindow(QMainWindow):
         """Handle create new folder request from header button"""
         # Delegate to folder tree widget
         self._folder_tree.create_folder_with_dialog()
+
+    def _on_animated_previews_toggled(self, enabled: bool):
+        """Play/stop the previews on the cards."""
+        from ..services.sprite_playback import get_sprite_playback
+        playback = get_sprite_playback()
+        playback.set_frame_size(self._header_toolbar.get_card_size())
+        playback.set_enabled(enabled)
+        if enabled:
+            # Tell it what's on screen right now, or nothing plays until you scroll.
+            self._animation_view.refresh_animated_previews()
+        QSettings(Config.APP_AUTHOR, Config.APP_NAME).setValue(
+            "view/animated_previews", enabled)
+
+    def _on_app_state_changed(self, state):
+        """Stop animating while the app is in the background.
+
+        Repainting a grid 15 times a second is wasted work - and battery - when
+        nobody is looking at it.
+        """
+        from PyQt6.QtCore import Qt as _Qt
+        from ..services.sprite_playback import get_sprite_playback
+        playback = get_sprite_playback()
+        if state == _Qt.ApplicationState.ApplicationActive:
+            playback.resume()
+        else:
+            playback.pause()
 
     def _on_tags_updated(self, uuid: str, tags: list):
         """A tag changed - the filter dropdown is built from tags in use."""

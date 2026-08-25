@@ -534,7 +534,7 @@ class MetadataPanel(QWidget):
                 resolved = db_service.animations.resolve_preview_file(animation)
                 if resolved:
                     preview_path = str(resolved)
-            self._video_preview.load_video(preview_path)
+            self._video_preview.load_video(preview_path, autoplay=True)
         else:
             self._video_preview.clear()
 
@@ -1007,7 +1007,7 @@ class MetadataPanel(QWidget):
                 # Reload video preview with new path
                 new_preview_path = updated.get('preview_path', '')
                 if new_preview_path:
-                    self._video_preview.load_video(new_preview_path)
+                    self._video_preview.load_video(new_preview_path, autoplay=True)
 
                 # Notify via event bus
                 self._event_bus.animation_updated.emit(uuid)
@@ -1015,7 +1015,7 @@ class MetadataPanel(QWidget):
             # Rename cancelled - reload original video
             preview_path = self._animation.get('preview_path', '')
             if preview_path:
-                self._video_preview.load_video(preview_path)
+                self._video_preview.load_video(preview_path, autoplay=True)
 
     def _clear_grid(self, grid: QGridLayout):
         """Clear all widgets from grid"""
