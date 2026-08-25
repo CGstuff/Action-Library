@@ -1,0 +1,173 @@
+# Build the Windows release and attach it to the GitHub release.
+#
+# Replaces running build.bat by hand. Two things it fixes structurally:
+#
+#   * The version comes from the TAG THAT TRIGGERED THE RUN, not from
+#     `git describe` in whatever clone happened to be on disk. Building locally
+#     from a clone that was missing the newer tags is how 1.5.4 and 1.5.5 both
+#     shipped labelled "1.5.3". A tag-triggered build cannot make that mistake.
+#
+#   * It produces the artifact SignPath needs: a verifiable automated build from
+#     a trusted build system, which is a condition of their free OSS certificate.
+#     Signing is a later step - this is the prerequisite.
+
+name: Build Release
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+'
+  # Manual runs build and upload a workflow artifact, but never touch a release.
+  # Use this to test build changes without cutting a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: write        # needed to upload the asset to the release
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $version = $env:GITHUB_REF_NAME -replace '^v', ''
+            $isRelease = 'true'
+          } else {
+            # Manual run - take the changelog's newest entry so the build is
+            # still labelled something meaningful, but don't publish it.
+            $version = [regex]::Match(
+              (Get-Content CHANGELOG.md -Raw), '##\s*\[([0-9.]+)\]').Groups[1].Value
+            $isRelease = 'false'
+          }
+          if (-not $version) { throw "Could not determine a version to build." }
+          "version=$version"     >> $env:GITHUB_OUTPUT
+          "is_release=$isRelease" >> $env:GITHUB_OUTPUT
+          Write-Host "Building version $version (release: $isRelease)"
+
+      - name: Check the tag matches the changelog
+        if: steps.version.outputs.is_release == 'true'
+        shell: pwsh
+        run: |
+          $changelog = [regex]::Match(
+            (Get-Content CHANGELOG.md -Raw), '##\s*\[([0-9.]+)\]').Groups[1].Value
+          $tag = '${{ steps.version.outputs.version }}'
+          if ($changelog -ne $tag) {
+            Write-Host "::error::Tag $tag does not match the newest CHANGELOG entry ($changelog)."
+            Write-Host "The app version and the addon bl_info are both stamped from the tag,"
+            Write-Host "so this build would ship mislabelled. Fix the changelog or the tag."
+            exit 1
+          }
+          Write-Host "Tag and changelog agree on $tag"
+
+      - name: Stamp the version
+        shell: pwsh
+        run: |
+          $v = '${{ steps.version.outputs.version }}'
+          # The app reads this at runtime for its own version. ASCII on purpose:
+          # -Encoding utf8 writes a BOM under Windows PowerShell, and the BOM
+          # survives .strip() on the Python side, turning APP_VERSION into
+          # "﻿1.5.7" and breaking every version comparison.
+          Set-Content -Path animation_library/version.txt -Value $v -NoNewline -Encoding ascii
+
+          # The bundled Blender addon is versioned together with the app, so its
+          # bl_info has to agree - a mismatch is what drives the addon's
+          # "out of date" warning.
+          $parts = $v.Split('.')
+          $major = [int]$parts[0]
+          $minor = if ($parts.Count -gt 1) { [int]$parts[1] } else { 0 }
+          $patch = if ($parts.Count -gt 2) { [int]$parts[2] } else { 0 }
+          $path = 'blender_plugin/__init__.py'
+          (Get-Content $path -Raw) -replace `
+            '"version": \(\d+, \d+, \d+\)', "`"version`": ($major, $minor, $patch)" |
+            Set-Content $path -NoNewline
+          Write-Host "Stamped app version.txt = $v, addon bl_info = ($major, $minor, $patch)"
+
+      - name: Build
+        run: pyinstaller build_spec.spec --noconfirm
+
+      - name: Assemble the portable folder
+        shell: pwsh
+        run: |
+          $out = 'dist/ActionLibrary'
+          if (-not (Test-Path "$out/ActionLibrary.exe")) {
+            throw "Build did not produce $out/ActionLibrary.exe"
+          }
+          # A portable install keeps its library here, beside the exe.
+          New-Item -ItemType Directory -Force -Path "$out/storage" | Out-Null
+          # Written as an array rather than a here-string: a PowerShell here-string
+          # needs its closing "@ at column 0, which YAML block indentation forbids.
+          @(
+            'Action Library - Portable Installation',
+            '======================================',
+            '',
+            'This is a portable installation. All your data will be stored in the',
+            "'storage' folder next to the executable.",
+            '',
+            'Structure:',
+            '  ActionLibrary.exe  - Main application',
+            '  _internal/         - Application dependencies',
+            '  storage/           - Your animation library data',
+            '',
+            'First Launch:',
+            '  On first launch, a setup wizard will guide you through configuring',
+            '  your library storage location.',
+            '',
+            'Moving Your Library:',
+            '  To move your library to another computer, simply copy this entire',
+            '  folder to the new location.'
+          ) | Set-Content -Path "$out/README.txt" -Encoding utf8
+
+      - name: Package
+        id: package
+        shell: pwsh
+        run: |
+          $name = "ActionLibrary.V${{ steps.version.outputs.version }}.zip"
+          # 7z ships on the runner and handles a ~130MB tree faster and more
+          # reliably than Compress-Archive.
+          7z a -tzip -mx=5 "$name" ./dist/ActionLibrary | Out-Null
+          $size = [math]::Round((Get-Item $name).Length / 1MB)
+          Write-Host "Packaged $name ($size MB)"
+          "asset=$name" >> $env:GITHUB_OUTPUT
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ActionLibrary-${{ steps.version.outputs.version }}
+          path: ${{ steps.package.outputs.asset }}
+          retention-days: 14
+
+      - name: Attach to the release
+        if: steps.version.outputs.is_release == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $asset = '${{ steps.package.outputs.asset }}'
+          # Create the release if the tag was pushed without one.
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title $tag --notes "See CHANGELOG.md for what changed."
+          }
+          gh release upload $tag $asset --clobber
+          Write-Host "Attached $asset to release $tag"

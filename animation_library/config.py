@@ -21,7 +21,10 @@ class Config:
     # Try to read version from version.txt (injected by build system)
     _version_file = Path(__file__).parent / "version.txt"
     if _version_file.exists():
-        APP_VERSION: Final[str] = _version_file.read_text().strip()
+        # utf-8-sig, not the default: a build system that writes this file with
+        # a BOM would otherwise leave APP_VERSION as "﻿1.5.7" - .strip()
+        # doesn't remove a BOM, and every version comparison downstream breaks.
+        APP_VERSION: Final[str] = _version_file.read_text(encoding='utf-8-sig').strip()
     else:
         APP_VERSION: Final[str] = "1.4.1"  # Fallback/Dev version
 
