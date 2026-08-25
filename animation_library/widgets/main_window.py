@@ -219,6 +219,14 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
+        # Update banner - above everything, because the previous home for this
+        # (a button inside the About dialog) meant nobody ever found it.
+        # Hidden unless a newer release actually exists.
+        from .update_banner import UpdateBanner
+        self._update_banner = UpdateBanner()
+        self._update_banner.update_requested.connect(self._on_update_requested)
+        main_layout.addWidget(self._update_banner)
+
         # Add header toolbar
         main_layout.addWidget(self._header_toolbar)
 
@@ -459,6 +467,10 @@ class MainWindow(QMainWindow):
         self._header_toolbar.set_animated_previews(animated)
         if animated:
             self._on_animated_previews_toggled(True)
+
+        # Look for a newer release. Runs off the UI thread a couple of seconds
+        # in, and shows nothing at all unless there's genuinely an update.
+        self._update_banner.start_check()
 
         # Card size - previously reset to the default on every launch.
         if settings.contains("view/card_size"):
@@ -1557,6 +1569,13 @@ class MainWindow(QMainWindow):
         """Handle create new folder request from header button"""
         # Delegate to folder tree widget
         self._folder_tree.create_folder_with_dialog()
+
+    def _on_update_requested(self, info):
+        """Banner clicked - show what's new and offer to install it."""
+        from .dialogs.update_dialog import UpdateDialog
+        dialog = UpdateDialog(info, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._update_banner.hide()
 
     def _on_animated_previews_toggled(self, enabled: bool):
         """Play/stop the previews on the cards."""

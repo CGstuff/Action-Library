@@ -5,11 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.7] - 2026-08-25
+
+### Added
+
+- **Updates Install Themselves** - Action Library now notices when a newer release exists and offers to install it. A bar across the top of the window tells you which version is waiting; **Update Now** shows the release notes and download size, fetches the build, then closes, swaps itself for the new version and reopens. Previously the check was a button buried in the About dialog that only opened a browser, so most people never found it - one user ran months-old builds without realising, and another assumed updating the Blender addon updated the app too. It doesn't; they're separate downloads, and now the app says so itself.
+- **The Update Never Touches Your Library** - Only the program itself is replaced - `ActionLibrary.exe` and its `_internal` folder, named explicitly. Everything else in the install folder is left exactly as it is, which matters because a default install keeps your library at `storage/` right beside the program. The download is unpacked somewhere else entirely and only copied in once it's verified complete, and the previous version is set aside rather than deleted, so a failed update puts itself back instead of leaving you with a broken install.
+- **It Stays Out of Your Way** - The check runs in the background a couple of seconds after launch and shows nothing at all unless there's genuinely something newer - no dialog, no error if you're offline or GitHub is unreachable. The bar can be dismissed for the session. If the app can't update itself - running from source, or installed somewhere it lacks write permission - it says so plainly and points you at the release page instead of failing partway through.
+
 ## [1.5.6] - 2026-08-25
 
 ### Fixed
 
 - **The App Reported the Wrong Version** - 1.5.4 and 1.5.5 both installed and reported themselves as "1.5.3". The build stamps the version from the newest git tag it can see, and the clone the releases are built from was missing the newer tags, so both releases went out carrying the old number. The Blender addon bundled with those builds was stamped from the same number, so its `bl_info` was wrong too - which could produce a spurious version-mismatch warning in the N-panel against an addon that was actually up to date. The build now refuses to run if the tag it detects doesn't match the top entry in this changelog, instead of silently shipping a mislabelled build.
+- **"Addon Up To Date" When the App Wasn't** - the N-panel only ever checked whether the addon was *older* than the app. Updating the addon from inside Blender doesn't update the desktop app, so that left the common case backwards: the addon was newer, the check treated that as fine, and the panel showed a green "Addon up to date" tick while the app sat two versions behind. It now says which half is behind, and when it's the app it spells out that updating the addon does not update the app and points at the releases page. The install docs now cover the in-Blender updater and its scope as well.
 - **Antivirus Flagging and Closing the App** - the Windows build was compressed with UPX, an executable packer commonly used to obfuscate malware, which meant antivirus heuristics flagged it on sight - in some cases terminating the app a few seconds after launch. In this build layout UPX was also compressing every bundled library, multiplying the detections. It's now disabled. The download is larger as a result. This reduces false positives but does not eliminate them: the application is not yet code-signed, and unsigned installers are always treated with suspicion. If your antivirus still objects, reporting it to your vendor as a false positive is the fastest route, and it genuinely helps other users.
 
 ## [1.5.5] - 2026-08-25

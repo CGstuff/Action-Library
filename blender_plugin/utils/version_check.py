@@ -65,13 +65,18 @@ def get_library_app_version(library_path):
     return version
 
 
-def check_outdated(library_path):
-    """Is the addon older than the app that owns this library?
+def get_version_status(library_path):
+    """How this addon compares to the app that owns the library.
 
-    Returns (is_outdated, addon_version_str, app_version_str). is_outdated is
-    False when the app version is unknown (old app, offline library, or a
-    brand-new library the app hasn't stamped yet) - we only warn on a definite
-    mismatch, never on a guess.
+    Returns (status, addon_version_str, app_version_str) where status is:
+      'unknown'      - no app version to compare against (old app, offline
+                       library, or one the app hasn't stamped yet). Never guess.
+      'match'        - same version, all good.
+      'addon_behind' - the addon is older; reinstall it from the desktop app.
+      'app_behind'   - the addon is NEWER than the app. This happens when
+                       someone updates the addon from inside Blender and assumes
+                       that updated the app too - it does not. The two ship
+                       together, so the app needs updating separately.
     """
     addon_ver = get_addon_version()
     app_ver = get_library_app_version(library_path)
@@ -80,8 +85,13 @@ def check_outdated(library_path):
         return '.'.join(str(x) for x in v) if v else '?'
 
     if app_ver is None:
-        return (False, as_str(addon_ver), '?')
-    return (addon_ver < app_ver, as_str(addon_ver), as_str(app_ver))
+        return ('unknown', as_str(addon_ver), '?')
+    if addon_ver < app_ver:
+        return ('addon_behind', as_str(addon_ver), as_str(app_ver))
+    if addon_ver > app_ver:
+        return ('app_behind', as_str(addon_ver), as_str(app_ver))
+    return ('match', as_str(addon_ver), as_str(app_ver))
+
 
 
 def clear_cache():
@@ -89,4 +99,5 @@ def clear_cache():
     _app_version_cache.clear()
 
 
-__all__ = ['check_outdated', 'get_addon_version', 'get_library_app_version', 'clear_cache']
+__all__ = ['get_version_status', 'get_addon_version', 'get_library_app_version',
+           'clear_cache']

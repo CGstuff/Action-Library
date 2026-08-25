@@ -113,18 +113,27 @@ class ANIMLIB_PT_main_panel(Panel):
             # Version check against the app that owns the library. They're
             # versioned together, so an older addon means "reinstall".
             try:
-                from ..utils.version_check import check_outdated
-                outdated, addon_ver, app_ver = check_outdated(library_path)
-                if outdated:
+                from ..utils.version_check import get_version_status
+                status, addon_ver, app_ver = get_version_status(library_path)
+                if status == 'addon_behind':
                     warn_box = layout.box()
                     warn_box.alert = True
                     warn_box.label(text="Addon is out of date", icon='ERROR')
                     warn_box.label(text=f"Addon v{addon_ver}, library needs v{app_ver}")
                     warn_box.label(text="Reinstall from the desktop app:")
                     warn_box.label(text="Settings > Blender Integration")
-                elif app_ver != '?':
-                    # Confirmed match (or newer) - reassure the user it's current.
-                    # Silent when app_ver is unknown ('?'), since we can't confirm.
+                elif status == 'app_behind':
+                    # The addon updater only ever updates THIS addon. People
+                    # assume it updates the app too, then wonder why the app
+                    # still reports an old version. Say so explicitly.
+                    warn_box = layout.box()
+                    warn_box.alert = True
+                    warn_box.label(text="Desktop app is out of date", icon='ERROR')
+                    warn_box.label(text=f"Addon v{addon_ver}, app v{app_ver}")
+                    warn_box.label(text="Updating the addon does not")
+                    warn_box.label(text="update the app - download it")
+                    warn_box.label(text="from the GitHub releases page.")
+                elif status == 'match':
                     status_box.label(text=f"Addon up to date (v{addon_ver})", icon='CHECKMARK')
             except Exception:
                 # A version-check failure must never break the panel.
