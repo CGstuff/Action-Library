@@ -396,8 +396,15 @@ class ANIMLIB_OT_capture_pose(Operator):
             # Move to final location
             shutil.move(temp_path, str(blend_path))
 
-            # Create thumbnail from current pose
-            self.create_thumbnail(armature, scene, str(thumbnail_path))
+            # Create thumbnail from current pose. If the render fails the pose
+            # itself is still perfectly good - only the picture is missing - so
+            # carry on, but say so and don't claim a thumbnail we don't have.
+            thumbnail_ok = self.create_thumbnail(armature, scene, str(thumbnail_path))
+            if not thumbnail_ok:
+                self.report(
+                    {'WARNING'},
+                    "Pose saved, but the thumbnail could not be rendered. "
+                    "Capture from a 3D viewport, then use Update Preview.")
 
             # Get bone info
             captured_bones = action.get("captured_bones", [])
@@ -431,7 +438,7 @@ class ANIMLIB_OT_capture_pose(Operator):
                 'json_file_path': str(json_path),
                 'blend_file_path': str(blend_path),
                 'preview_path': '',  # No video preview for poses
-                'thumbnail_path': str(thumbnail_path),
+                'thumbnail_path': str(thumbnail_path) if thumbnail_ok else '',
                 'created_date': datetime.now().isoformat(),
                 'file_size_mb': blend_path.stat().st_size / (1024 * 1024),
                 # Poses don't use versioning - they're simple, disposable building blocks
@@ -454,7 +461,15 @@ class ANIMLIB_OT_capture_pose(Operator):
             return None, None, None
 
     def create_thumbnail(self, armature, scene, thumbnail_path):
-        """Create thumbnail from current pose"""
+        """Render a thumbnail of the current pose.
+
+        Returns True only if a file actually landed on disk. The OpenGL render
+        can fail for reasons we can't control - no usable 3D viewport in the
+        current context, a GPU/driver refusal, an unwritable folder - and this
+        used to swallow that silently while the caller recorded the thumbnail
+        path anyway. The pose then had metadata pointing at a file that was
+        never written, and the app showed an empty card with no explanation.
+        """
         try:
             from ..preferences import get_preview_settings
             prefs = get_preview_settings()
@@ -468,13 +483,31 @@ class ANIMLIB_OT_capture_pose(Operator):
             original_resolution_y = scene.render.resolution_y
             original_resolution_percentage = scene.render.resolution_percentage
             original_film_transparent = scene.render.film_transparent
+            original_use_file_extension = scene.render.use_file_extension
+            # media_type gates which file formats are even selectable. Added in
+            # newer Blender versions, hence getattr.
+            original_media_type = getattr(
+                scene.render.image_settings, 'media_type', None)
             viewport_settings = None
 
             try:
                 # Configure render settings for single frame
                 scene.render.filepath = thumbnail_path
+                # With the media type set to Video, file_format is a one-value
+                # enum containing only 'FFMPEG' - assigning 'PNG' raises
+                # `enum "PNG" not found in ('FFMPEG')` and no thumbnail is ever
+                # written. Switch the media type to Image first so PNG becomes
+                # a legal value at all. This is why leaving Blender set to video
+                # output silently cost you pose thumbnails.
+                if original_media_type is not None:
+                    scene.render.image_settings.media_type = 'IMAGE'
                 scene.render.image_settings.file_format = 'PNG'
                 scene.render.image_settings.color_mode = 'RGBA'
+                # Write exactly the path we asked for. With this left on,
+                # Blender is free to decorate the output name (extension of the
+                # scene's own format, frame numbers), which is how a scene set
+                # to video output ends up producing no Neutral.png at all.
+                scene.render.use_file_extension = False
                 scene.render.resolution_x = prefs['resolution_x']
                 scene.render.resolution_y = prefs['resolution_y']
                 scene.render.resolution_percentage = 100
@@ -484,9 +517,49 @@ class ANIMLIB_OT_capture_pose(Operator):
                 viewport_settings = self.setup_viewport_for_preview(scene, prefs)
 
                 # Render single frame
-                bpy.ops.render.opengl(write_still=True)
+                # Don't assume the switch took. A scene configured for video
+                # output is the one case we know produced no thumbnail at all,
+                # and failing here with a clear reason beats writing nothing.
+                actual = scene.render.image_settings.file_format
+                if actual != 'PNG':
+                    logger.error(
+                        f"Could not switch the render output to PNG for the "
+                        f"thumbnail (it is still '{actual}'). Set Output "
+                        f"Properties > Output > File Format to an image type.")
+                    return False
+
+                # render.opengl renders the 3D VIEWPORT (view_context defaults
+                # to True), so it needs one in the context it is called from.
+                # Relying on ambient context makes the capture depend on where
+                # the user happened to click - it silently fails, and no file is
+                # written, when the operator runs from anywhere without a
+                # VIEW_3D. Find one and override explicitly instead.
+                area, region = self._find_viewport()
+                if area is None:
+                    logger.error(
+                        "No 3D viewport available to render the thumbnail from. "
+                        "The pose was saved without one.")
+                    return False
+
+                with bpy.context.temp_override(area=area, region=region):
+                    bpy.ops.render.opengl(write_still=True)
+
+                # Trust the file, not the call: render.opengl can return
+                # {'FINISHED'} having written nothing.
+                if not os.path.exists(thumbnail_path):
+                    # Blender may write the frame under a name of its own
+                    # choosing (its format's extension, an appended frame
+                    # number) rather than the path we asked for. Rather than
+                    # give up, find what it actually produced and move it into
+                    # place - this works whatever naming rule was applied.
+                    if not self._recover_rendered_png(thumbnail_path):
+                        logger.error(
+                            f"Thumbnail render reported success but no image "
+                            f"was written: {thumbnail_path}")
+                        return False
 
                 logger.debug(f"Created pose thumbnail: {thumbnail_path}")
+                return True
 
             finally:
                 # Always restore viewport settings
@@ -494,6 +567,11 @@ class ANIMLIB_OT_capture_pose(Operator):
 
                 # Restore original settings
                 scene.render.filepath = original_filepath
+                # Order matters both ways: restore the media type first, or
+                # assigning the original video format back would hit the very
+                # same enum restriction.
+                if original_media_type is not None:
+                    scene.render.image_settings.media_type = original_media_type
                 scene.render.image_settings.file_format = original_format
                 scene.render.image_settings.color_mode = original_color_mode
                 scene.frame_set(original_frame)
@@ -501,9 +579,88 @@ class ANIMLIB_OT_capture_pose(Operator):
                 scene.render.resolution_y = original_resolution_y
                 scene.render.resolution_percentage = original_resolution_percentage
                 scene.render.film_transparent = original_film_transparent
+                scene.render.use_file_extension = original_use_file_extension
 
         except Exception as e:
             logger.error(f"Error creating pose thumbnail: {e}")
+            return False
+
+    @staticmethod
+    def _recover_rendered_png(expected_path):
+        """Find a PNG the render just wrote under another name, move it to expected_path.
+
+        Only files that really are PNGs are accepted - checked by magic bytes,
+        not by extension - so a stray video frame can never be renamed into
+        place and served as a broken thumbnail.
+
+        Returns True if a file was recovered.
+        """
+        try:
+            expected = Path(expected_path)
+            folder = expected.parent
+            stem = expected.stem
+            if not folder.is_dir():
+                return False
+
+            candidates = []
+            for entry in folder.iterdir():
+                if not entry.is_file() or entry == expected:
+                    continue
+                if not entry.name.startswith(stem):
+                    continue
+                try:
+                    with open(entry, 'rb') as fh:
+                        # PNG signature, written as byte values so no escape
+                        # sequence has to survive being generated.
+                        if fh.read(8) != bytes([137, 80, 78, 71, 13, 10, 26, 10]):
+                            continue
+                except OSError:
+                    continue
+                candidates.append(entry)
+
+            if not candidates:
+                return False
+
+            newest = max(candidates, key=lambda e: e.stat().st_mtime)
+            shutil.move(str(newest), str(expected))
+            logger.debug(f"Recovered thumbnail written as '{newest.name}'")
+            return True
+        except Exception as e:
+            logger.error(f"Could not recover the rendered thumbnail: {e}")
+            return False
+
+    @staticmethod
+    def _find_viewport():
+        """Locate a 3D viewport and its main region, or (None, None).
+
+        Returns a VIEW_3D area with its WINDOW region - the pair render.opengl
+        needs to render a viewport rather than failing its poll.
+
+        The current screen is searched first, deliberately: that is the screen
+        setup_viewport_for_preview() styles, so preferring it keeps the viewport
+        we configured and the viewport we render as the same one. Other windows
+        are only a fallback for when the context has no usable screen at all.
+        """
+        def first_view3d(screen):
+            for area in getattr(screen, 'areas', []):
+                if area.type != 'VIEW_3D':
+                    continue
+                for region in area.regions:
+                    if region.type == 'WINDOW':
+                        return area, region
+            return None, None
+
+        try:
+            area, region = first_view3d(getattr(bpy.context, 'screen', None))
+            if area is not None:
+                return area, region
+            for window in bpy.context.window_manager.windows:
+                area, region = first_view3d(window.screen)
+                if area is not None:
+                    return area, region
+        except Exception as e:
+            logger.error(f"Could not locate a 3D viewport: {e}")
+        return None, None
 
     def setup_viewport_for_preview(self, scene, prefs):
         """Configure viewport shading for preview rendering"""
@@ -544,7 +701,18 @@ class ANIMLIB_OT_capture_pose(Operator):
 
                             # Use STUDIO lighting for quality previews
                             space.shading.light = 'STUDIO'
-                            space.shading.studio_light = 'forest.exr'
+                            # 'forest.exr' was hard-coded here: an HDRI for
+                            # Material/Rendered preview, not a SOLID-mode studio
+                            # light. Assigning it raises TypeError, which used to
+                            # escape mid-configure and leave the viewport with
+                            # overlays and regions still switched off. Match the
+                            # animation capture: try real studio lights in order.
+                            for light in ['studio.sl', 'rim.sl', 'outdoor.sl', 'Default']:
+                                try:
+                                    space.shading.studio_light = light
+                                    break
+                                except TypeError:
+                                    continue
                             space.shading.studiolight_intensity = 1.0
 
                             # Switch to camera view if enabled and camera exists
@@ -559,8 +727,12 @@ class ANIMLIB_OT_capture_pose(Operator):
             return viewport_settings
 
         except Exception as e:
+            # Return what we managed to store rather than {}. The viewport may
+            # already be half-reconfigured, and returning nothing meant
+            # restore_viewport_settings() had nothing to put back - leaving the
+            # user's overlays, gizmos and regions switched off.
             logger.error(f"Error setting up viewport for preview: {e}")
-            return {}
+            return locals().get('viewport_settings') or {}
 
     def restore_viewport_settings(self, viewport_settings):
         """Restore original viewport settings after preview generation"""

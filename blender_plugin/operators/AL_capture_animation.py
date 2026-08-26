@@ -1058,7 +1058,7 @@ class ANIMLIB_OT_capture_animation(Operator):
                 keyframe_start = keyframe_end = current_frame
 
             # Create thumbnail from first frame
-            self.create_thumbnail(armature, scene, str(thumbnail_path), keyframe_start)
+            thumbnail_ok = self.create_thumbnail(armature, scene, str(thumbnail_path), keyframe_start)
 
             # Create preview video in the same folder (using keyframe range)
             self.create_animation_preview(armature, scene, str(preview_path), keyframe_start, keyframe_end)
@@ -1127,7 +1127,7 @@ class ANIMLIB_OT_capture_animation(Operator):
                 'json_file_path': str(json_path),     # Added for consistency
                 'blend_file_path': str(blend_path),
                 'preview_path': str(preview_path),
-                'thumbnail_path': str(thumbnail_path),
+                'thumbnail_path': str(thumbnail_path) if thumbnail_ok else '',
                 'created_date': datetime.now().isoformat(),
                 'file_size_mb': blend_path.stat().st_size / (1024 * 1024),
                 # Versioning fields (v5)
@@ -1199,7 +1199,16 @@ class ANIMLIB_OT_capture_animation(Operator):
                 # Render single frame
                 bpy.ops.render.opengl(write_still=True)
 
+                # Trust the file, not the call: render.opengl can return
+                # {'FINISHED'} having written nothing.
+                if not os.path.exists(thumbnail_path):
+                    logger.error(
+                        f"Thumbnail render reported success but no file was "
+                        f"written: {thumbnail_path}")
+                    return False
+
                 logger.debug(f"Created transparent thumbnail: {thumbnail_path}")
+                return True
 
             finally:
                 # Always restore viewport settings
@@ -1220,6 +1229,7 @@ class ANIMLIB_OT_capture_animation(Operator):
 
         except Exception as e:
             logger.error(f"Error creating thumbnail: {e}")
+            return False
 
     def create_animation_preview(self, armature, scene, preview_path, keyframe_start=None, keyframe_end=None):
         """Create transparent WebM preview using Blender's viewport render"""

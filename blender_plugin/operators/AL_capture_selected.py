@@ -589,7 +589,7 @@ class ANIMLIB_OT_capture_selected(Operator):
             sel_start = self._context_data['selection_start']
             sel_end = self._context_data['selection_end']
 
-            self.create_thumbnail(armature, scene, str(thumbnail_path), sel_start)
+            thumbnail_ok = self.create_thumbnail(armature, scene, str(thumbnail_path), sel_start)
             self.create_animation_preview(armature, scene, str(preview_path), sel_start, sel_end)
 
             # Get bone info
@@ -620,7 +620,7 @@ class ANIMLIB_OT_capture_selected(Operator):
                 'json_file_path': str(json_path),
                 'blend_file_path': str(blend_path),
                 'preview_path': str(preview_path),
-                'thumbnail_path': str(thumbnail_path),
+                'thumbnail_path': str(thumbnail_path) if thumbnail_ok else '',
                 'created_date': datetime.now().isoformat(),
                 'file_size_mb': blend_path.stat().st_size / (1024 * 1024),
                 'version': 1,
@@ -679,7 +679,16 @@ class ANIMLIB_OT_capture_selected(Operator):
 
                 viewport_settings = self.setup_viewport_for_preview(scene, prefs, transparent_bg=True)
                 bpy.ops.render.opengl(write_still=True)
+                # Trust the file, not the call: render.opengl can return
+                # {'FINISHED'} having written nothing.
+                if not os.path.exists(thumbnail_path):
+                    logger.error(
+                        f"Thumbnail render reported success but no file was "
+                        f"written: {thumbnail_path}")
+                    return False
+
                 logger.debug(f"Created thumbnail: {thumbnail_path}")
+                return True
 
             finally:
                 self.restore_viewport_settings(viewport_settings)
@@ -696,6 +705,7 @@ class ANIMLIB_OT_capture_selected(Operator):
 
         except Exception as e:
             logger.error(f"Error creating thumbnail: {e}")
+            return False
 
     def create_animation_preview(self, armature, scene, preview_path, keyframe_start, keyframe_end):
         """Create preview video"""
