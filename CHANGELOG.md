@@ -5,13 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.8] - 2026-08-26
+## [1.5.9] - 2026-08-26
 
 ### Fixed
 
 - **Poses Captured With No Thumbnail** - If Blender's output was set to Video (Output Properties > Output > Media Type), capturing a pose produced no thumbnail at all - the pose saved fine, but the card stayed blank with nothing to explain why. With the media type set to Video, Blender only allows video file formats, so the addon's attempt to switch the output to PNG for the thumbnail was rejected outright and the render never happened. The pose capture now switches the media type as well, takes the thumbnail, and puts your output settings back exactly as they were. Animation capture already did this correctly; only poses were affected.
 - **A Failed Thumbnail Is No Longer Silent** - When a thumbnail can't be rendered, the capture now says so instead of reporting success, and no longer records a thumbnail that doesn't exist - which is what left cards loading forever with nothing behind them. If Blender writes the image under a name of its own choosing, it's now found and put where it belongs rather than treated as a failure.
 - **Pose Capture Left the Viewport Changed** - Capturing a pose could leave your overlays, gizmos, toolbar and header switched off. Setting up the preview render referenced a lighting preset that isn't valid for solid shading, which aborted the setup part-way through and skipped restoring anything it had already changed. The preset is now chosen from ones that exist, and a setup that fails part-way still restores what it touched.
+
+## [1.5.8] - 2026-08-26
+
+### Fixed
+
 - **Poses Stuck on "Loading..." Forever** - Cards whose thumbnail couldn't be found sat on "Loading..." indefinitely instead of saying the image was missing, and re-attempted the load on every single repaint - a library whose thumbnails didn't resolve would keep the loader busy for as long as the window was open. A failed thumbnail is now attempted once and the card honestly reports "No Image". Re-capturing a preview or running a repair clears that and tries again.
 - **Poses Filed Under the Wrong Type Lost Their Thumbnails** - Whether an asset is a pose decides which folder every lookup searches. If that flag disagreed with where the files actually sat - most often after a library was moved or opened from another machine - every search went to the wrong folder and the thumbnail was never found, even though the file was right there on disk. Poses were hit hardest: an action in the wrong place usually still gets rescued by a folder-level fallback, a pose doesn't.
 - **Fix Pose Flags Now Repairs That** - The repair in Settings > Maintenance previously only looked at frame counts, and could only ever mark something as a pose. It now also compares each asset against the folder it is actually stored in and corrects the flag in either direction, reporting what it changed. Only unambiguous cases are touched, and it corrects the database rather than moving any files.
@@ -174,7 +179,6 @@ updated Bl_info
 
 ## [1.4.0] - 2026-01-24
 
-
 #### Annotation System Overhaul
 
 - **Always-On Annotations** - Annotation mode is now always active, and has been seperated from comments.
@@ -183,7 +187,6 @@ updated Bl_info
 - **Hold** - Keep an annotation visible across multiple frames instead of just the frame it was drawn on.
 - **Hide Annotations** - Quickly toggle annotation visibility on/off without deleting them (SyncSketch-style workflow).
 - **MP4 Export** - Export annotated frames as MP4 video for sharing review feedback with your team.
-
 
 ### Fixed
 
@@ -442,7 +445,6 @@ updated Bl_info
   - Color-coded status badges on animation cards (grid and list view)
   - Status visible in Lineage dialog for each version
   - New animations default to "None" status - no badge clutter for casual users
-
 
 ---
 
