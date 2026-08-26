@@ -144,6 +144,14 @@ class ThumbnailLoader(QObject):
         # QPixmapCache (which nuked every thumbnail to refresh one).
         self._cache_keys_by_uuid: Dict[str, Set[str]] = {}
 
+        # Thumbnails that failed to load. Without this a missing or unreadable
+        # file retries on EVERY repaint: the load fails, the key is dropped from
+        # pending_requests, the next paint misses the cache and queues it again.
+        # A library whose thumbnails don't resolve would spin the thread pool
+        # forever while showing "Loading...". Cleared per-animation by
+        # invalidate_animation(), so a repair or re-capture is picked up.
+        self._failed_keys: Set[str] = set()
+
         # Performance monitoring (Maya-inspired)
         self.load_times: list[float] = []
         self.cache_hits: int = 0
@@ -190,6 +198,10 @@ class ThumbnailLoader(QObject):
             return pixmap
 
         self.cache_misses += 1
+
+        # Already known to fail - don't queue it again on every paint.
+        if cache_key in self._failed_keys:
+            return None
 
         # Check if already loading (deduplication)
         if cache_key in self.pending_requests:
@@ -244,6 +256,9 @@ class ThumbnailLoader(QObject):
 
         # Remove from pending using the exact cache key
         self.pending_requests.discard(cache_key)
+
+        # Remember it so repaints stop re-queueing a load that cannot succeed.
+        self._failed_keys.add(cache_key)
 
         # Emit failure signal
         self.thumbnail_failed.emit(uuid, error_message)
@@ -302,6 +317,7 @@ class ThumbnailLoader(QObject):
         """Clear QPixmapCache (all thumbnails)"""
         QPixmapCache.clear()
         self._cache_keys_by_uuid.clear()
+        self._failed_keys.clear()
 
     def invalidate_animation(self, animation_uuid: str):
         """
@@ -327,6 +343,11 @@ class ThumbnailLoader(QObject):
         keys_to_remove = [k for k in self.pending_requests if k.startswith(animation_uuid)]
         for key in keys_to_remove:
             self.pending_requests.discard(key)
+
+        # Give up remembering failures for this animation - the file may now
+        # exist (re-captured from Blender, or repaired by Verify Integrity).
+        for key in [k for k in self._failed_keys if k.startswith(animation_uuid)]:
+            self._failed_keys.discard(key)
 
     def reset_stats(self):
         """Reset performance statistics"""

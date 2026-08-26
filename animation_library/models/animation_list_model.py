@@ -365,7 +365,12 @@ class AnimationListModel(QAbstractListModel):
             # Try to resolve actual path for archived versions
             db_service = self._get_db_service()
             resolved = db_service.animations.resolve_thumbnail_file(animation)
-            return str(resolved) if resolved else stored_path
+            if resolved:
+                return str(resolved)
+            # Nothing found. Return empty rather than the stored path we just
+            # proved doesn't exist: a non-empty path makes the card render
+            # "Loading..." forever, when the honest answer is "No Image".
+            return ''
 
         elif role == AnimationRole.FileSizeMBRole:
             return animation.get('file_size_mb')

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.8] - 2026-08-26
+
+### Fixed
+
+- **Poses Stuck on "Loading..." Forever** - Cards whose thumbnail couldn't be found sat on "Loading..." indefinitely instead of saying the image was missing, and re-attempted the load on every single repaint - a library whose thumbnails didn't resolve would keep the loader busy for as long as the window was open. A failed thumbnail is now attempted once and the card honestly reports "No Image". Re-capturing a preview or running a repair clears that and tries again.
+- **Poses Filed Under the Wrong Type Lost Their Thumbnails** - Whether an asset is a pose decides which folder every lookup searches. If that flag disagreed with where the files actually sat - most often after a library was moved or opened from another machine - every search went to the wrong folder and the thumbnail was never found, even though the file was right there on disk. Poses were hit hardest: an action in the wrong place usually still gets rescued by a folder-level fallback, a pose doesn't.
+- **Fix Pose Flags Now Repairs That** - The repair in Settings > Maintenance previously only looked at frame counts, and could only ever mark something as a pose. It now also compares each asset against the folder it is actually stored in and corrects the flag in either direction, reporting what it changed. Only unambiguous cases are touched, and it corrects the database rather than moving any files.
+
 ## [1.5.7] - 2026-08-25
 
 ### Added

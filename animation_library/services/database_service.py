@@ -1099,6 +1099,22 @@ class DatabaseService:
         """
         return self.animations.fix_pose_flags()
 
+    def reconcile_pose_flags_with_disk(self) -> Tuple[int, int]:
+        """Correct is_pose where it disagrees with the folder the files are in.
+
+        Catches what fix_pose_flags() cannot: an asset flagged as an action while
+        its files sit in poses/ (or the reverse). Every path lookup keys off that
+        flag, so a wrong one means thumbnails and previews resolve into the wrong
+        folder and never load.
+
+        Same caveat as fix_pose_flags: takes a write lock, so call it from
+        maintenance, not from a refresh path.
+
+        Returns:
+            (marked_as_pose, marked_as_action)
+        """
+        return self.animations.reconcile_pose_flags_with_disk()
+
     def migrate_to_actions_poses_folders(self) -> int:
         """Move any legacy library/{name}/ assets into library/actions|poses/{name}/.
 

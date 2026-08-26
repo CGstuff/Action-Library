@@ -281,25 +281,37 @@ class MaintenanceTab(QWidget):
         return group
 
     def _on_fix_pose_flags(self):
-        """Run the legacy pose-flag repair."""
+        """Run the pose-flag repairs: the frame-count heuristic, then disk."""
         try:
             fixed = self._db_service.fix_pose_flags()
+            to_pose, to_action = self._db_service.reconcile_pose_flags_with_disk()
         except Exception as e:
             QMessageBox.critical(self, "Repair Failed", f"Failed to fix pose flags:\n\n{e}")
             return
 
+        lines = []
         if fixed:
+            lines.append(f"Marked {fixed} single-frame asset(s) as poses.")
+        if to_pose:
+            lines.append(f"Corrected {to_pose} asset(s) stored in poses/ that "
+                         f"were flagged as actions.")
+        if to_action:
+            lines.append(f"Corrected {to_action} asset(s) stored in actions/ that "
+                         f"were flagged as poses.")
+
+        if lines:
             QMessageBox.information(
                 self,
                 "Pose Flags Fixed",
-                f"Marked {fixed} single-frame asset(s) as poses.\n\n"
-                f"Refresh the library to see the change."
+                "\n\n".join(lines) +
+                "\n\nRefresh the library to see the change. If thumbnails were "
+                "missing, they should load now."
             )
         else:
             QMessageBox.information(
                 self,
                 "Nothing to Fix",
-                "All single-frame assets are already flagged as poses."
+                "Pose flags all agree with where the files are stored."
             )
 
     def _on_migrate_folders(self):

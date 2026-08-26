@@ -5,14 +5,17 @@ Handles animation CRUD, search, and filtering.
 """
 
 import json
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 
 from .connection import DatabaseConnection
 from .helpers import deserialize_animation, serialize_tags, row_to_dict
 from ...config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class AnimationRepository:
@@ -921,6 +924,63 @@ class AnimationRepository:
             return updated
         except Exception:
             return 0
+
+    def reconcile_pose_flags_with_disk(self) -> Tuple[int, int]:
+        """Correct is_pose where it disagrees with the folder the files are in.
+
+        is_pose decides which folder every lookup searches - poses/ or actions/.
+        When the flag disagrees with reality, resolve_thumbnail_file() searches
+        the wrong folder, finds nothing, and the card is stuck showing a missing
+        thumbnail. fix_pose_flags() can't catch this: it only infers from
+        frame_count, and only ever sets the flag ON.
+
+        Only unambiguous cases are touched - the asset's folder must exist under
+        exactly one of poses/ or actions/. The flag is corrected, never the
+        files, because moving assets is the risky direction.
+
+        Returns:
+            (marked_as_pose, marked_as_action)
+        """
+        to_pose, to_action = [], []
+        try:
+            poses_root = Config.get_poses_folder()
+            actions_root = Config.get_actions_folder()
+        except (ValueError, OSError):
+            return (0, 0)
+
+        try:
+            conn = self._conn.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT id, name, is_pose FROM animations WHERE is_latest = 1')
+            rows = cursor.fetchall()
+
+            for row in rows:
+                anim_id, name, is_pose = row[0], row[1], row[2]
+                base_name = Config.get_base_name(name or '')
+                if not base_name:
+                    continue
+                in_poses = (poses_root / base_name).is_dir()
+                in_actions = (actions_root / base_name).is_dir()
+                if in_poses == in_actions:
+                    continue                      # both or neither - ambiguous
+                if in_poses and not is_pose:
+                    to_pose.append(anim_id)
+                elif in_actions and is_pose:
+                    to_action.append(anim_id)
+
+            for ids, value in ((to_pose, 1), (to_action, 0)):
+                if ids:
+                    cursor.executemany(
+                        'UPDATE animations SET is_pose = ? WHERE id = ?',
+                        [(value, i) for i in ids])
+            if to_pose or to_action:
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Pose flag reconciliation failed: {e}")
+            return (0, 0)
+
+        return (len(to_pose), len(to_action))
 
     # ==================== PATH GENERATION & RESOLUTION ====================
 
