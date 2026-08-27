@@ -22,7 +22,8 @@ from bpy.types import Operator
 
 # Timer interval: 0.05s = 50ms = 20 checks per second (matches the previous
 # modal timer cadence so command latency is unchanged).
-SOCKET_TIMER_INTERVAL = 0.05
+SOCKET_TIMER_INTERVAL = 0.05        # while a client is connected or work is queued
+SOCKET_TIMER_IDLE_INTERVAL = 0.5    # nothing connected - nothing can arrive
 
 # Tracks whether the listener is meant to be running. The timer callback reads
 # this to decide whether to reschedule itself or unregister.
@@ -39,9 +40,15 @@ def _socket_timer_tick():
         return None  # Stop: unregister the timer
 
     try:
-        from ..utils.socket_server import process_command_queue, is_server_running
+        from ..utils.socket_server import (process_command_queue,
+                                           is_server_running, has_pending_work)
         if is_server_running():
             process_command_queue()
+            # Tick fast only when it can achieve something. With no client
+            # connected nothing can arrive, so waking 20x a second is pure
+            # overhead - and a connecting client makes the very next tick fast.
+            if not has_pending_work():
+                return SOCKET_TIMER_IDLE_INTERVAL
     except Exception:
         # Never let an exception kill the timer - keep listening.
         pass

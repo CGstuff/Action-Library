@@ -599,6 +599,14 @@ class ANIMLIB_OT_update_preview(Operator):
                             viewport_settings['shading_type'] = space.shading.type
                             viewport_settings['background_type'] = space.shading.background_type
                             viewport_settings['background_color'] = tuple(space.shading.background_color)
+                            # Solid-mode lighting. Changed below and, until now, never
+                            # put back - so anyone working in Solid + Flat (or a
+                            # MatCap) was silently left in Solid + Studio after a
+                            # capture. Invisible to Rendered users, because these
+                            # are Solid sub-settings.
+                            viewport_settings['shading_light'] = space.shading.light
+                            viewport_settings['studio_light'] = space.shading.studio_light
+                            viewport_settings['studiolight_intensity'] = space.shading.studiolight_intensity
 
                             # Store viewport view settings (camera angle)
                             viewport_settings['view_location'] = space.region_3d.view_location.copy()
@@ -641,8 +649,11 @@ class ANIMLIB_OT_update_preview(Operator):
             return viewport_settings
 
         except Exception as e:
+            # Return what we managed to store rather than {}. The viewport may
+            # already be half-reconfigured, and returning nothing left the caller
+            # with nothing to put back.
             logger.error(f"Error setting up viewport for preview: {e}")
-            return {}
+            return locals().get('viewport_settings') or {}
 
     def restore_viewport_settings(self, viewport_settings):
         """Restore original viewport settings - copied from working capture_animation.py"""
@@ -660,6 +671,17 @@ class ANIMLIB_OT_update_preview(Operator):
                                 space.shading.type = viewport_settings.get('shading_type', 'SOLID')
                                 space.shading.background_type = viewport_settings.get('background_type', 'THEME')
                                 space.shading.background_color = viewport_settings.get('background_color', (0.05, 0.05, 0.05))
+                                # Lighting mode first: which studio_light values
+                                # are legal depends on it.
+                                if 'shading_light' in viewport_settings:
+                                    space.shading.light = viewport_settings['shading_light']
+                                if 'studio_light' in viewport_settings:
+                                    try:
+                                        space.shading.studio_light = viewport_settings['studio_light']
+                                    except TypeError:
+                                        pass          # not valid for the restored mode
+                                if 'studiolight_intensity' in viewport_settings:
+                                    space.shading.studiolight_intensity =                                         viewport_settings['studiolight_intensity']
 
                                 if 'view_location' in viewport_settings:
                                     space.region_3d.view_location = viewport_settings['view_location']
@@ -670,13 +692,15 @@ class ANIMLIB_OT_update_preview(Operator):
                                 if 'view_perspective' in viewport_settings:
                                     space.region_3d.view_perspective = viewport_settings['view_perspective']
                             else:
-                                # Force restore to visible defaults
-                                space.overlay.show_overlays = True
-                                space.show_gizmo = True
-                                space.show_region_ui = True
-                                space.show_region_toolbar = True
-                                space.show_region_header = True
-                                space.shading.background_type = 'THEME'
+                                # Nothing was recorded, which means nothing was
+                                # changed either - setup failed before it touched
+                                # the viewport. This used to force overlays,
+                                # gizmos, regions and the background ON, which
+                                # isn't a restore: it imposed defaults on anyone
+                                # who deliberately works with overlays off.
+                                logger.debug(
+                                    "No viewport settings recorded; leaving the "
+                                    "viewport untouched")
 
                             logger.debug("Viewport settings restored")
                             break

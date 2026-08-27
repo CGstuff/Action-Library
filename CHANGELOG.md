@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-08-27
+
+### Fixed
+
+- **The Blender Panel Made Heavy Rigs Unresponsive** - With the Action Library tab open in the N-panel and an animation loaded, bones became sluggish or stopped responding to dragging altogether - and switching to any other tab fixed it instantly. The panel recounted every keyframe on every curve in the action, twice, and rescanned every bone name to detect the rig type - not once, but on every single redraw, which Blender performs continuously as you move the mouse. On a game rig with a few hundred bones that was tens of milliseconds of work per redraw, on the same thread Blender uses to handle your input, so your dragging simply queued up behind it. Nothing was ever locked. Those values are now calculated when they change instead of when they are drawn.
+- **A Failed Apply Could Leave a Rig Permanently Unanimatable** - If applying an animation from the app failed for any reason, the request was left in the queue and retried ten times a second for as long as Blender stayed open - re-applying the animation over whatever you were doing, so bones appeared locked and only intermittently responded. The queue lives inside the library, so restarting Blender didn't help, and disabling the addon only appeared to fix it because that stopped the retries. A failed request is now discarded, anything older than two minutes is abandoned, and the retry rate drops while the addon is waiting for you to select a rig.
+- **Poses Captured With No Thumbnail** - If Blender's output was set to Video (Output Properties > Output > Media Type), capturing a pose produced no thumbnail at all - the pose saved fine, but the card stayed blank with nothing to explain why. With the media type set to Video, Blender only permits video file formats, so the addon's attempt to switch the output to PNG for the thumbnail was rejected outright and the render never happened. Pose capture now switches the media type as well, takes the thumbnail, and restores your output settings exactly as they were. The other capture paths already did this; only poses were affected.
+- **A Failed Thumbnail Is No Longer Silent** - When a thumbnail can't be rendered, capture now says so instead of reporting success, and no longer records a thumbnail that doesn't exist. If Blender writes the image under a name of its own choosing, it is found and put where it belongs rather than treated as a failure.
+- **Capturing Changed Your Viewport Lighting and Left It That Way** - Capturing could leave the viewport's solid-mode lighting switched to Studio, so anyone working in Flat or with a MatCap silently lost their setting. Preview rendering changed the lighting without recording what it was, so there was nothing to restore. Pose capture could also leave overlays, gizmos, the toolbar and the header switched off, because setting up the render referenced a lighting preset that isn't valid for solid shading and aborted part-way through. Both are fixed across all four capture paths.
+
+### Changed
+
+- **The Addon Idles Quietly** - With no app connected, the addon's background checks drop from thirty wake-ups a second to three, and the check for queued work no longer lists the library folder unless something in it actually changed. On a shared network library that listing was a round-trip on Blender's main thread, ten times a second, for as long as Blender was open. Responsiveness while the app IS connected is unchanged.
+- **Background Work Scales to Your Machine** - The desktop app sized its background workers to a fixed number regardless of the computer running it - a small share of a workstation, but every core of a laptop, while Blender was trying to use the same processor. Worker counts now scale with the machine, and preview generation gets its own smaller pool so it can never crowd out the rest of the app.
+
 ## [1.5.9] - 2026-08-26
 
 ### Fixed

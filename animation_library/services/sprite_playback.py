@@ -24,6 +24,7 @@ lockstep - that looks like a glitch rather than a library.
 """
 
 import logging
+import os
 from typing import Dict, Optional, Set, Tuple
 
 from PyQt6.QtCore import QObject, QRect, QRunnable, QThreadPool, QTimer, pyqtSignal
@@ -89,7 +90,13 @@ class SpritePlaybackService(QObject):
 
         self._tick_count = 0
         self._builds_since_prune = 0
-        self._pool = QThreadPool.globalInstance()
+        # A dedicated pool, deliberately not the global one. Sheet building is
+        # the heaviest thing this app does (video decode per clip) and it is
+        # pure nicety - it must never compete with thumbnail loading, and it
+        # must never take the machine away from Blender running alongside.
+        self._pool = QThreadPool()
+        self._pool.setMaxThreadCount(
+            max(1, min(3, (os.cpu_count() or 4) // 4)))
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)

@@ -1,7 +1,7 @@
 import bpy
 from bpy.types import Panel, UIList
 from ..utils.queue_client import animation_queue_client
-from ..utils.utils import get_action_keyframe_range, get_action_keyframe_count
+from ..utils.utils import get_action_stats_cached
 from ..utils import icon_loader
 from ..preferences.AL_preferences import get_library_path, is_experimental_enabled
 from ..operators import ANIMLIB_OT_update_preview
@@ -209,13 +209,14 @@ class ANIMLIB_PT_capture(Panel):
                 info_grid.label(text=f"Action: {action.name}", icon='ACTION')
 
                 # Get keyframe range
-                keyframe_start, keyframe_end = get_action_keyframe_range(action)
+                # Cached: this is a draw() and it runs on every redraw. Walking
+                # 1800 fcurves here is what made heavy rigs unresponsive.
+                keyframe_start, keyframe_end, kf_count = get_action_stats_cached(action)
 
                 if keyframe_start is not None and keyframe_end is not None:
                     info_grid.label(text=f"Frames: {keyframe_start}-{keyframe_end}", icon='KEYFRAME_HLT')
                     duration = (keyframe_end - keyframe_start + 1) / scene.render.fps
                     info_grid.label(text=f"Duration: {duration:.2f}s", icon='TIME')
-                    kf_count = get_action_keyframe_count(action)
                     info_grid.label(text=f"Keyframes: {kf_count}", icon='KEYFRAME')
                 else:
                     info_grid.label(text="No keyframes found", icon='ERROR')

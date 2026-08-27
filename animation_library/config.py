@@ -42,7 +42,12 @@ class Config:
 
     # Performance settings (Hybrid plan + Maya-inspired)
     PIXMAP_CACHE_SIZE_KB: Final[int] = 512 * 1024  # 512 MB
-    THUMBNAIL_THREAD_COUNT: Final[int] = 4  # Background workers
+    # Background workers. Scaled to the machine, not fixed: a hard 4 is a
+    # twentieth of a 32-core box and ALL of a 4-core one, so the same setting
+    # was invisible on a workstation and starved Blender on a laptop. Users run
+    # this alongside Blender, which is CPU-bound - leaving headroom matters more
+    # than finishing thumbnails a moment sooner.
+    THUMBNAIL_THREAD_COUNT: Final[int] = max(2, min(4, (os.cpu_count() or 4) // 4))
     BATCH_SIZE: Final[int] = 100  # Items to load per batch
 
     # UI settings

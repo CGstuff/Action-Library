@@ -125,6 +125,21 @@ def get_connected_clients_count() -> int:
         return sum(1 for t in _client_threads if t.is_alive())
 
 
+def has_pending_work() -> bool:
+    """True when the listener should tick at its fast rate.
+
+    Either something is already queued, or a client is connected and could send
+    a command at any moment. With neither, there is nothing for the main-thread
+    timer to do and it can idle instead.
+    """
+    try:
+        if not _command_queue.empty():
+            return True
+    except Exception:
+        return True                      # never idle on an unclear state
+    return get_connected_clients_count() > 0
+
+
 def start_server(host: Optional[str] = None, port: Optional[int] = None) -> bool:
     """
     Start the TCP socket server.

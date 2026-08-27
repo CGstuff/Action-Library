@@ -455,6 +455,56 @@ def get_action_keyframe_count(action, slot=None):
 
     return total_keyframes
 
+# Panel draw() runs on Blender's ONE UI thread, on every redraw - mouse move,
+# frame change, selection change. Walking every keyframe of every fcurve there
+# means the addon competes with the user's own input for that thread: on a
+# 1800-fcurve rig it measured tens of milliseconds PER REDRAW, which reads as
+# "the addon locked my bones" because Blender is simply too busy to process the
+# drag. Nothing was ever locked.
+#
+# The panel only needs these to print a line of text, so a value up to
+# _STATS_TTL seconds old is indistinguishable from a fresh one. Operators that
+# actually capture animation still call the uncached functions.
+_STATS_TTL = 0.5
+_action_stats_cache = {}      # action name -> (timestamp, start, end, count)
+
+
+def get_action_stats_cached(action, slot=None):
+    """(first_frame, last_frame, keyframe_count) for display. Cheap to call often.
+
+    Recomputed at most every _STATS_TTL seconds per action. Use the uncached
+    get_action_keyframe_range/count when the exact current value matters.
+    """
+    if not action:
+        return None, None, 0
+
+    import time as _time
+    key = action.name
+    now = _time.time()
+    cached = _action_stats_cache.get(key)
+    if cached and (now - cached[0]) < _STATS_TTL:
+        return cached[1], cached[2], cached[3]
+
+    start, end = get_action_keyframe_range(action, slot)
+    count = get_action_keyframe_count(action, slot)
+    _action_stats_cache[key] = (now, start, end, count)
+
+    # Don't let the cache grow with every action the user ever selects.
+    if len(_action_stats_cache) > 32:
+        oldest = min(_action_stats_cache.items(), key=lambda kv: kv[1][0])[0]
+        _action_stats_cache.pop(oldest, None)
+
+    return start, end, count
+
+
+def invalidate_action_stats(action_name=None):
+    """Drop cached stats - after a capture or apply changes an action."""
+    if action_name is None:
+        _action_stats_cache.clear()
+    else:
+        _action_stats_cache.pop(action_name, None)
+
+
 def get_active_armature(context):
     """Get the active armature object, return None if not an armature"""
     armature = context.active_object

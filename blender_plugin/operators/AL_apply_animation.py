@@ -1289,7 +1289,10 @@ class ANIMLIB_OT_check_apply_queue(Operator):
             request_data = animation_queue_client.read_request(request_file)
 
             if not request_data or request_data.get('status') != 'pending':
-                self.report({'INFO'}, "No pending requests")
+                # Unreadable, or already handled. Leaving it on disk meant the
+                # 10Hz poll re-read it forever.
+                animation_queue_client.mark_request_completed(request_file)
+                self.report({'INFO'}, "Discarded a stale queue request")
                 return {'FINISHED'}
 
             # Check request type - pose or animation
@@ -1350,6 +1353,17 @@ class ANIMLIB_OT_check_apply_queue(Operator):
             self.report({'INFO'}, f"Applied queued Action: {animation_name}")
 
         except Exception as e:
+            # Consume the request even though it failed. This used to fall
+            # through with the file still on disk, so the 10Hz poll re-ran the
+            # apply operator forever - stomping the user's pose on every tick
+            # and making the rig look permanently locked. The queue file lives
+            # in the library, so it survived restarts too: disabling the addon
+            # "fixed" it only because that stopped the timer.
+            # The pose path already did this on every failure branch.
+            try:
+                animation_queue_client.mark_request_completed(request_file)
+            except Exception:
+                pass
             self.report({'ERROR'}, f"Error checking apply queue: {str(e)}")
 
         return {'FINISHED'}
@@ -1498,7 +1512,28 @@ class ANIMLIB_OT_check_apply_queue(Operator):
 
 # Global flag to track if timer is running
 _queue_poll_timer_running = False
-_POLL_INTERVAL = 0.1  # Poll every 0.1 seconds (faster for responsive pose apply)
+_POLL_INTERVAL = 0.1        # responsive, while the app is connected
+# Waiting on the user (no rig selected, no 3D viewport). Retrying ten times a
+# second changes nothing and keeps the main thread busy while they work.
+_POLL_BLOCKED_INTERVAL = 1.0
+# An apply request nobody can satisfy is abandoned rather than retried forever.
+_REQUEST_MAX_AGE_SECONDS = 120
+_POLL_IDLE_INTERVAL = 1.0   # no app connected - nothing can enqueue work
+
+
+def _discard_stale_requests(pending_files):
+    """Delete apply requests older than _REQUEST_MAX_AGE_SECONDS."""
+    import time as _time
+    now = _time.time()
+    for request_file in pending_files:
+        try:
+            if now - request_file.stat().st_mtime > _REQUEST_MAX_AGE_SECONDS:
+                request_file.unlink()
+                logger.warning(
+                    f"Discarded stale apply request (older than "
+                    f"{_REQUEST_MAX_AGE_SECONDS}s): {request_file.name}")
+        except OSError:
+            pass
 
 
 def _auto_poll_queue():
@@ -1516,15 +1551,31 @@ def _auto_poll_queue():
         pending_files = animation_queue_client.get_pending_apply_requests()
 
         if not pending_files:
+            # Only the desktop app writes to this queue. With none connected,
+            # polling the library folder 10x a second buys nothing - and on a
+            # shared drive each of those is a network round-trip on the main
+            # thread. A connecting app restores the fast rate on the next tick.
+            try:
+                from ..utils.socket_server import get_connected_clients_count
+                if get_connected_clients_count() == 0:
+                    return _POLL_IDLE_INTERVAL
+            except Exception:
+                pass
             return _POLL_INTERVAL  # Nothing to do
 
         logger.debug(f"Found {len(pending_files)} pending queue file(s)")
+
+        # Abandon anything too old to still be wanted. Every 'can't act on this
+        # yet' path below leaves the file in place on purpose (the user may be
+        # about to select a rig), so without an upper bound a request that can
+        # NEVER be satisfied is retried for the life of the session.
+        _discard_stale_requests(pending_files)
 
         # Get window manager and check for windows
         wm = bpy.context.window_manager
         if not wm.windows:
             logger.debug("No windows available")
-            return _POLL_INTERVAL
+            return _POLL_BLOCKED_INTERVAL
 
         window = wm.windows[0]
 
@@ -1537,7 +1588,7 @@ def _auto_poll_queue():
 
         if not area:
             logger.debug("No VIEW_3D area found")
-            return _POLL_INTERVAL
+            return _POLL_BLOCKED_INTERVAL
 
         # Find a region in the area
         region = None
@@ -1552,7 +1603,7 @@ def _auto_poll_queue():
 
         if not active_object or active_object.type != 'ARMATURE':
             logger.debug(f"No armature selected (active: {active_object})")
-            return _POLL_INTERVAL
+            return _POLL_BLOCKED_INTERVAL
 
         logger.info(f"Auto-applying animation to: {active_object.name}")
 

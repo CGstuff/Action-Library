@@ -8,6 +8,7 @@ Uses the protocol package from library/.schema/protocol/ for constants.
 """
 
 import tempfile
+import os
 from pathlib import Path
 import json
 from .logger import get_logger
@@ -52,6 +53,12 @@ RIG_SIGNATURES = {
 RIG_CONFIDENCE_THRESHOLD = 0.6
 
 
+# Rig detection is pure function of the bone names, and those don't change
+# between UI redraws. See detect_rig_type().
+_RIG_TYPE_TTL = 2.0
+_rig_type_cache = {}          # (armature name, bone count) -> (ts, type, confidence)
+
+
 class AnimationLibraryQueueClient:
     """
     Queue-based client for Animation Library v2 communication
@@ -94,6 +101,10 @@ class AnimationLibraryQueueClient:
 
         self.queue_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"AnimationLibraryQueueClient initialized. Queue directory: {self.queue_dir}")
+        # mtime of the queue folder at the last listing, and what that listing
+        # returned - see get_pending_apply_requests().
+        self._queue_dir_mtime = None
+        self._cached_pending = []
 
     def refresh_queue_dir(self):
         """Refresh queue directory (call when library path changes)"""
@@ -117,8 +128,23 @@ class AnimationLibraryQueueClient:
                 self.queue_dir = current_queue_dir
                 self.queue_dir.mkdir(parents=True, exist_ok=True)
 
-        if not self.queue_dir or not self.queue_dir.exists():
+        if not self.queue_dir:
             return []
+
+        # Gate the listing on the directory's own mtime. This runs 10x a second
+        # on Blender's main thread, and .queue lives INSIDE the library - so on a
+        # shared drive every listing was an SMB round-trip, stalling the UI
+        # thread for its latency rather than its CPU cost. One stat that usually
+        # says "unchanged" replaces a full listing plus a stat per file.
+        try:
+            dir_mtime = os.stat(self.queue_dir).st_mtime_ns
+        except OSError:
+            self._queue_dir_mtime = None
+            self._cached_pending = []
+            return []
+
+        if dir_mtime == self._queue_dir_mtime:
+            return self._cached_pending
 
         try:
             pending_files = list(self.queue_dir.glob(QUEUE_FILE_PATTERN))
@@ -126,9 +152,14 @@ class AnimationLibraryQueueClient:
             # pending_files[0]) processes requests in submission order (FIFO).
             # Newest-first made rapid A-then-B applies run B before A.
             pending_files.sort(key=lambda f: f.stat().st_mtime)
+            self._queue_dir_mtime = dir_mtime
+            self._cached_pending = pending_files
             logger.debug(f"Found {len(pending_files)} pending requests")
             return pending_files
         except Exception as e:
+            # Don't cache a failure - retry on the next tick.
+            self._queue_dir_mtime = None
+            self._cached_pending = []
             logger.error(f"Error checking queue: {e}")
             return []
 
@@ -180,6 +211,8 @@ class AnimationLibraryQueueClient:
         """
         try:
             request_file.unlink()
+            # Force the next poll to re-list rather than trust the cache.
+            self._queue_dir_mtime = None
             logger.info(f"Completed request: {request_file.name}")
             return True
         except Exception as e:
@@ -201,6 +234,16 @@ class AnimationLibraryQueueClient:
             logger.warning("Invalid armature object passed to detect_rig_type")
             return 'unknown', 0.0
 
+        # Cached. This is called from the N-panel's draw(), which runs on the
+        # UI thread on every redraw - building a set of every bone name and
+        # scoring it against each rig signature, hundreds of times a second, on
+        # a 300-bone rig. A rig's bones don't change between redraws.
+        import time as _time
+        cache_key = (armature.name, len(armature.data.bones))
+        cached = _rig_type_cache.get(cache_key)
+        if cached and (_time.time() - cached[0]) < _RIG_TYPE_TTL:
+            return cached[1], cached[2]
+
         bone_names = [bone.name for bone in armature.data.bones]
         bone_set = set(bone_names)
         best_match = 'unknown'
@@ -214,9 +257,11 @@ class AnimationLibraryQueueClient:
 
         if best_confidence < RIG_CONFIDENCE_THRESHOLD:
             logger.debug(f"Rig detection below threshold: {best_match} ({best_confidence:.2f})")
-            return 'unknown', best_confidence
+            _rig_type_cache[cache_key] = (_time.time(), best_match, best_confidence)
+            return best_match, best_confidence
 
         logger.info(f"Detected rig type: {best_match} (confidence: {best_confidence:.2f})")
+        _rig_type_cache[cache_key] = (_time.time(), best_match, best_confidence)
         return best_match, best_confidence
 
     def calculate_rig_score(self, bone_set, signature):
