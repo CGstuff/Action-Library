@@ -27,16 +27,57 @@ class ANIMLIB_OT_launch_desktop_app(Operator):
                     self.report({'ERROR'}, "Please configure executable path in preferences")
                     return {'CANCELLED'}
 
-                if not os.path.exists(prefs.desktop_app_exe_path):
-                    self.report({'ERROR'}, f"Executable not found: {prefs.desktop_app_exe_path}")
+                # Blender FILE_PATH properties can hold a //blend-relative
+                # path; resolve it the same way the preferences panel does so
+                # the two can never disagree about whether a path is valid.
+                exe_path = bpy.path.abspath(prefs.desktop_app_exe_path)
+                if not os.path.exists(exe_path):
+                    self.report({'ERROR'}, f"Executable not found: {exe_path}")
+                    return {'CANCELLED'}
+
+                # os.path.exists() is True for a FOLDER, so pointing this at the
+                # install directory instead of the .exe sailed past the old check
+                # and failed later in Popen as "[WinError 5] Access is denied" -
+                # which reads like a permissions problem and isn't one.
+                if os.path.isdir(exe_path):
+                    self.report({'ERROR'},
+                                f"That's a folder, not the application. Pick "
+                                f"ActionLibrary.exe inside it: {exe_path}")
+                    return {'CANCELLED'}
+
+                if not os.path.isfile(exe_path):
+                    self.report({'ERROR'}, f"Not a file: {exe_path}")
+                    return {'CANCELLED'}
+
+                if sys.platform == 'win32' and not exe_path.lower().endswith('.exe'):
+                    self.report({'ERROR'},
+                                f"Not an executable - expected a .exe: {exe_path}")
+                    return {'CANCELLED'}
+
+                if not os.access(exe_path, os.X_OK):
+                    self.report({'ERROR'},
+                                f"No permission to run {exe_path}. It may be "
+                                f"blocked by antivirus, or need unblocking in "
+                                f"file Properties.")
                     return {'CANCELLED'}
 
                 try:
                     # Launch exe in detached mode
-                    subprocess.Popen([prefs.desktop_app_exe_path],
+                    subprocess.Popen([exe_path],
                                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
                     self.report({'INFO'}, "Animation Library launched successfully")
                     return {'FINISHED'}
+                except PermissionError as launch_error:
+                    # Everything above passed, so the path is a real, runnable
+                    # .exe - Windows itself is refusing. Almost always antivirus
+                    # or a file still marked as downloaded-from-the-internet.
+                    self.report({'ERROR'},
+                                f"Windows refused to start {os.path.basename(exe_path)} "
+                                f"({launch_error}). This is usually antivirus "
+                                f"blocking it, or the file needing 'Unblock' in "
+                                f"its Properties.")
+                    logger.error(f"Access denied launching exe: {launch_error}")
+                    return {'CANCELLED'}
                 except Exception as launch_error:
                     self.report({'ERROR'}, f"Failed to launch exe: {str(launch_error)}")
                     logger.error(f"Error launching exe: {launch_error}")

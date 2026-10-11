@@ -254,14 +254,17 @@ class AddonInstallerService:
             logger.error(f"Failed to zip addon: {e}")
             raise
 
-    def install_addon(self, blender_path: str, storage_path: str = None, exe_path: str = None) -> Tuple[bool, str]:
+    def install_addon(self, blender_path: str, storage_path: str = None,
+                      exe_path: str = None, script_path: str = None) -> Tuple[bool, str]:
         """
         Install the addon to Blender using a zip file and background script.
         
         Args:
             blender_path: Path to blender.exe
             storage_path: Optional path to the animation library storage to configure in the addon
-            exe_path: Optional path to the current application executable to configure in the addon
+            exe_path: Optional path to the compiled application executable (frozen builds)
+            script_path: Optional path to run.py, used instead of exe_path when
+                running from source so the addon is configured for DEVELOPMENT mode
             
         Returns:
             Tuple of (success, message)
@@ -294,24 +297,20 @@ class AddonInstallerService:
             # 2. Run Blender with install script
             logger.info("Running Blender to install addon...")
             
-            # Command: blender.exe --background --python install_addon.py -- path/to/zip [storage_path] [exe_path]
+            # Command: blender.exe --background --python install_addon.py --
+            #     <zip> <storage_path|None> <exe_path|None> <script_path|None>
+            # The script reads these positionally, so every earlier slot has to
+            # be filled once a later one is set - always send all four.
             cmd = [
                 str(blender_path),
                 "--background",
                 "--python", str(self.install_script_path),
-                "--", str(zip_path)
+                "--", str(zip_path),
+                str(storage_path) if storage_path else "None",
+                str(exe_path) if exe_path else "None",
+                str(script_path) if script_path else "None",
             ]
-            
-            # Add storage path (pass "None" string if not provided but we need to pass exe_path)
-            if storage_path:
-                cmd.append(str(storage_path))
-            elif exe_path:
-                cmd.append("None")
-                
-            # Add exe path if provided
-            if exe_path:
-                cmd.append(str(exe_path))
-            
+
             process = subprocess.run(
                 cmd,
                 **self._subprocess_kwargs(timeout=60)

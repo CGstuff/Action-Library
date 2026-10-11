@@ -3,7 +3,12 @@ import sys
 import os
 import addon_utils
 
-def install_addon(zip_path, storage_path=None, exe_path=None):
+def _given(value):
+    """Positional args arrive as the literal string "None" when unset."""
+    return bool(value) and value.lower() != "none"
+
+
+def install_addon(zip_path, storage_path=None, exe_path=None, script_path=None):
     print(f"Starting installation of addon from: {zip_path}")
     
     if not os.path.exists(zip_path):
@@ -32,7 +37,7 @@ def install_addon(zip_path, storage_path=None, exe_path=None):
         
         if prefs:
             # Configure storage path if provided
-            if storage_path and storage_path.lower() != "none":
+            if _given(storage_path):
                 print(f"Configuring storage path: {storage_path}")
                 try:
                     prefs.actions_library_path = storage_path
@@ -40,17 +45,30 @@ def install_addon(zip_path, storage_path=None, exe_path=None):
                 except Exception as e:
                     print(f"Error setting storage path: {e}")
 
-            # Configure executable path if provided
-            if exe_path and exe_path.lower() != "none":
+            # Configure how the addon launches the app back. Only force
+            # PRODUCTION when we were actually handed an .exe - the caller
+            # sends a script path instead when the app is running from source,
+            # and flipping to PRODUCTION there would point the addon at
+            # python.exe.
+            if _given(exe_path):
                 print(f"Configuring executable path: {exe_path}")
                 try:
                     prefs.desktop_app_exe_path = exe_path
-                    # Also force mode to PRODUCTION as requested
                     prefs.desktop_app_launch_mode = 'PRODUCTION'
                     print("Executable path and PRODUCTION mode set successfully.")
                 except Exception as e:
                     print(f"Error setting executable path: {e}")
-        
+            elif _given(script_path):
+                print(f"Configuring script path: {script_path}")
+                try:
+                    prefs.desktop_app_script_path = script_path
+                    prefs.desktop_app_launch_mode = 'DEVELOPMENT'
+                    print("Script path and DEVELOPMENT mode set successfully.")
+                except Exception as e:
+                    print(f"Error setting script path: {e}")
+            else:
+                print("No launch target supplied - leaving launch mode untouched.")
+
         # Save preferences to make it persistent
         print("Saving user preferences...")
         bpy.ops.wm.save_userpref()
@@ -77,16 +95,11 @@ if __name__ == "__main__":
         zip_path = args[0]
         
         # Check for optional arguments
-        storage_path = None
-        exe_path = None
-        
-        if len(args) > 1:
-            storage_path = args[1]
-            
-        if len(args) > 2:
-            exe_path = args[2]
-            
-        success = install_addon(zip_path, storage_path, exe_path)
+        storage_path = args[1] if len(args) > 1 else None
+        exe_path = args[2] if len(args) > 2 else None
+        script_path = args[3] if len(args) > 3 else None
+
+        success = install_addon(zip_path, storage_path, exe_path, script_path)
         
         if not success:
             sys.exit(1)

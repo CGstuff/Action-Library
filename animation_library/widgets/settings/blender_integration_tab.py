@@ -14,8 +14,13 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
+from pathlib import Path
+import logging
+
 from ...config import Config
 from ...services.addon_installer_service import AddonInstallerService
+
+logger = logging.getLogger(__name__)
 
 
 class BlenderIntegrationTab(QWidget):
@@ -330,16 +335,31 @@ class BlenderIntegrationTab(QWidget):
         library_path = Config.load_library_path()
         storage_path = str(library_path) if library_path else None
         
-        # Get current executable path to configure in the addon
-        # Only meaningful if we are running as a frozen bundle (exe)
-        # But user requested it, so we pass sys.executable regardless
-        exe_path = sys.executable
+        # Tell the addon how to launch us back. sys.executable is only this
+        # application when we're a frozen PyInstaller bundle; running from
+        # source it's python.exe, and writing that into desktop_app_exe_path
+        # (plus forcing PRODUCTION mode) left the addon launching a bare
+        # interpreter with no script - it would appear to do nothing at all.
+        if getattr(sys, 'frozen', False):
+            exe_path = sys.executable
+            script_path = None
+        else:
+            exe_path = None
+            # animation_library/widgets/settings/ -> repo root
+            candidate = Path(__file__).resolve().parents[3] / 'run.py'
+            script_path = str(candidate) if candidate.is_file() else None
+            if script_path is None:
+                logger.warning(
+                    "Running from source but run.py was not found at %s - the "
+                    "addon's launch path will be left untouched", candidate
+                )
 
         # Install
         success, install_message = self.addon_installer.install_addon(
-            blender_path, 
-            storage_path=storage_path, 
-            exe_path=exe_path
+            blender_path,
+            storage_path=storage_path,
+            exe_path=exe_path,
+            script_path=script_path
         )
 
         if success:

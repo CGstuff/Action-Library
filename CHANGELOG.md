@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-10-11
+
+### Fixed
+
+- **"Access Is Denied" When Launching the App From Blender** - Launching the desktop app from the N-panel could fail with `[WinError 5] Access is denied`, which reads like an antivirus or permissions problem and usually wasn't one. If the executable path in the addon's preferences pointed at the install *folder* instead of the .exe inside it, nothing caught it: the preferences panel checked only that the path existed - which is true of a folder - and confidently reported "Executable found", so there was no reason to suspect the setting. The launch then handed a directory to Windows, which refused it. Both the panel and the launch now check that the path is a file and an actual .exe, and say which of those is wrong. A genuine permission refusal is now reported as one, naming antivirus and the "Unblock" checkbox in the file's Properties.
+- **Installing the Addon From the App Could Point It at Python Instead of the App** - Settings > Blender Integration > Install Addon fills in the executable path for you, so you never have to find it yourself. It used the path of the running program - correct for the packaged app, but when Action Library is run from source that is `python.exe`. The addon was handed the interpreter, forced into Production mode, and clicking Launch started a bare Python process with no script and no window: nothing appeared to happen and nothing explained why. The installer now recognises which way it is running and configures the addon for the matching mode - the .exe for a packaged build, `run.py` and Development mode from source.
+- **Installing With No Library Path Set Mixed Up the Addon's Settings** - If the addon installer had a launch path to configure but no library path, the launch path was written into the addon's *library path* setting instead, leaving both wrong. The settings are passed positionally and an empty one was skipped rather than left blank, so everything after it shifted up by one.
+- **Preferences Said the Wrong Filenames** - The addon's preferences asked for `AnimationLibrary.exe` and `studio_main.py`; the build produces `ActionLibrary.exe` and the script is `run.py`. The build location shown was wrong too. Leftovers from the project's old name, which made the field harder to fill in correctly, not easier.
+
 ## [1.6.0] - 2026-08-27
 
 ### Fixed

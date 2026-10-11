@@ -116,7 +116,7 @@ class ANIMLIB_PreferencesProperties(PropertyGroup):
 
     desktop_app_exe_path: bpy.props.StringProperty(
         name="Executable Path",
-        description="Path to the compiled AnimationLibrary.exe",
+        description="Path to the compiled ActionLibrary.exe",
         default="",
         maxlen=1024,
         subtype='FILE_PATH'
@@ -124,7 +124,7 @@ class ANIMLIB_PreferencesProperties(PropertyGroup):
 
     desktop_app_script_path: bpy.props.StringProperty(
         name="Script Path",
-        description="Path to studio_main.py (for development mode)",
+        description="Path to run.py (for development mode)",
         default="",
         maxlen=1024,
         subtype='FILE_PATH'

@@ -80,18 +80,30 @@ class ANIMLIB_AddonPreferences(AddonPreferences, ANIMLIB_PreferencesProperties):
             col.label(text="Executable Path:")
             col.prop(self, "desktop_app_exe_path", text="")
 
-            # Show path status
+            # Show path status. os.path.exists() is True for a folder too, so
+            # picking the install directory instead of the .exe used to report
+            # "Executable found" here and then fail at launch with
+            # "[WinError 5] Access is denied" - which reads like a permissions
+            # problem and isn't one.
             if self.desktop_app_exe_path:
-                if os.path.exists(self.desktop_app_exe_path):
-                    col.label(text="✓ Executable found", icon='CHECKMARK')
-                else:
+                resolved = bpy.path.abspath(self.desktop_app_exe_path)
+                if not os.path.exists(resolved):
                     col.label(text="✗ Executable not found", icon='ERROR')
+                elif os.path.isdir(resolved):
+                    col.label(text="✗ That's a folder - pick ActionLibrary.exe inside it",
+                              icon='ERROR')
+                elif not os.path.isfile(resolved):
+                    col.label(text="✗ Not a file", icon='ERROR')
+                elif sys.platform == 'win32' and not resolved.lower().endswith('.exe'):
+                    col.label(text="✗ Not an executable - expected a .exe", icon='ERROR')
+                else:
+                    col.label(text="✓ Executable found", icon='CHECKMARK')
             else:
-                col.label(text="Please select AnimationLibrary.exe", icon='INFO')
+                col.label(text="Please select ActionLibrary.exe", icon='INFO')
 
             box.separator()
             box.label(text="Build executable with: build.bat", icon='INFO')
-            box.label(text="Location: dist/AnimationLibrary/AnimationLibrary.exe", icon='INFO')
+            box.label(text="Location: dist/ActionLibrary/ActionLibrary.exe", icon='INFO')
 
         # Development mode settings
         else:
@@ -99,14 +111,20 @@ class ANIMLIB_AddonPreferences(AddonPreferences, ANIMLIB_PreferencesProperties):
             col.label(text="Python Script Path:")
             col.prop(self, "desktop_app_script_path", text="")
 
-            # Show script status
+            # Show script status (same folder hole as the exe path above)
             if self.desktop_app_script_path:
-                if os.path.exists(self.desktop_app_script_path):
-                    col.label(text="✓ Script found", icon='CHECKMARK')
-                else:
+                resolved = bpy.path.abspath(self.desktop_app_script_path)
+                if not os.path.exists(resolved):
                     col.label(text="✗ Script not found", icon='ERROR')
+                elif os.path.isdir(resolved):
+                    col.label(text="✗ That's a folder - pick run.py inside it",
+                              icon='ERROR')
+                elif not resolved.lower().endswith('.py'):
+                    col.label(text="✗ Not a Python script - expected a .py", icon='ERROR')
+                else:
+                    col.label(text="✓ Script found", icon='CHECKMARK')
             else:
-                col.label(text="Please select studio_main.py", icon='INFO')
+                col.label(text="Please select run.py", icon='INFO')
 
             box.separator()
 
