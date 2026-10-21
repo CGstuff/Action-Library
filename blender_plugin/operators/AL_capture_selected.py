@@ -15,7 +15,9 @@ from ..utils.queue_client import animation_queue_client
 from ..utils.utils import (
     get_action_fcurves, new_action_fcurve, init_action_for_blender_5,
     get_active_armature, has_animation_data, safe_report_error,
-    get_action_keyframe_range, BLENDER_5_0_OR_LATER
+    get_action_keyframe_range, BLENDER_5_0_OR_LATER,
+    get_active_slot, find_slot, describe_slot,
+    set_library_tracking, library_tracking_from_metadata
 )
 from ..utils.logger import get_logger
 from ..utils.naming_engine import get_naming_engine
@@ -25,19 +27,20 @@ from ..preferences import get_library_path, get_preview_settings
 logger = get_logger()
 
 
-def get_selected_keyframe_range(action):
+def get_selected_keyframe_range(action, slot=None):
     """
-    Find min/max frame of selected keyframes across all fcurves.
+    Find min/max frame of selected keyframes across one slot's fcurves.
 
     Args:
         action: Blender action to check
+        slot: Action slot to check (the rig's active slot)
 
     Returns:
         (min_frame, max_frame) tuple, or (None, None) if no selection
     """
     min_frame, max_frame = None, None
 
-    for fcurve in get_action_fcurves(action):
+    for fcurve in get_action_fcurves(action, slot):
         if not fcurve.keyframe_points:
             continue
         for kp in fcurve.keyframe_points:
@@ -51,9 +54,9 @@ def get_selected_keyframe_range(action):
     return min_frame, max_frame
 
 
-def has_selected_keyframes(action):
-    """Check if action has any selected keyframes."""
-    for fcurve in get_action_fcurves(action):
+def has_selected_keyframes(action, slot=None):
+    """Check if one slot of action has any selected keyframes."""
+    for fcurve in get_action_fcurves(action, slot):
         if not fcurve.keyframe_points:
             continue
         for kp in fcurve.keyframe_points:
@@ -62,7 +65,7 @@ def has_selected_keyframes(action):
     return False
 
 
-def create_action_from_selection(source_action, selection_start, selection_end, action_name):
+def create_action_from_selection(source_action, selection_start, selection_end, action_name, source_slot=None):
     """
     Create a new action containing only selected keyframes, shifted to start at frame 1.
 
@@ -71,6 +74,7 @@ def create_action_from_selection(source_action, selection_start, selection_end, 
         selection_start: First frame of selection
         selection_end: Last frame of selection
         action_name: Name for the new action
+        source_slot: Slot of source_action to copy from (the rig's active slot)
 
     Returns:
         New Blender action with selected keyframes
@@ -78,15 +82,18 @@ def create_action_from_selection(source_action, selection_start, selection_end, 
     # Create new action
     new_action = bpy.data.actions.new(name=action_name)
 
+    # The new action's one slot is named after the slot it was cut from
+    slot_name = source_slot.name_display if source_slot is not None else "Slot"
+
     # Initialize for Blender 5.0+ if needed
     if BLENDER_5_0_OR_LATER:
-        init_action_for_blender_5(new_action, slot_name="Slot")
+        init_action_for_blender_5(new_action, slot_name=slot_name)
 
     # Calculate frame offset to shift keyframes to start at frame 1
     frame_offset = selection_start - 1
 
     # Copy selected keyframes from each fcurve
-    for src_fcurve in get_action_fcurves(source_action):
+    for src_fcurve in get_action_fcurves(source_action, source_slot):
         if not src_fcurve.keyframe_points:
             continue
 
@@ -126,6 +133,10 @@ def create_action_from_selection(source_action, selection_start, selection_end, 
 
         new_fcurve.update()
 
+    # On Blender 4.5 the slot was created by the first fcurve, with a default name
+    if source_slot is not None and len(new_action.slots) == 1:
+        new_action.slots[0].name_display = slot_name
+
     logger.info(f"Created action '{action_name}' with keyframes shifted from {selection_start}-{selection_end} to 1-{selection_end - selection_start + 1}")
     return new_action
 
@@ -159,7 +170,7 @@ class ANIMLIB_OT_capture_selected(Operator):
             return False
 
         # Check for selected keyframes
-        return has_selected_keyframes(action)
+        return has_selected_keyframes(action, get_active_slot(armature))
 
     def invoke(self, context, event):
         """Start the capture operation"""
@@ -171,9 +182,13 @@ class ANIMLIB_OT_capture_selected(Operator):
             return {'CANCELLED'}
 
         action = armature.animation_data.action
+        slot = get_active_slot(armature)
+        if slot is None:
+            safe_report_error(self, "This rig has an action but no slot assigned - pick a slot in the Action editor")
+            return {'CANCELLED'}
 
         # Get selected keyframe range
-        sel_start, sel_end = get_selected_keyframe_range(action)
+        sel_start, sel_end = get_selected_keyframe_range(action, slot)
         if sel_start is None:
             safe_report_error(self, "No keyframes selected. Select keyframes in Dopesheet or Graph Editor.")
             return {'CANCELLED'}
@@ -183,6 +198,7 @@ class ANIMLIB_OT_capture_selected(Operator):
             'scene': scene,
             'armature': armature,
             'source_action': action,
+            'source_slot_handle': slot.handle,
             'selection_start': sel_start,
             'selection_end': sel_end,
         }
@@ -336,8 +352,14 @@ class ANIMLIB_OT_capture_selected(Operator):
                 sel_end = self._context_data['selection_end']
                 animation_name = self._context_data['animation_name']
 
+                source_slot = find_slot(source_action, self._context_data['source_slot_handle'])
+                if source_slot is None:
+                    self.report({'ERROR'}, "The slot being captured was removed")
+                    self.cleanup(context)
+                    return {'CANCELLED'}
+
                 new_action = create_action_from_selection(
-                    source_action, sel_start, sel_end, animation_name
+                    source_action, sel_start, sel_end, animation_name, source_slot
                 )
 
                 if not new_action:
@@ -412,15 +434,9 @@ class ANIMLIB_OT_capture_selected(Operator):
                 saved_metadata = self._context_data.get('saved_metadata', {})
 
                 if saved_metadata:
-                    # Mark action as from library
-                    # Use explicit string conversion to avoid ID property type errors in Blender 5.0
-                    new_action["animlib_imported"] = True
-                    new_action["animlib_uuid"] = str(saved_metadata.get('id', '') or '')
-                    new_action["animlib_version_group_id"] = str(saved_metadata.get('version_group_id', saved_metadata.get('id', '')) or '')
-                    new_action["animlib_version"] = int(saved_metadata.get('version', 1) or 1)
-                    new_action["animlib_version_label"] = str(saved_metadata.get('version_label', 'v001') or 'v001')
-                    new_action["animlib_name"] = str(saved_metadata.get('name', '') or '')
-                    new_action["animlib_rig_type"] = str(saved_metadata.get('rig_type', '') or '')
+                    # Mark the new action's slot as from library
+                    new_slot = new_action.slots[0] if new_action.slots else None
+                    set_library_tracking(new_action, new_slot, library_tracking_from_metadata(saved_metadata))
 
                 animation_name = self._context_data['animation_name']
                 sel_start = self._context_data['selection_start']
@@ -630,6 +646,15 @@ class ANIMLIB_OT_capture_selected(Operator):
                 'naming_fields': json.dumps(naming_info.get('naming_fields', {})) if naming_info else None,
                 'naming_template': naming_info.get('naming_template', '') if naming_info else None
             }
+            # Slot fields (animation_slots_spec.md section 5). The new action has one slot.
+            if action.slots:
+                metadata.update({
+                    'slot_mode': 'active',
+                    'primary_slot_identifier': action.slots[0].identifier,
+                    'slot_count': 1,
+                    'slots': [describe_slot(action, action.slots[0])],
+                    'source_action_name': self._context_data['source_action'].name,
+                })
 
             # Save JSON metadata
             with open(json_path, 'w') as f:

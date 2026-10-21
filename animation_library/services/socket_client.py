@@ -18,6 +18,7 @@ import socket
 import json
 import logging
 import threading
+import time
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
 
@@ -32,6 +33,7 @@ class ConnectionConfig:
     port: int = 9876
     timeout: float = 5.0  # Connection timeout in seconds
     recv_timeout: float = 30.0  # Response timeout in seconds (increased for slow operations)
+    identify_timeout: float = 3.0  # How long the addon gets to answer the identity ping
 
 
 class BlenderSocketClient:
@@ -62,6 +64,9 @@ class BlenderSocketClient:
         # Use RLock (reentrant lock) to allow same thread to acquire multiple times
         # This prevents race conditions when send_command() calls connect()
         self._lock = threading.RLock()
+        # Set when the port is answered by something other than Action Library's
+        # addon: a user-facing explanation. None when there's no clash.
+        self.port_clash: Optional[str] = None
 
     @property
     def is_connected(self) -> bool:
@@ -85,6 +90,8 @@ class BlenderSocketClient:
                 self._socket.settimeout(self.config.timeout)
                 self._socket.connect((self.config.host, self.config.port))
                 self._connected = True
+                if not self._is_action_library():
+                    return False
                 logger.debug(f"Connected to Blender at {self.config.host}:{self.config.port}")
                 return True
             except socket.timeout:
@@ -99,6 +106,73 @@ class BlenderSocketClient:
                 logger.debug(f"Connection error: {e}")
                 self._cleanup_socket()
                 return False
+
+    def _is_action_library(self) -> bool:
+        """
+        Check that what answered on the port is Action Library's Blender addon.
+
+        Anything can listen on this port - the Blender MCP addon defaults to
+        9876 too, and it even answers 'ping' with success. Only our addon
+        replies 'pong' (plus app='action_library' in newer versions). Called
+        with the lock held, straight after connecting; on failure the socket
+        is closed and port_clash explains why if something else answered.
+        """
+        try:
+            self._socket.sendall((json.dumps({'type': 'ping'}) + '\n').encode('utf-8'))
+            deadline = time.monotonic() + self.config.identify_timeout
+            buffer = ""
+            reply = None
+            while reply is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._socket.settimeout(remaining)
+                try:
+                    data = self._socket.recv(4096)
+                except socket.timeout:
+                    break
+                if not data:
+                    break
+                buffer += data.decode('utf-8', errors='replace')
+                if '\n' in buffer:
+                    line, _, self._recv_buffer = buffer.partition('\n')
+                    reply = line
+                else:
+                    # Other servers may not end replies with a newline
+                    try:
+                        json.loads(buffer)
+                        reply = buffer
+                    except json.JSONDecodeError:
+                        pass
+        except OSError as e:
+            logger.debug(f"Identity check failed: {e}")
+            self._cleanup_socket()
+            return False
+
+        try:
+            response = json.loads(reply) if reply is not None else None
+        except json.JSONDecodeError:
+            response = None
+
+        if isinstance(response, dict) and (response.get('app') == 'action_library'
+                                           or response.get('message') == 'pong'):
+            self.port_clash = None
+            return True
+
+        if reply is not None or buffer:
+            # Something answered, and it isn't us
+            self.port_clash = (
+                f"Port {self.config.port} is answered by another program, not Action Library's "
+                f"Blender add-on (the Blender MCP add-on also uses 9876). Applies go through the "
+                f"slower file queue until this is fixed: set a different Socket Port in Blender "
+                f"(Preferences > Add-ons > Action Library) and the same port in Settings > "
+                f"Blender Integration."
+            )
+            logger.warning(self.port_clash)
+        else:
+            logger.debug("Blender didn't answer the identity ping in time")
+        self._cleanup_socket()
+        return False
 
     def disconnect(self):
         """Disconnect from Blender socket server"""
@@ -464,6 +538,14 @@ def get_socket_client() -> BlenderSocketClient:
     return _socket_client_instance
 
 
+def reset_socket_client() -> None:
+    """Drop the global client so the next use reads the port from settings again."""
+    global _socket_client_instance
+    if _socket_client_instance is not None:
+        _socket_client_instance.disconnect()
+        _socket_client_instance = None
+
+
 def try_socket_apply(
     animation_id: str,
     animation_name: str,
@@ -509,5 +591,6 @@ __all__ = [
     'BlenderSocketClient',
     'ConnectionConfig',
     'get_socket_client',
+    'reset_socket_client',
     'try_socket_apply',
 ]

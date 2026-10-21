@@ -1228,6 +1228,18 @@ class MainWindow(QMainWindow):
         name = context.get('name', 'Unknown')
         item_type = context.get('item_type', 'animation')
         if result == APPLY_QUEUED:
+            port_clash = self._blender_service.get_port_clash()
+            if port_clash:
+                # Another program answers on our port - queued to file, which
+                # still reaches Blender, just slower. Explain once per session;
+                # the status bar keeps saying it.
+                self._status_bar.showMessage(
+                    f"Queued {item_type} '{name}' - another program is using the Blender port (see Settings > Blender Integration)"
+                )
+                if not getattr(self, '_port_clash_shown', False):
+                    self._port_clash_shown = True
+                    QMessageBox.warning(self, "Blender port is in use by another program", port_clash)
+                return
             # Blender isn't connected; queued to file - do NOT claim it applied.
             self._status_bar.showMessage(
                 f"Queued {item_type} '{name}' - Blender not connected; it will apply when Blender is running"

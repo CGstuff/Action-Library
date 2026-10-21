@@ -6,6 +6,10 @@ import json
 from bpy.types import Operator
 from ..utils.queue_client import animation_queue_client
 from ..utils.utils import (get_action_keyframe_range, get_active_armature,
+                   get_active_slot, find_slot, copy_action_with_slots, describe_slot,
+                   classify_slots, get_library_tracking, set_library_tracking,
+                   clear_library_tracking, get_bundle_tracking, set_bundle_tracking,
+                   clear_bundle_tracking, library_tracking_from_metadata,
                    has_animation_data, safe_report_error,
                    DEFAULT_ANIMATION_NAME,)
 from ..utils.logger import get_logger
@@ -66,7 +70,13 @@ class ANIMLIB_OT_capture_animation(Operator):
         if not armature.animation_data or not armature.animation_data.action:
             self.report({'ERROR'}, "No Action found on armature")
             return {'CANCELLED'}
-        
+
+        # Capture saves the slot the rig is playing, not the action's first slot
+        slot = get_active_slot(armature)
+        if slot is None:
+            self.report({'ERROR'}, "This rig has an action but no slot assigned - pick a slot in the Action editor")
+            return {'CANCELLED'}
+
         wm.animlib_is_capturing = True
 
         # Validate selection before starting
@@ -77,6 +87,12 @@ class ANIMLIB_OT_capture_animation(Operator):
             'scene': scene,
             'armature': armature,
             'action': armature.animation_data.action,
+            # Handle, not the slot: the modal runs over several ticks and the
+            # slot can be removed meanwhile
+            'slot_handle': slot.handle,
+            # 'ALL' saves every slot of the action that animates this rig
+            'slot_mode': ('ALL' if scene.animlib_capture_slot_mode == 'ALL'
+                          and len(armature.animation_data.action.slots) > 1 else 'ACTIVE'),
             'wm': wm
         }
 
@@ -150,15 +166,21 @@ class ANIMLIB_OT_capture_animation(Operator):
                 return {'RUNNING_MODAL'}
 
             elif self._state == 'CHECK_LIBRARY_SOURCE':
-                # Check if this action came from the library
+                # Check if what's being captured came from the library: the
+                # slot, or - for All Slots - the action as a bundle
                 action = self._context_data['action']
-                is_library_action = action.get("animlib_imported", False)
+                slot = self._capture_slot()
+                if self._context_data['slot_mode'] == 'ALL':
+                    tracking = get_bundle_tracking(action)
+                else:
+                    tracking = get_library_tracking(action, slot)
+                is_library_action = tracking.get("animlib_imported", False)
 
                 # ONE-TIME v1.2→v1.3 migration: detect legacy actions
                 # Legacy v1.2 actions have animlib_imported but NO animlib_app_version
-                if is_library_action and not action.get("animlib_app_version"):
+                if is_library_action and not tracking.get("animlib_app_version"):
                     logger.info("[MIGRATION] Legacy v1.2 action detected - treating as fresh animation")
-                    self._clear_library_metadata(action)
+                    self._clear_library_metadata(action, slot)
                     is_library_action = False  # Force fresh capture
 
                 # If already in versioning mode (user already chose), skip dialog
@@ -170,8 +192,8 @@ class ANIMLIB_OT_capture_animation(Operator):
 
                 # If action came from library, validate metadata is still current
                 if is_library_action:
-                    source_uuid = action.get("animlib_uuid", "")
-                    source_name = action.get("animlib_name", "Unknown")
+                    source_uuid = tracking.get("animlib_uuid", "")
+                    source_name = tracking.get("animlib_name", "Unknown")
 
                     # Validate that the UUID still exists with the same name
                     # If animation was renamed in desktop app, metadata is stale
@@ -186,7 +208,7 @@ class ANIMLIB_OT_capture_animation(Operator):
                                 "Please save as a new animation with a different name."
                             )
                             # Clear library metadata so user can save as new
-                            self._clear_library_metadata(action)
+                            self._clear_library_metadata(action, slot)
                             self.cleanup(context)
                             return {'CANCELLED'}
 
@@ -194,7 +216,7 @@ class ANIMLIB_OT_capture_animation(Operator):
 
                         if not is_valid:
                             # Library animation was renamed or deleted - clear metadata
-                            self._clear_library_metadata(action)
+                            self._clear_library_metadata(action, slot)
                             logger.info(f"Cleared stale library metadata for action (was: {source_name})")
 
                             # Treat as new animation - skip version dialog
@@ -202,9 +224,9 @@ class ANIMLIB_OT_capture_animation(Operator):
                             return {'RUNNING_MODAL'}
 
                     # Metadata is valid - show version choice dialog
-                    source_version = action.get("animlib_version", 1)
-                    source_version_label = action.get("animlib_version_label", "v001")
-                    source_version_group_id = action.get("animlib_version_group_id", "")
+                    source_version = tracking.get("animlib_version", 1)
+                    source_version_label = tracking.get("animlib_version_label", "v001")
+                    source_version_group_id = tracking.get("animlib_version_group_id", "")
 
                     logger.info(f"Library action detected: {source_name} ({source_version_label})")
 
@@ -376,7 +398,8 @@ class ANIMLIB_OT_capture_animation(Operator):
                     }
 
                 blend_file_path, json_file_path, saved_metadata = self.save_action_to_library(
-                    action, animation_name, rig_type, scene, version_info, naming_info
+                    action, self._capture_slot(), animation_name, rig_type, scene, version_info, naming_info,
+                    slot_mode=self._context_data['slot_mode']
                 )
 
                 if not blend_file_path or not json_file_path:
@@ -396,7 +419,7 @@ class ANIMLIB_OT_capture_animation(Operator):
                 action = self._context_data['action']
                 saved_metadata = self._context_data.get('saved_metadata')
                 if saved_metadata and action:
-                    self._update_action_library_metadata(action, saved_metadata)
+                    self._update_action_library_metadata(action, self._capture_slot(), saved_metadata)
                     logger.info(f"Updated action metadata: uuid={saved_metadata.get('id')}, version={saved_metadata.get('version')}")
 
                 # Clear form fields
@@ -418,6 +441,12 @@ class ANIMLIB_OT_capture_animation(Operator):
                     self.report({'INFO'}, f"New version '{animation_name}' ({version_label}) saved successfully")
                 else:
                     self.report({'INFO'}, f"Action '{animation_name}' saved successfully")
+
+                # All Slots: say what was left out and why
+                skipped = (saved_metadata or {}).get('skipped_slots') or []
+                if skipped:
+                    details = ", ".join(f"{s['name']} ({s['reason']})" for s in skipped)
+                    self.report({'WARNING'}, f"Saved {saved_metadata.get('slot_count', 0)} slots; skipped {len(skipped)}: {details}")
 
                 # Notify desktop app to refresh library
                 self._notify_desktop_app_capture(animation_name, saved_metadata)
@@ -554,30 +583,29 @@ class ANIMLIB_OT_capture_animation(Operator):
         # UUID not found in library
         return False
 
-    def _clear_library_metadata(self, action):
+    def _capture_slot(self):
+        """The slot being captured. Raises if it was removed mid-capture."""
+        slot = find_slot(self._context_data['action'], self._context_data['slot_handle'])
+        if slot is None:
+            raise RuntimeError("The slot being captured was removed")
+        return slot
+
+    def _clear_library_metadata(self, action, slot):
         """
-        Clear all library-related metadata from action.
+        Clear library-related metadata from one slot of action.
 
         This is called when the library animation was renamed or deleted,
-        making the action's metadata stale. Clearing it allows the action
+        making the slot's metadata stale. Clearing it allows the slot
         to be captured as a new animation.
 
         Args:
             action: Blender action to clear metadata from
+            slot: Slot whose metadata to clear
         """
-        props_to_clear = [
-            "animlib_imported",
-            "animlib_uuid",
-            "animlib_name",
-            "animlib_version",
-            "animlib_version_label",
-            "animlib_version_group_id",
-            "animlib_rig_type"
-        ]
-
-        for prop in props_to_clear:
-            if prop in action:
-                del action[prop]
+        if self._context_data and self._context_data.get('slot_mode') == 'ALL':
+            clear_bundle_tracking(action)
+        else:
+            clear_library_tracking(action, slot)
 
     def _is_animation_archived(self, uuid: str) -> bool:
         """
@@ -727,9 +755,9 @@ class ANIMLIB_OT_capture_animation(Operator):
 
         return fields
 
-    def _update_action_library_metadata(self, action, metadata: dict):
+    def _update_action_library_metadata(self, action, slot, metadata: dict):
         """
-        Update the action's library metadata after saving.
+        Update the captured slot's library metadata after saving.
 
         This allows subsequent captures to know the current version,
         so if user captures v002 and continues editing, next capture
@@ -737,20 +765,16 @@ class ANIMLIB_OT_capture_animation(Operator):
 
         Args:
             action: Blender action to update
+            slot: The slot that was captured
             metadata: Saved animation metadata dict
         """
         try:
-            # Update all library tracking properties
-            action["animlib_imported"] = True
-            action["animlib_app_version"] = "1.3.0"  # For one-time v1.2→v1.3 migration detection
-            action["animlib_uuid"] = metadata.get('id', '')
-            action["animlib_version_group_id"] = metadata.get('version_group_id', metadata.get('id', ''))
-            action["animlib_version"] = metadata.get('version', 1)
-            action["animlib_version_label"] = metadata.get('version_label', 'v001')
-            action["animlib_name"] = metadata.get('name', '')
-            action["animlib_rig_type"] = metadata.get('rig_type', '')
+            if metadata.get('slot_mode') == 'all':
+                set_bundle_tracking(action, library_tracking_from_metadata(metadata))
+            else:
+                set_library_tracking(action, slot, library_tracking_from_metadata(metadata))
 
-            logger.debug(f"Updated action '{action.name}' with library metadata: "
+            logger.debug(f"Updated action '{action.name}' slot '{slot.name_display}' with library metadata: "
                         f"uuid={metadata.get('id')}, version={metadata.get('version')}, "
                         f"version_group_id={metadata.get('version_group_id')}")
         except Exception as e:
@@ -886,11 +910,16 @@ class ANIMLIB_OT_capture_animation(Operator):
 
         return result
 
-    def save_action_to_library(self, action, animation_name, rig_type, scene, version_info=None, naming_info=None):
-        """Save action to library .blend file and create JSON metadata
+    def save_action_to_library(self, action, slot, animation_name, rig_type, scene, version_info=None, naming_info=None, slot_mode='ACTIVE'):
+        """Save slots of action to library .blend file and create JSON metadata
 
         Args:
-            action: Blender action to save
+            action: Blender action holding the animation
+            slot: The rig's active slot - the one saved in 'ACTIVE' mode, and
+                  the one the entry plays when applied in 'ALL' mode
+            slot_mode: 'ACTIVE' saves only slot; 'ALL' saves every slot that
+                  animates this rig (classify_slots) and records the rest as
+                  skipped
             animation_name: Name for the animation
             rig_type: Detected or custom rig type
             scene: Blender scene
@@ -1040,17 +1069,32 @@ class ANIMLIB_OT_capture_animation(Operator):
             temp_fd, temp_path = tempfile.mkstemp(suffix='.blend')
             os.close(temp_fd)
 
-            # Create a minimal blend file containing only our action
-            bpy.data.libraries.write(temp_path, {action}, compress=True)
+            # Get armature info
+            armature = bpy.context.active_object
+
+            # Which slots go into the library file. Other objects' animation
+            # never does, and in ACTIVE mode neither do the rig's other takes.
+            if slot_mode == 'ALL':
+                infos = classify_slots(action, armature)
+                save_slots = [i.slot for i in infos if i.captured]
+                skipped_slots = [{'name': i.slot.name_display, 'reason': i.reason}
+                                 for i in infos if not i.captured]
+            else:
+                save_slots, skipped_slots = [slot], []
+
+            # Create a minimal blend file containing only those slots
+            save_copy = copy_action_with_slots(action, save_slots)
+            try:
+                bpy.data.libraries.write(temp_path, {save_copy}, compress=True)
+                saved_slot_infos = [describe_slot(save_copy, s) for s in save_copy.slots]
+            finally:
+                bpy.data.actions.remove(save_copy)
 
             # Move to final location
             shutil.move(temp_path, str(blend_path))
 
-            # Get armature info
-            armature = bpy.context.active_object
-
-            # Detect actual keyframe range from the action
-            keyframe_start, keyframe_end = get_action_keyframe_range(action)
+            # Detect actual keyframe range from the captured slot
+            keyframe_start, keyframe_end = get_action_keyframe_range(action, slot)
 
             # Fallback to current frame if no keyframes found
             if keyframe_start is None or keyframe_end is None:
@@ -1140,7 +1184,15 @@ class ANIMLIB_OT_capture_animation(Operator):
                 'folder_path': inherited_folder_path,
                 # Studio naming fields (v9)
                 'naming_fields': json.dumps(naming_info.get('naming_fields', {})) if naming_info else None,
-                'naming_template': naming_info.get('naming_template', '') if naming_info else None
+                'naming_template': naming_info.get('naming_template', '') if naming_info else None,
+                # Slot fields (animation_slots_spec.md section 5). The top-level
+                # frame range above is the primary (active) slot's.
+                'slot_mode': 'all' if slot_mode == 'ALL' else 'active',
+                'primary_slot_identifier': slot.identifier,
+                'slot_count': len(saved_slot_infos),
+                'slots': saved_slot_infos,
+                'skipped_slots': skipped_slots,
+                'source_action_name': action.name,
             }
             
             # Save JSON metadata

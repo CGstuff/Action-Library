@@ -1,7 +1,8 @@
 import bpy
 from bpy.types import Panel, UIList
 from ..utils.queue_client import animation_queue_client
-from ..utils.utils import get_action_stats_cached
+from ..utils.utils import (get_action_stats_cached, get_active_slot, get_library_tracking,
+                           get_bundle_tracking, classify_slots_cached, SlotInfo)
 from ..utils import icon_loader
 from ..preferences.AL_preferences import get_library_path, is_experimental_enabled
 from ..operators import ANIMLIB_OT_update_preview
@@ -22,10 +23,9 @@ class ANIMLIB_UL_slots(UIList):
         action = armature.animation_data.action
         scene = context.scene
 
-        # Get merge selection state (use index as key since ActionSlot has no .name)
+        # Get merge selection state (keyed by slot handle - stable across deletes)
         selection_dict = json.loads(scene.animlib_merge_selected_slots or "{}")
-        slot_key = str(index)  # Use index as key
-        is_merge_selected = selection_dict.get(slot_key, False)
+        is_merge_selected = selection_dict.get(str(item.handle), False)
 
         # Get active slot (which Action is playing)
         active_slot = None
@@ -33,7 +33,7 @@ class ANIMLIB_UL_slots(UIList):
             active_slot = armature.animation_data.action_slot
 
         # Check if this slot is active (playing)
-        is_active = (active_slot == item) if active_slot else (index == 0)
+        is_active = (active_slot.handle == item.handle) if active_slot else (index == 0)
 
         # Main row for the entire item
         row = layout.row(align=True)
@@ -49,9 +49,9 @@ class ANIMLIB_UL_slots(UIList):
 
         # Draw slot with active indicator
         if is_active:
-            row.label(text=f"★ Slot {index + 1}", icon='LAYER_ACTIVE')
+            row.label(text=f"★ {item.name_display}", icon='LAYER_ACTIVE')
         else:
-            row.label(text=f"   Slot {index + 1}", icon='LAYER_USED')
+            row.label(text=f"   {item.name_display}", icon='LAYER_USED')
 
         # Inline action buttons
         button_row = row.row(align=True)
@@ -97,6 +97,17 @@ class ANIMLIB_PT_main_panel(Panel):
 
         # Library status section
         library_path = get_library_path()
+
+        # The desktop app can't reach this Blender if another program holds the port
+        from ..utils.socket_server import get_port_conflict
+        conflict = get_port_conflict()
+        if conflict is not None:
+            clash_box = layout.box()
+            clash_box.alert = True
+            clash_box.label(text=f"Port {conflict} is used by another program", icon='ERROR')
+            clash_box.label(text="Applies from the app are slower until fixed.")
+            clash_box.label(text="Change Socket Port in the add-on preferences")
+            clash_box.label(text="and in the app's Settings > Blender Integration.")
 
         # Status indicator
         status_box = layout.box()
@@ -208,18 +219,43 @@ class ANIMLIB_PT_capture(Panel):
                 info_grid = action_details_box.column(align=True)
                 info_grid.label(text=f"Action: {action.name}", icon='ACTION')
 
+                # Everything below describes the slot the rig is playing - the
+                # one Capture saves - not the action's first slot.
+                slot = get_active_slot(armature)
+                if slot is not None:
+                    slot_position = next((i for i, s in enumerate(action.slots) if s.handle == slot.handle), 0)
+                    info_grid.label(text=f"Slot: {slot.name_display} ({slot_position + 1} of {len(action.slots)})", icon='LAYER_ACTIVE')
+
                 # Get keyframe range
                 # Cached: this is a draw() and it runs on every redraw. Walking
                 # 1800 fcurves here is what made heavy rigs unresponsive.
-                keyframe_start, keyframe_end, kf_count = get_action_stats_cached(action)
+                keyframe_start, keyframe_end, kf_count = get_action_stats_cached(action, slot)
 
-                if keyframe_start is not None and keyframe_end is not None:
+                if slot is None:
+                    info_grid.label(text="No slot assigned - pick one in the Action editor", icon='ERROR')
+                elif keyframe_start is not None and keyframe_end is not None:
                     info_grid.label(text=f"Frames: {keyframe_start}-{keyframe_end}", icon='KEYFRAME_HLT')
                     duration = (keyframe_end - keyframe_start + 1) / scene.render.fps
                     info_grid.label(text=f"Duration: {duration:.2f}s", icon='TIME')
                     info_grid.label(text=f"Keyframes: {kf_count}", icon='KEYFRAME')
                 else:
                     info_grid.label(text="No keyframes found", icon='ERROR')
+
+                # Capture mode - only offered when the action has other slots
+                capture_all = False
+                if slot is not None and len(action.slots) > 1:
+                    mode_row = action_details_box.row(align=True)
+                    mode_row.prop(scene, "animlib_capture_slot_mode", expand=True)
+                    capture_all = scene.animlib_capture_slot_mode == 'ALL'
+                    if capture_all:
+                        # Cached: classifying walks every slot's fcurves
+                        summary = classify_slots_cached(action, armature)
+                        captured = [name for name, kind, _ in summary if kind in SlotInfo.CAPTURED_KINDS]
+                        plan = action_details_box.column(align=True)
+                        plan.label(text=f"Will capture {len(captured)}: {', '.join(captured)}", icon='CHECKMARK')
+                        for name, kind, reason in summary:
+                            if kind not in SlotInfo.CAPTURED_KINDS:
+                                plan.label(text=f"Skip {name}: {reason}", icon='X')
 
                 action_details_box.separator()
 
@@ -413,8 +449,10 @@ class ANIMLIB_PT_capture(Panel):
 
                 # Capture button
                 if library_path:
-                    # Check if action has library metadata
-                    is_library_action = action.get("animlib_imported", False)
+                    # Check if what will be captured came from the library -
+                    # the active slot, or the whole set in All Slots mode
+                    tracking = get_bundle_tracking(action) if capture_all else get_library_tracking(action, slot)
+                    is_library_action = tracking.get("animlib_imported", False)
 
                     # Show library action indicator (when action came from library)
                     if is_library_action and not scene.animlib_is_versioning:
@@ -422,8 +460,8 @@ class ANIMLIB_PT_capture(Panel):
                         library_row = library_box.row()
                         library_row.label(text="Library Action Detected", icon='LIBRARY_DATA_DIRECT')
 
-                        source_name = action.get("animlib_name", "Unknown")
-                        source_version_label = action.get("animlib_version_label", "v001")
+                        source_name = tracking.get("animlib_name", "Unknown")
+                        source_version_label = tracking.get("animlib_version_label", "v001")
 
                         library_info = library_box.column(align=True)
                         library_info.label(text=f"Source: {source_name} ({source_version_label})")
@@ -458,7 +496,7 @@ class ANIMLIB_PT_capture(Panel):
                         from ..operators.AL_capture_selected import has_selected_keyframes
                         capture_sel_row = action_details_box.row()
                         capture_sel_row.scale_y = 1.2
-                        capture_sel_row.enabled = has_selected_keyframes(action)
+                        capture_sel_row.enabled = has_selected_keyframes(action, slot)
                         capture_sel_row.operator("animlib.capture_selected", text="Capture Selected", icon='KEYFRAME_HLT')
                     else:
                         # Show status message while capturing
@@ -472,7 +510,7 @@ class ANIMLIB_PT_capture(Panel):
                         update_row.scale_y = 1.3
 
                         # Check if action is from library
-                        has_uuid = bool(action.get("animlib_uuid", ""))
+                        has_uuid = bool((get_library_tracking(action, slot) or get_bundle_tracking(action)).get("animlib_uuid", ""))
 
                         # Button will be grayed out if action not from library (poll handles this)
                         update_row.operator("animlib.update_preview", text="Update Preview", icon='FILE_REFRESH')

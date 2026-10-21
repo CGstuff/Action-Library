@@ -125,6 +125,33 @@ class BadgeRenderer:
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, version_label)
 
     @staticmethod
+    def draw_slot_badge(painter: QPainter, x: int, y: int, height: int, slot_count: int,
+                        max_width: int = None) -> int:
+        """
+        Draw an "N slots" badge (same style as the version badge) for entries
+        holding several Blender action slots.
+
+        Args:
+            painter: QPainter instance
+            x, y: Top-left corner
+            height: Badge height
+            slot_count: Number of slots
+            max_width: Space available; the badge shortens to "xN" to fit, and
+                isn't drawn if even that doesn't
+
+        Returns:
+            The badge width (0 if not drawn), so callers can place things after it
+        """
+        font = QFont(Fonts.SHOT_CARD_BADGE.family, 9, QFont.Weight.Bold)
+        metrics = QFontMetrics(font, painter.device())
+        for text in (f"{slot_count} slots", f"×{slot_count}"):
+            width = metrics.horizontalAdvance(text) + 10
+            if max_width is None or width <= max_width:
+                BadgeRenderer.draw_version_badge(painter, QRect(x, y, width, height), text)
+                return width
+        return 0
+
+    @staticmethod
     def draw_status_badge(painter: QPainter, rect: QRect, status: str) -> None:
         """
         Draw lifecycle status badge on thumbnail.

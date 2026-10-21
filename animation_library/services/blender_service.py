@@ -333,6 +333,19 @@ class BlenderService:
         except Exception:
             return False
 
+    def get_port_clash(self) -> Optional[str]:
+        """
+        Why the socket can't be used, if another program holds the port.
+
+        Returns:
+            A user-facing explanation, or None when there's no clash
+        """
+        try:
+            from .socket_client import get_socket_client
+            return get_socket_client().port_clash
+        except Exception:
+            return None
+
     def get_blender_status(self) -> Optional[Dict[str, Any]]:
         """
         Get Blender status via socket.

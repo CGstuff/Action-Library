@@ -15,7 +15,7 @@ from .connection import DatabaseConnection
 
 
 # Current schema version
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # Feature descriptions for each version upgrade
 VERSION_FEATURES: Dict[int, List[str]] = {
@@ -32,6 +32,7 @@ VERSION_FEATURES: Dict[int, List[str]] = {
     12: ["Real folder membership (an animation can be in many folders)",
          "Folder rename",
          "Remove an animation from a folder"],
+    13: ["Action slots: how many slots an animation holds, and which"],
 }
 
 
@@ -105,6 +106,8 @@ class SchemaManager:
                     self._migrate_to_v11(cursor)
                 if current_version < 12:
                     self._migrate_to_v12(cursor)
+                if current_version < 13:
+                    self._migrate_to_v13(cursor)
                 cursor.execute(
                     'INSERT OR REPLACE INTO schema_version (version) VALUES (?)',
                     (SCHEMA_VERSION,)
@@ -190,6 +193,11 @@ class SchemaManager:
                 -- Studio Naming Engine (v9)
                 naming_fields TEXT,       -- JSON: {"show":"PROJ","shot":"010",...}
                 naming_template TEXT,     -- Template used: "{show}_{asset}_v{version:03}"
+
+                -- Action slots (v13)
+                slot_count INTEGER DEFAULT 1,
+                slot_mode TEXT DEFAULT 'active',  -- 'active' (one slot) or 'all' (the rig's takes)
+                slots_json TEXT,                  -- JSON list from the capture, primary flagged
 
                 -- Timestamps
                 created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -526,6 +534,27 @@ class SchemaManager:
         """
         # No schema changes needed - just version bump
         pass
+
+    def _migrate_to_v13(self, cursor: sqlite3.Cursor):
+        """v12 -> v13: action slots (animation_slots_spec.md section 7).
+
+        Captures record which Blender action slots they saved. Existing rows get
+        the defaults (one slot); rows whose JSON already lists slots are filled
+        in by the library scan (LibraryScanner.import_from_json). Purely
+        additive, so clients that haven't updated keep reading the table.
+        """
+        columns_to_add = [
+            ('slot_count', 'INTEGER DEFAULT 1'),
+            ('slot_mode', "TEXT DEFAULT 'active'"),
+            ('slots_json', 'TEXT'),
+        ]
+
+        for column_name, column_type in columns_to_add:
+            try:
+                cursor.execute(f'ALTER TABLE animations ADD COLUMN {column_name} {column_type}')
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
 
     def _migrate_to_v12(self, cursor: sqlite3.Cursor):
         """v11 -> v12: real folder membership.

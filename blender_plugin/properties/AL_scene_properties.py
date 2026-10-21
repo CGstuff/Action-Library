@@ -95,6 +95,17 @@ class ANIMLIB_SceneProperties(PropertyGroup):
         default=False
     )
 
+    bpy.types.Scene.animlib_capture_slot_mode = bpy.props.EnumProperty(
+        name="Capture",
+        description="Which slots of the rig's action a capture saves",
+        items=[
+            ('ACTIVE', 'Active Slot', 'Save only the slot the rig is playing'),
+            ('ALL', 'All Slots', "Save every slot that animates this rig. Slots used by other rigs or objects, "
+                                 "or animating bones this rig doesn't have, are skipped"),
+        ],
+        default='ACTIVE'
+    )
+
     bpy.types.Scene.animlib_active_slot_index = bpy.props.IntProperty(
         name="Active Slot Index",
         description="Index of the currently selected slot in the UIList",

@@ -84,6 +84,9 @@ class AnimationRole(IntEnum):
     HasNotesRole = Qt.ItemDataRole.UserRole + 97
     UnresolvedCommentCountRole = Qt.ItemDataRole.UserRole + 98
 
+    # Action slots (v13) - how many Blender action slots the entry holds
+    SlotCountRole = Qt.ItemDataRole.UserRole + 99
+
     # Complete data dict
     AnimationDataRole = Qt.ItemDataRole.UserRole + 100
 
@@ -436,6 +439,9 @@ class AnimationListModel(QAbstractListModel):
 
         elif role == AnimationRole.IsPartialRole:
             return animation.get('is_partial', 0)
+
+        elif role == AnimationRole.SlotCountRole:
+            return animation.get('slot_count') or 1
 
         elif role == AnimationRole.HasNotesRole:
             uuid = animation.get('uuid')

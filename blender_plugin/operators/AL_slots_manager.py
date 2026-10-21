@@ -1,7 +1,7 @@
 import bpy
 import time
 from bpy.types import Operator
-from ..utils.utils import (get_active_armature)
+from ..utils.utils import (get_active_armature, get_channelbag, copy_fcurve, find_slot)
 from ..utils.logger import get_logger
 
 logger = get_logger()
@@ -200,22 +200,21 @@ class ANIMLIB_OT_duplicate_slot(Operator):
             source_slot = action.slots[self.slot_index]
 
             # Create new slot
-            new_slot = action.slots.new('OBJECT', f"Slot_{int(time.time())}_copy")
+            new_slot = action.slots.new('OBJECT', f"{source_slot.name_display}_copy")
 
             # Get channelbag for both slots
             try:
-                source_channelbag = action.layers[0].strips[0].channelbag(source_slot)
-                new_channelbag = action.layers[0].strips[0].channelbag(new_slot, ensure=True)
+                source_channelbag = get_channelbag(action, source_slot)
+                new_channelbag = get_channelbag(action, new_slot, ensure=True)
 
-                # Copy all fcurves from source to new slot
-                for fcurve in source_channelbag.fcurves:
-                    new_fcurve = new_channelbag.fcurves.new(fcurve.data_path, index=fcurve.array_index)
-                    for keyframe in fcurve.keyframe_points:
-                        new_fcurve.keyframe_points.insert(keyframe.co[0], keyframe.co[1])
-                    new_fcurve.update()
+                # Copy all fcurves from source to new slot, with their full
+                # curve shape (insert() alone dropped handles and interpolation)
+                fcurve_count = len(source_channelbag.fcurves) if source_channelbag else 0
+                for fcurve in (source_channelbag.fcurves if source_channelbag else []):
+                    copy_fcurve(fcurve, new_channelbag)
 
-                logger.info(f"Duplicated slot {self.slot_index} with {len(source_channelbag.fcurves)} fcurves")
-                self.report({'INFO'}, f"Duplicated Slot {self.slot_index + 1}")
+                logger.info(f"Duplicated slot '{source_slot.name_display}' with {fcurve_count} fcurves")
+                self.report({'INFO'}, f"Duplicated '{source_slot.name_display}'")
                 return {'FINISHED'}
 
             except Exception as e:
@@ -247,9 +246,16 @@ class ANIMLIB_OT_toggle_slot_selection(Operator):
         scene = context.scene
 
         try:
-            # Parse current selection dict (use string index as key)
+            armature = get_active_armature(context)
+            action = armature.animation_data.action if armature and armature.animation_data else None
+            if not action or not (0 <= self.slot_index < len(action.slots)):
+                self.report({'ERROR'}, "Invalid slot index")
+                return {'CANCELLED'}
+
+            # Parse current selection dict. Keyed by slot handle: indices shift
+            # when a slot is deleted, handles don't.
             selection_dict = json.loads(scene.animlib_merge_selected_slots or "{}")
-            slot_key = str(self.slot_index)
+            slot_key = str(action.slots[self.slot_index].handle)
 
             # Toggle selection
             current_state = selection_dict.get(slot_key, False)
@@ -293,10 +299,8 @@ class ANIMLIB_OT_select_all_slots(Operator):
             return {'CANCELLED'}
 
         try:
-            # Select all slots (use string indices as keys)
-            selection_dict = {}
-            for index in range(len(action.slots)):
-                selection_dict[str(index)] = True
+            # Select all slots (keyed by slot handle)
+            selection_dict = {str(slot.handle): True for slot in action.slots}
 
             scene.animlib_merge_selected_slots = json.dumps(selection_dict)
 
@@ -381,11 +385,13 @@ class ANIMLIB_OT_merge_slots(Operator):
                 self.report({'ERROR'}, "No slots found")
                 return {'CANCELLED'}
 
-            # Get selected slots (indices stored as string keys in JSON)
+            # Get selected slots (handles stored as string keys in JSON; ones
+            # whose slot has since been deleted are ignored)
             selection_dict = json.loads(scene.animlib_merge_selected_slots or "{}")
-            selected_slot_indices = [int(index_str) for index_str, selected in selection_dict.items() if selected]
+            selected_slots = [slot for handle_str, selected in selection_dict.items()
+                              if selected and (slot := find_slot(action, int(handle_str))) is not None]
 
-            if len(selected_slot_indices) < 2:
+            if len(selected_slots) < 2:
                 self.report({'ERROR'}, "Select at least 2 slots to merge")
                 return {'CANCELLED'}
 
@@ -396,21 +402,16 @@ class ANIMLIB_OT_merge_slots(Operator):
             # Create merged slot
             merged_slot_name = f"Merged_{int(time.time())}"
             merged_slot = action.slots.new('OBJECT', merged_slot_name)
-            merged_channelbag = action.layers[0].strips[0].channelbag(merged_slot, ensure=True)
+            merged_channelbag = get_channelbag(action, merged_slot, ensure=True)
 
-            logger.info(f"Merging {len(selected_slot_indices)} slots at indices: {selected_slot_indices}")
+            logger.info(f"Merging {len(selected_slots)} slots: {[s.name_display for s in selected_slots]}")
 
             # Get channelbags for all input slots
             input_channelbags = []
-            for slot_index in selected_slot_indices:
-                if slot_index < len(action.slots):
-                    slot = action.slots[slot_index]
-                    try:
-                        cb = action.layers[0].strips[0].channelbag(slot)
-                        if cb:
-                            input_channelbags.append((slot_index, cb))
-                    except Exception as e:
-                        logger.warning(f"Could not get channelbag for slot index {slot_index}: {e}")
+            for slot in selected_slots:
+                cb = get_channelbag(action, slot)
+                if cb:
+                    input_channelbags.append((slot.handle, cb))
 
             if len(input_channelbags) < 2:
                 self.report({'ERROR'}, "Could not access channelbags for selected slots")
@@ -520,7 +521,7 @@ class ANIMLIB_OT_merge_slots(Operator):
                 armature.animation_data.action_slot = merged_slot
 
             logger.info(f"Successfully merged {merged_count} fcurves into slot: {merged_slot_name}")
-            self.report({'INFO'}, f"Merged {len(selected_slot_indices)} slots into: {merged_slot_name}")
+            self.report({'INFO'}, f"Merged {len(selected_slots)} slots into: {merged_slot_name}")
             return {'FINISHED'}
 
         except Exception as e:

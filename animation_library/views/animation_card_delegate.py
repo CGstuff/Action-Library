@@ -233,6 +233,20 @@ class AnimationCardDelegate(QStyledItemDelegate):
                 )
                 BadgeRenderer.draw_version_badge(painter, badge_rect, version_label)
 
+            # Entries captured with "All Slots" hold several takes. Keep clear
+            # of the status badge drawn bottom-right.
+            slot_count = index.data(AnimationRole.SlotCountRole) or 1
+            if slot_count > 1:
+                status = index.data(AnimationRole.StatusRole)
+                reserved = 0
+                if status and status != 'none':
+                    status_label = Config.LIFECYCLE_STATUSES.get(status, {'label': status.upper()})['label']
+                    reserved = max(50, len(status_label) * 7 + 10) + 5
+                BadgeRenderer.draw_slot_badge(
+                    painter, rect.x() + 49, rect.y() + self._card_size - 25, 20, slot_count,
+                    max_width=self._card_size - 49 - 5 - reserved - 4
+                )
+
         # Draw status badge or partial indicator
         if not is_pose:
             status = index.data(AnimationRole.StatusRole)
@@ -354,8 +368,12 @@ class AnimationCardDelegate(QStyledItemDelegate):
             thumbnail_size
         )
 
-        # Draw text
+        # Draw text (the thumbnail is too small for a slot badge, so the
+        # slot count rides along with the name)
         name = index.data(AnimationRole.NameRole)
+        slot_count = index.data(AnimationRole.SlotCountRole) or 1
+        if slot_count > 1 and not is_pose:
+            name = f"{name}  ·  {slot_count} slots"
         rig_type = index.data(AnimationRole.RigTypeRole)
         frame_count = index.data(AnimationRole.FrameCountRole)
         fps = index.data(AnimationRole.FPSRole)

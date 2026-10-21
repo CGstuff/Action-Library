@@ -5,6 +5,7 @@ Pattern: QWidget with form layout
 Inspired by: Current animation_library metadata display
 """
 
+import json
 from pathlib import Path
 from typing import Optional, Dict, Any
 from PyQt6.QtWidgets import (
@@ -618,6 +619,31 @@ class MetadataPanel(QWidget):
         if duration:
             self._add_info_row(grid, row, "Duration:", f"{duration:.2f}s")
             row += 1
+
+        # Action slots (v13): which Blender action slots the entry holds
+        slots_text = self._format_slots(self._animation)
+        if slots_text:
+            label = "Slots:" if (self._animation.get('slot_count') or 1) > 1 else "Slot:"
+            self._add_info_row(grid, row, label, slots_text)
+            row += 1
+
+    @staticmethod
+    def _format_slots(animation: Dict[str, Any]) -> str:
+        """One line per slot - "Walk  1-25 (plays)" - or "" if the capture didn't record slots."""
+        try:
+            slots = json.loads(animation.get('slots_json') or '[]')
+        except (TypeError, ValueError):
+            return ""
+        lines = []
+        for slot in slots:
+            line = slot.get('name') or slot.get('identifier') or '?'
+            start, end = slot.get('frame_start'), slot.get('frame_end')
+            if start is not None and end is not None:
+                line += f"  {start}-{end}"
+            if len(slots) > 1 and slot.get('primary'):
+                line += "  (plays)"
+            lines.append(line)
+        return "\n".join(lines)
 
     def _update_rig_section(self):
         """Update rig information section"""

@@ -33,6 +33,7 @@ Response Format:
 """
 
 import bpy
+import errno
 import socket
 import threading
 import queue
@@ -64,6 +65,7 @@ _response_queues: Dict[str, queue.Queue] = {}  # Per-client response queues
 _keep_running = False
 _is_initialized = False
 _timer_tick_count = 0  # Debug counter
+_port_conflict: Optional[int] = None  # Port we couldn't bind because something else holds it
 
 # Thread safety locks for shared data structures
 _response_queues_lock = threading.Lock()
@@ -111,6 +113,11 @@ def get_server_host() -> str:
     return os.environ.get('ANIMLIB_SOCKET_HOST', DEFAULT_HOST)
 
 
+def get_port_conflict() -> Optional[int]:
+    """The port the server couldn't bind because another program holds it, or None."""
+    return _port_conflict
+
+
 def is_server_running() -> bool:
     """Check if socket server is running"""
     return _keep_running and _server_thread is not None and _server_thread.is_alive()
@@ -151,7 +158,7 @@ def start_server(host: Optional[str] = None, port: Optional[int] = None) -> bool
     Returns:
         True if server started successfully
     """
-    global _server_socket, _server_thread, _keep_running, _is_initialized
+    global _server_socket, _server_thread, _keep_running, _is_initialized, _port_conflict
 
     if is_server_running():
         logger.info("Socket server already running")
@@ -164,8 +171,15 @@ def start_server(host: Optional[str] = None, port: Optional[int] = None) -> bool
 
     try:
         _server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # Allow port reuse to avoid "Address already in use" errors
-        _server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Never share the port with another program. On Windows SO_REUSEADDR
+        # lets a second socket bind a port that's already listening, and each
+        # connection then lands on whichever one Windows picks - that's how the
+        # desktop app's applies ended up at the Blender MCP addon (also 9876).
+        # A plain bind fails cleanly instead, and still rebinds over TIME_WAIT
+        # after a restart. Elsewhere SO_REUSEADDR only means "rebind over
+        # TIME_WAIT", which is what we want.
+        if os.name != 'nt':
+            _server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         _server_socket.bind((host, port))
         _server_socket.listen(5)  # Queue up to 5 connections
         _server_socket.settimeout(SOCKET_TIMEOUT)
@@ -178,41 +192,36 @@ def start_server(host: Optional[str] = None, port: Optional[int] = None) -> bool
         _server_thread.start()
 
         _is_initialized = True
+        _port_conflict = None
         # Note: the command queue is drained on the main thread by a
         # bpy.app.timers callback (see operators/AL_socket_listener.py).
         logger.info(f"Socket server started on {host}:{port}")
         return True
 
     except OSError as e:
-        if e.errno == 10048 or 'Address already in use' in str(e):
-            # Port already in use - try to find an available port
-            logger.warning(f"Port {port} in use, trying to find available port...")
-            available_port = _find_available_port(port + 1)
-            if available_port:
-                return start_server(host, available_port)
-            else:
-                logger.error("No available ports found")
-                return False
+        _keep_running = False
+        if _server_socket:
+            _server_socket.close()
+            _server_socket = None
+        # Windows reports a held port as WSAEADDRINUSE, or as WSAEACCES when
+        # the holder bound it with SO_REUSEADDR.
+        if e.errno in (errno.EADDRINUSE, errno.EACCES, 10048, 10013) or 'Address already in use' in str(e):
+            # Don't move to another port: the desktop app only knows this one,
+            # so it would keep reaching whatever holds it. Say so instead.
+            _port_conflict = port
+            logger.error(
+                f"Port {port} is already in use by another program - another addon "
+                f"(Blender MCP also uses 9876) or a second Blender running Action Library. "
+                f"The desktop app can't reach this Blender directly; applies fall back to "
+                f"the slower file queue. Set a different Socket Port in Preferences > Add-ons > "
+                f"Action Library, and the same port in the app's Settings > Blender Integration."
+            )
         else:
             logger.error(f"Failed to start socket server: {e}")
-            return False
+        return False
     except Exception as e:
         logger.error(f"Failed to start socket server: {e}")
         return False
-
-
-def _find_available_port(start_port: int, max_attempts: int = 100) -> Optional[int]:
-    """Find first available port starting from start_port"""
-    for port in range(start_port, start_port + max_attempts):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind((get_server_host(), port))
-            s.close()
-            return port
-        except OSError:
-            continue
-    return None
 
 
 def _accept_connections():
@@ -298,9 +307,11 @@ def _handle_client(client_socket: socket.socket, client_id: str):
                         command = json.loads(message)
                         logger.debug(f"Received command from {client_id}: {command.get('type')}")
 
-                        # Handle ping immediately (no main thread needed)
+                        # Handle ping immediately (no main thread needed).
+                        # 'app' tells the desktop app it reached Action Library
+                        # and not some other addon listening on the same port.
                         if command.get('type') == 'ping':
-                            response = {'status': 'success', 'message': 'pong'}
+                            response = {'status': 'success', 'message': 'pong', 'app': 'action_library'}
                             _send_response(client_socket, response)
                             continue
 
@@ -554,6 +565,7 @@ __all__ = [
     'start_server',
     'stop_server',
     'is_server_running',
+    'get_port_conflict',
     'register_command_handler',
     'send_to_client',
     'get_server_port',

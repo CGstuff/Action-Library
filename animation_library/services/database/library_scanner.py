@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List
 
 from .connection import DatabaseConnection
-from .animations import AnimationRepository
+from .animations import AnimationRepository, slot_columns
 from .folders import FolderRepository
 from .helpers import parse_json_field
 from ...config import Config
@@ -289,6 +289,9 @@ class LibraryScanner:
                 new_naming_template = animation_data.get('naming_template')
                 if new_naming_template and not existing.get('naming_template'):
                     updates['naming_template'] = new_naming_template
+                # Slot info (v13) for rows imported before the columns existed
+                if animation_data.get('slots') and not existing.get('slots_json'):
+                    updates.update(slot_columns(animation_data))
                 if updates:
                     self._animations.update(uuid, updates)
                 return False  # Already exists (but may have updated flags/naming)

@@ -7,7 +7,8 @@ import subprocess
 import re
 from bpy.types import Operator
 from ..utils.utils import (get_action_keyframe_range, get_active_armature,
-                   has_animation_data, safe_report_error)
+                   has_animation_data, safe_report_error,
+                   get_active_slot, get_library_tracking, get_bundle_tracking)
 from ..utils.logger import get_logger
 from pathlib import Path
 from ..preferences import get_preview_settings, get_library_path
@@ -40,8 +41,10 @@ class ANIMLIB_OT_update_preview(Operator):
         if not action:
             return False
 
-        # Must have animlib_uuid to update preview
-        uuid = action.get("animlib_uuid", "")
+        # The active slot (or, for an "All Slots" entry, the action) must have
+        # come from the library to update its preview
+        tracking = get_library_tracking(action, get_active_slot(armature)) or get_bundle_tracking(action)
+        uuid = tracking.get("animlib_uuid", "")
         if not uuid:
             return False
 
@@ -81,9 +84,10 @@ class ANIMLIB_OT_update_preview(Operator):
             wm.animlib_is_updating_preview = False
             return {'CANCELLED'}
 
-        # Get action and UUID
+        # Get action and UUID (tracked per slot - the one the rig is playing)
         action = armature.animation_data.action
-        uuid = action.get("animlib_uuid", "")
+        tracking = get_library_tracking(action, get_active_slot(armature)) or get_bundle_tracking(action)
+        uuid = tracking.get("animlib_uuid", "")
         if not uuid:
             safe_report_error(self, "This action is not from the library. Capture it first.")
             wm.animlib_is_updating_preview = False
@@ -98,7 +102,7 @@ class ANIMLIB_OT_update_preview(Operator):
 
         # Derive folder from animation name (O(1) - no scanning)
         library_dir = Path(library_path)
-        animation_name = action.get("animlib_name", action.name)
+        animation_name = tracking.get("animlib_name", action.name)
 
         # Get base name (strip version suffix) for folder
         base_name = re.sub(r'_v\d{2,4}$', '', animation_name)
@@ -135,7 +139,7 @@ class ANIMLIB_OT_update_preview(Operator):
             'library_path': library_path,
             'preview_path': str(preview_path),
             'thumbnail_path': str(thumbnail_path),
-            'animation_name': action.get("animlib_name", action.name)
+            'animation_name': tracking.get("animlib_name", action.name)
         }
 
         # Add timer for modal updates
@@ -331,7 +335,7 @@ class ANIMLIB_OT_update_preview(Operator):
             # Get animation timing from current action
             action = armature.animation_data.action if armature.animation_data else None
             if action:
-                keyframe_start, keyframe_end = get_action_keyframe_range(action)
+                keyframe_start, keyframe_end = get_action_keyframe_range(action, get_active_slot(armature))
                 if keyframe_start is None:
                     keyframe_start = scene.frame_start
                     keyframe_end = scene.frame_end

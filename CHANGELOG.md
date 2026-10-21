@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.2] - 2026-10-21
+
+### Added
+
+- **Capture All Slots** - When the rig's action holds more than one slot, the Capture section now offers **Active Slot | All Slots**. All Slots saves every take that belongs to this rig in one library entry - the slot it's playing, plus any unused slot whose bones all exist on the rig. Slots used by another rig or object, shape keys, materials, slots animating bones this rig doesn't have, and empty slots are left out. The panel lists what will be captured and what won't, with the reason for each, before you press Capture, and the capture repeats which slots it skipped so nothing goes missing silently. Applying the entry brings all its takes back and plays the one you were on when you captured; switch takes in Blender's Action editor afterwards.
+- **The Library Shows an Entry's Slots** - Cards for entries holding several slots carry an "N slots" badge beside the version badge (shortened to "×N", or left out, when a small card needs the room for its status badge); list view shows the count after the name. The metadata panel lists each slot with its frame range and marks the one that plays. Entries captured from Blender actions with slots record which slot they came from; older entries simply show nothing.
+
+### Fixed
+
+- **Capture Ignored the Slot You Were Working On** - The addon had no idea Blender actions can hold several slots, so everything it did read the action's first slot, whichever one the rig was actually playing. With a 25-frame slot and a 17-frame slot, the panel and the capture always reported 25 frames - and after deleting the first slot's keys, it said "No keyframes found" while the second slot played on screen. The capture also saved the whole action, so the library file held every other take and any other object's animation sharing that action, while the preview rendered the slot you were on over the first slot's frame range. Capture, Capture Selected, Update Preview and the panel's frame and keyframe counts now all follow the slot the rig is playing, and the library file holds only that slot.
+- **Capturing a Second Slot Offered to Version the First** - Library tracking was stored once per action, so after capturing one slot, capturing another slot of the same action asked whether to save it as a new version of the first. Tracking is now kept per slot. Actions tracked by earlier versions keep working: their tracking is treated as belonging to the first slot and moved over the next time it's written.
+- **Applying Could Play the Wrong Slot - Even a Camera's** - Applying always played an action's first slot. For library files that held several slots, that could be a prop's or a camera's, whose movement then drove your rig. Apply now plays the slot the capture recorded, and for older files the first slot whose bones all exist on the rig - never a slot meant for something else.
+- **Insert at Playhead Wrote Into the Wrong Slot** - Inserting at the playhead put the keys into the action's first slot, not the one the rig was playing, so they appeared to vanish. They now go into the active slot.
+- **Curves Lost Their Shape When Copied** - "Add as slot", Duplicate Slot, Reverse and Selected Bones Only copied each key's frame and value and nothing else, so handles, interpolation and easing fell back to Blender's defaults: stepped blocking came out smoothed, custom handles came out auto. Every key property now comes across intact. Reversing also swaps handles, ease-in and ease-out, and moves each segment's interpolation to the key that now starts it, so a reversed curve really is the original played backwards.
+- **Slot Manager Showed "Slot 1, Slot 2"** - The slot list now shows each slot's real name, duplicates are named after their source, and the merge selection no longer shifts onto the wrong slots after one is deleted.
+- **Applies Silently Went to Another Addon** - The addon and the Blender MCP addon both listen on port 9876, and on Windows both were allowed to hold it at once - each connection from the app then landed on whichever one Windows picked. When it was MCP, the apply simply failed with an error that said nothing about why. The addon no longer shares a port another program holds: it shows a red warning in its panel and its preferences and falls back to the slower file queue, which still reaches Blender. The app now checks it is actually talking to Action Library before applying, and when something else answers it says so plainly once, with how to fix it, and queues the apply instead. Changing the Socket Port in the addon's preferences or the app's Settings > Blender Integration now takes effect immediately - no restart of either.
+
+### Changed
+
+- **Database Schema v13** - Three columns record how many slots an entry holds, how it was captured, and which slots they are. The upgrade happens on first launch, only adds columns, and keeps every existing entry as it was; versions of the app that haven't updated keep reading and writing the shared library. Entries captured since slot support began fill in their slot information on the next library refresh.
+
 ## [1.6.1] - 2026-10-11
 
 ### Fixed

@@ -386,5 +386,9 @@ class BlenderIntegrationTab(QWidget):
 
         Config.save_blender_settings(settings)
 
+        # Reconnect on the (possibly new) port without restarting the app
+        from ...services.socket_client import reset_socket_client
+        reset_socket_client()
+
 
 __all__ = ['BlenderIntegrationTab']

@@ -15,6 +15,31 @@ from .connection import DatabaseConnection
 from .helpers import deserialize_animation, serialize_tags, row_to_dict
 from ...config import Config
 
+
+def slot_columns(animation_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    The v13 slot columns for an animation.
+
+    Capture JSON carries a 'slots' list plus 'primary_slot_identifier'; those
+    become slots_json with the primary flagged. Anything else (a DB row, or
+    JSON from before slot support) keeps whatever slot columns it has, or the
+    single-slot defaults.
+    """
+    slots = animation_data.get('slots')
+    if isinstance(slots, list) and slots:
+        primary = animation_data.get('primary_slot_identifier')
+        flagged = [dict(s, primary=s.get('identifier') == primary) for s in slots]
+        return {
+            'slot_count': len(flagged),
+            'slot_mode': animation_data.get('slot_mode') or 'active',
+            'slots_json': json.dumps(flagged),
+        }
+    return {
+        'slot_count': animation_data.get('slot_count') or 1,
+        'slot_mode': animation_data.get('slot_mode') or 'active',
+        'slots_json': animation_data.get('slots_json'),
+    }
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +81,7 @@ class AnimationRepository:
 
                 # Get UUID for version_group_id default
                 uuid = animation_data.get('uuid')
+                slots = slot_columns(animation_data)
 
                 cursor.execute('''
                     INSERT INTO animations (
@@ -66,8 +92,9 @@ class AnimationRepository:
                         thumbnail_gradient_top, thumbnail_gradient_bottom,
                         created_date, modified_date,
                         version, version_label, version_group_id, is_latest, status, is_pose, is_partial,
-                        naming_fields, naming_template
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        naming_fields, naming_template,
+                        slot_count, slot_mode, slots_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     uuid,
                     animation_data.get('name'),
@@ -108,7 +135,11 @@ class AnimationRepository:
                     animation_data.get('is_partial', 0),
                     # Studio naming fields (v9)
                     animation_data.get('naming_fields'),
-                    animation_data.get('naming_template')
+                    animation_data.get('naming_template'),
+                    # Action slots (v13)
+                    slots['slot_count'],
+                    slots['slot_mode'],
+                    slots['slots_json']
                 ))
 
                 return cursor.lastrowid
@@ -732,6 +763,7 @@ class AnimationRepository:
                 # Prepare new animation data
                 tags_json = serialize_tags(source.get('tags', []))
                 now = datetime.now()
+                slots = slot_columns({**source, **file_updates})
 
                 cursor.execute('''
                     INSERT INTO animations (
@@ -741,8 +773,9 @@ class AnimationRepository:
                         file_size_mb, tags, author, use_custom_thumbnail_gradient,
                         thumbnail_gradient_top, thumbnail_gradient_bottom,
                         is_favorite, version, version_label, version_group_id, is_latest,
-                        created_date, modified_date
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        created_date, modified_date,
+                        slot_count, slot_mode, slots_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     new_uuid,
                     source.get('name'),
@@ -772,7 +805,10 @@ class AnimationRepository:
                     version_group_id,
                     1,  # is_latest = True
                     now,
-                    now
+                    now,
+                    slots['slot_count'],
+                    slots['slot_mode'],
+                    slots['slots_json']
                 ))
 
                 return new_uuid

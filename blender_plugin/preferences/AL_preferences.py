@@ -63,6 +63,14 @@ class ANIMLIB_AddonPreferences(AddonPreferences, ANIMLIB_PreferencesProperties):
         box.label(text="Socket Communication", icon='URL')
         col = box.column(align=True)
         col.prop(self, "socket_port")
+        from ..utils.socket_server import get_port_conflict
+        conflict = get_port_conflict()
+        if conflict is not None:
+            warn = box.column(align=True)
+            warn.alert = True
+            warn.label(text=f"Port {conflict} is in use by another program", icon='ERROR')
+            warn.label(text="Pick a free port here and set the same one in the app's")
+            warn.label(text="Settings > Blender Integration.")
 
         # Desktop App Launch Settings
         box = layout.box()

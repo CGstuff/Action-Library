@@ -1,6 +1,15 @@
 import bpy
 from bpy.types import PropertyGroup
 
+
+def _rebind_socket_server(self, context):
+    """Move the socket server to the new port straight away - no Blender restart."""
+    from ..utils import stop_socket_server
+    from ..operators import _start_socket_system
+    stop_socket_server()
+    # Same path as startup: falls back to the file queue if the port is taken too
+    _start_socket_system()
+
 # Template preset definitions
 NAMING_PRESETS = {
     'SIMPLE': '{asset}',
@@ -100,7 +109,8 @@ class ANIMLIB_PreferencesProperties(PropertyGroup):
         description="TCP port for communication with desktop app (must match app settings)",
         default=9876,
         min=1024,
-        max=65535
+        max=65535,
+        update=_rebind_socket_server
     )
 
     # Desktop App Launch Settings
